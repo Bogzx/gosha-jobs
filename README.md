@@ -6,7 +6,7 @@
 
 **[gosha.bogdantruta.com](https://gosha.bogdantruta.com)** · built for CS students in Romania & beyond
 
-[![CI](https://github.com/Bogzx/auto-job-gosha/actions/workflows/ci.yml/badge.svg)](https://github.com/Bogzx/auto-job-gosha/actions/workflows/ci.yml)
+[![CI](https://github.com/Bogzx/gosha-jobs/actions/workflows/ci.yml/badge.svg)](https://github.com/Bogzx/gosha-jobs/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11+-0e9f5b)](https://www.python.org/)
 [![React](https://img.shields.io/badge/react-18-0e9f5b)](https://react.dev/)
 [![Made by](https://img.shields.io/badge/made%20by-Bogdan%20Truta-123524)](https://bogdantruta.com)
@@ -99,7 +99,7 @@ Three processes share one database — the bot (Discord + scheduler), the API (F
 Prerequisites: Docker + Compose, a [Discord application](https://discord.com/developers/applications) (bot token + OAuth2 credentials), and optionally a Gemini or OpenRouter API key for cover letters.
 
 ```bash
-git clone https://github.com/Bogzx/auto-job-gosha.git && cd auto-job-gosha
+git clone https://github.com/Bogzx/gosha-jobs.git && cd gosha-jobs
 
 cp .env.example .env        # fill in: DISCORD_TOKEN, SESSION_SECRET,
 nano .env                   # DISCORD_CLIENT_ID/SECRET, POSTGRES_PASSWORD, ...
@@ -151,19 +151,28 @@ pip install -r requirements-dev.txt
 pytest                                            # backend tests
 
 python scripts/seed_dev.py                        # demo data + dev user
-DEBUG_LOGIN=1 SESSION_SECRET=dev DISCORD_CLIENT_ID=1 DISCORD_CLIENT_SECRET=1 \
+
+# SESSION_SECRET must be >= 32 chars — it signs session cookies, whose
+# payload is just {"uid": N} over a small id space, and admin is an id
+# membership test. A guessable secret is a straight path to forging one.
+export SESSION_SECRET=$(python -c "import secrets;print(secrets.token_urlsafe(48))")
+DEBUG_LOGIN=1 DISCORD_CLIENT_ID=1 DISCORD_CLIENT_SECRET=1 \
   uvicorn gosha.api.app:create_app --factory      # API on :8000
 
 cd web && npm install && npm run dev              # SPA on :5173 (proxies /api)
 ```
 
 Then open `http://localhost:5173/api/v1/auth/debug-login?uid=1`.
+
+`debug-login` is a source-checkout-only route: [`.dockerignore`](.dockerignore) keeps `gosha/api/debug_login.py` out of the image entirely, so no production deployment can enable it.
 </details>
 
 <details>
 <summary><b>SSH proxy rotation for scraping</b></summary>
 
-LinkedIn and Glassdoor rate-limit aggressively. Configure up to 9 VPSs in `.env` (`VPS_1_HOST`, `VPS_1_USER`, `VPS_1_KEY`, ...) and the bot opens SOCKS5 tunnels, rotating per scrape with automatic health checks. Without proxies everything still works at low volume.
+LinkedIn and Glassdoor rate-limit aggressively. Configure up to 9 VPSs in `.env` (`VPS_1_HOST`, `VPS_1_USER`, `VPS_1_KEY`, ...) and the bot opens SOCKS5 tunnels, rotating per scrape with automatic health checks.
+
+**Without proxies you get 4 of the 7 sources.** The JobSpy path (Indeed, LinkedIn, Glassdoor) requires at least one healthy tunnel — with none configured it logs a warning and returns nothing rather than connecting directly ([`gosha/scraper.py`](gosha/scraper.py)), because a direct connection from a single IP gets that IP blocked within a day or two. The four native adapters (eJobs, BestJobs, Hipo, RemoteOK) call the boards' own endpoints directly and work with no proxies at all, so a proxy-less install still produces a useful Romanian feed.
 </details>
 
 ## Discord commands
@@ -187,6 +196,20 @@ gosha/
 web/               # React SPA (Vite + Tailwind)
 tests/             # pytest suite (~300 tests)
 ```
+
+## License
+
+[GNU AGPL-3.0-only](LICENSE).
+
+You can run it, fork it, and self-host it. The Affero clause is the point: if you run a **modified** version as a network service, you have to offer your users the modified source. Plain use, private modification, and contributing back are all unrestricted.
+
+## Privacy
+
+GOSHA holds real CVs. [`PRIVACY.md`](PRIVACY.md) is the operator-facing version of what the running service tells users at `/privacy` (served from [`gosha/api/legal.py`](gosha/api/legal.py) so it cannot drift from the code). Users can export everything (`GET /api/v1/account/export`) and erase everything (`DELETE /api/v1/account?confirm=DELETE`).
+
+## Backups
+
+**There is no backup system running yet.** [`docs/BACKUPS.md`](docs/BACKUPS.md) contains a ready-to-use `backup` service for `docker-compose.prod.yml` plus the setup steps — it is written but **unverified**, and nobody should consider the data safe until a restore has actually been tested. This is the single highest-value thing an operator of this repo can do.
 
 ## Credits
 

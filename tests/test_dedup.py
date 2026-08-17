@@ -112,4 +112,4 @@ async def test_feed_hides_non_canonical_duplicates(patched_db, session):
 
     items, total = await recommend.get_feed(user.id, page=1, per_page=10)
     assert total == 1
-    assert [j.url for j, _, _ in items] == ["https://indeed.com/f"]
+    assert [item.job.url for item in items] == ["https://indeed.com/f"]

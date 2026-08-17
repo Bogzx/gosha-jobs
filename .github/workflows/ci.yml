@@ -40,8 +40,89 @@ jobs:
       - run: npx vitest run
       - run: npm run build
 
+  # The deploy step rebuilds images on the production VPS. Without this
+  # job, a Dockerfile or dependency break was first discovered *there* —
+  # after the green checkmark, with the site already down. Building here
+  # means a broken image never reaches the deploy gate.
+  images:
+    runs-on: ubuntu-latest
+    # The app image installs torch via sentence-transformers, so this is
+    # the slow job. It is still far cheaper than finding out on the VPS.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim runner disk
+        run: |
+          # The app image is several GB; the hosted runner ships with
+          # ~25 GB of preinstalled toolchains we do not need.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h /
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the bot/api image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          tags: gosha-app:ci
+          # Default (min) mode: mode=max would blow past the 10 GB Actions
+          # cache limit on a torch-sized image and thrash.
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,scope=app
+
+      - name: Build the web/Caddy image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.web
+          push: false
+          load: true
+          tags: gosha-web:ci
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web
+
+      - name: Build the backup image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.backup
+          push: false
+          load: true
+          tags: gosha-backup:ci
+          cache-from: type=gha,scope=backup
+          cache-to: type=gha,scope=backup
+
+      - name: Validate the production compose file
+        run: docker compose -f docker-compose.prod.yml config --quiet
+        env:
+          POSTGRES_PASSWORD: ci-placeholder
+          RESTIC_REPOSITORY: ci-placeholder
+          RESTIC_PASSWORD: ci-placeholder
+
+      - name: Smoke-test the app image
+        run: |
+          # The image must at least import the app and answer its own
+          # healthcheck contract.
+          docker run --rm gosha-app:ci python -c "
+          from gosha.api.app import create_app
+          import os
+          os.environ.setdefault('SESSION_SECRET', 'x' * 40)
+          os.environ.setdefault('DISCORD_CLIENT_ID', '1')
+          os.environ.setdefault('DISCORD_CLIENT_SECRET', '1')
+          app = create_app()
+          routes = {r.path for r in app.routes}
+          assert '/api/v1/health' in routes, routes
+          assert '/api/v1/account' in routes, routes
+          assert '/api/v1/auth/debug-login' not in routes, 'debug backdoor is in the image'
+          print('image OK,', len(routes), 'routes')
+          "
+
   deploy:
-    needs: [backend, frontend]
+    needs: [backend, frontend, images]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     concurrency: deploy-production
@@ -49,9 +130,26 @@ jobs:
     steps:
       - name: Deploy to VPS over SSH
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
           printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
-          ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+
+          # The host key is PINNED, not learned at deploy time. ssh-keyscan
+          # on every run means the first thing the deploy does is trust
+          # whatever answers on port 22 — a MITM gets the deploy key.
+          #
+          # Populate DEPLOY_KNOWN_HOSTS once, from the VPS itself:
+          #   ssh-keyscan -H <host> | grep ssh-ed25519
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "DEPLOY_KNOWN_HOSTS secret is empty — refusing to deploy" >&2
+            echo "Set it with: ssh-keyscan -H <DEPLOY_HOST>" >&2
+            exit 1
+          fi
+
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -i ~/.ssh/deploy_key \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
             "cd ~/gosha && ./deploy.sh"

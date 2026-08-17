@@ -71,7 +71,25 @@ async def main() -> None:
         id="scrape_cycle",
         name="Periodic job scrape",
         replace_existing=True,
+        # Scraping is serial across up to 19 expanded keyword terms and can
+        # overrun the interval. APScheduler's default grace period is one
+        # second, so an overrunning cycle meant the next one was dropped in
+        # silence. Coalesce backlog into a single run and give it half an
+        # interval of slack; anything still missed is logged loudly below.
+        coalesce=True,
+        misfire_grace_time=max(60, settings.scrape_interval_minutes * 30),
     )
+
+    def _on_job_missed(event: object) -> None:
+        log.error(
+            "Scheduled job %s missed its run time — the previous cycle is "
+            "still running or the loop is blocked.",
+            getattr(event, "job_id", "?"),
+        )
+
+    from apscheduler.events import EVENT_JOB_MISSED
+
+    scheduler.add_listener(_on_job_missed, EVENT_JOB_MISSED)
 
     # Deliver web-enqueued Discord messages (outbox) every 30 seconds
     async def _outbox_tick() -> None:
@@ -121,6 +139,21 @@ async def main() -> None:
         next_run_time=datetime.now(timezone.utc) + timedelta(minutes=45),
         id="deadlink_check",
         name="Dead job link detection",
+        replace_existing=True,
+    )
+
+    # Liveness stamp for the container healthcheck. If the event loop
+    # wedges — the classic failure here — the scheduler stops firing, the
+    # stamp goes stale, and the healthcheck turns the container unhealthy
+    # instead of leaving it "up" and silently scraping nothing.
+    from gosha.heartbeat import HEARTBEAT_INTERVAL_SECONDS, touch as _touch_heartbeat
+
+    _touch_heartbeat()
+    scheduler.add_job(
+        _touch_heartbeat,
+        trigger=IntervalTrigger(seconds=HEARTBEAT_INTERVAL_SECONDS),
+        id="liveness_heartbeat",
+        name="Liveness heartbeat",
         replace_existing=True,
     )
 

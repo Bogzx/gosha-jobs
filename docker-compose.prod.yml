@@ -8,12 +8,25 @@
 #     python scripts/migrate_sqlite_to_postgres.py \
 #     sqlite+aiosqlite:///data/jobs.db \
 #     postgresql+asyncpg://gosha:${POSTGRES_PASSWORD}@postgres:5432/gosha
+#
+# Backups: see the `backup` service at the bottom and docs/BACKUPS.md.
+# It is OFF by default (profile: backup) and UNVERIFIED — read the doc
+# before enabling, and test a restore before trusting it.
+
+# Shared log settings. json-file logs grow until the disk fills, which on
+# a single-VPS deployment takes the database down with it.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
 
 services:
   postgres:
     image: postgres:16-alpine
     container_name: gosha-postgres
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: gosha
       POSTGRES_USER: gosha
@@ -31,6 +44,10 @@ services:
     build: .
     container_name: gosha-bot
     restart: unless-stopped
+    logging: *default-logging
+    # torch (sentence-transformers) sits around 2 GB RSS. Without a cap,
+    # one runaway process takes Postgres down with it on a small VPS.
+    mem_limit: ${BOT_MEM_LIMIT:-3g}
     env_file:
       - path: .env
         required: false
@@ -40,6 +57,16 @@ services:
       - ./data:/app/data          # CV files + legacy SQLite for migration
       - ./keys:/home/app/.ssh:ro  # SSH keys for proxy tunnels (optional)
       - hf_cache:/home/app/.cache # sentence-transformers model cache
+    # `restart: unless-stopped` only catches exits. The real failure here
+    # is a wedged asyncio loop: container up, gateway connected, nothing
+    # scraped. The scheduler stamps a heartbeat file; this notices when it
+    # stops (gosha/heartbeat.py).
+    healthcheck:
+      test: ["CMD", "python", "scripts/healthcheck.py", "bot"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 300s   # first boot downloads the embedding model
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,6 +76,8 @@ services:
     build: .
     container_name: gosha-api
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${API_MEM_LIMIT:-3g}
     env_file:
       - path: .env
         required: false
@@ -61,8 +90,17 @@ services:
       [
         "uvicorn", "gosha.api.app:create_app", "--factory",
         "--host", "0.0.0.0", "--port", "8000",
-        "--proxy-headers", "--forwarded-allow-ips", "*",
+        # Only Caddy talks to this container, and it is the only hop that
+        # sets X-Forwarded-For. Trusting "*" let any client forge the
+        # client IP the rate limiter keys on.
+        "--proxy-headers", "--forwarded-allow-ips", "${TRUSTED_PROXY_IPS:-172.16.0.0/12}",
       ]
+    healthcheck:
+      test: ["CMD", "python", "scripts/healthcheck.py", "api"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     depends_on:
       postgres:
         condition: service_healthy
@@ -81,6 +119,7 @@ services:
         VITE_DISCORD_INVITE: ${DISCORD_INVITE_URL:-}
     container_name: gosha-caddy
     restart: unless-stopped
+    logging: *default-logging
     environment:
       CADDY_SITE: ${CADDY_SITE:-gosha.bogdantruta.com}
     ports:
@@ -89,11 +128,63 @@ services:
     volumes:
       - caddy_data:/data
       - caddy_config:/config
+    # caddy:2-alpine ships busybox wget. Probing :80 rather than the public
+    # hostname keeps the check working behind a host reverse proxy too.
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
-      - api
+      api:
+        condition: service_started
+
+  # ── Off-box encrypted backups ─────────────────────────────────────────
+  #
+  # UNVERIFIED. This service has never been run: it needs a restic
+  # repository and credentials that only the VPS operator can provision.
+  # Read docs/BACKUPS.md and TEST A RESTORE before relying on it.
+  #
+  # Enable with:  docker compose -f docker-compose.prod.yml --profile backup up -d
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile.backup
+    container_name: gosha-backup
+    restart: unless-stopped
+    profiles: ["backup"]
+    logging: *default-logging
+    environment:
+      # Where the snapshots go, e.g. s3:s3.eu-central-1.amazonaws.com/gosha-backups
+      # or b2:gosha-backups:/ or sftp:user@host:/srv/gosha-backups
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:?set RESTIC_REPOSITORY in .env}
+      # Encrypts the snapshots. LOSE THIS AND THE BACKUPS ARE UNREADABLE —
+      # keep a copy somewhere that is not this server.
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD:?set RESTIC_PASSWORD in .env}
+      AWS_ACCESS_KEY_ID: ${RESTIC_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${RESTIC_SECRET_ACCESS_KEY:-}
+      B2_ACCOUNT_ID: ${B2_ACCOUNT_ID:-}
+      B2_ACCOUNT_KEY: ${B2_ACCOUNT_KEY:-}
+      PGHOST: postgres
+      PGUSER: gosha
+      PGDATABASE: gosha
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP_DAILY: ${BACKUP_KEEP_DAILY:-30}
+      # Optional dead-man switch (healthchecks.io etc). Without it, a
+      # backup loop that dies is as invisible as having no backups.
+      BACKUP_HEALTHCHECK_URL: ${BACKUP_HEALTHCHECK_URL:-}
+    volumes:
+      - ./data:/data:ro                       # CV files, read-only
+      - restic_cache:/root/.cache/restic
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   pgdata:
   caddy_data:
   caddy_config:
   hf_cache:
+  restic_cache:

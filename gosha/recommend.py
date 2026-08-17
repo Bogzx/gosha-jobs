@@ -11,6 +11,7 @@ import logging
 import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 import numpy as np
 from sqlalchemy import or_, select
@@ -23,6 +24,53 @@ log = logging.getLogger(__name__)
 
 FEED_WINDOW_DAYS = 30
 FEEDBACK_WEIGHT = 0.3
+
+
+class FeedItem(NamedTuple):
+    """One ranked posting.
+
+    `score` is the raw cosine — useful for debugging and for the delivery
+    threshold. `percentile` is what the UI shows: raw cosine against a
+    768-dim sentence embedding lands in a narrow band (roughly 0.15–0.45
+    in production), so rendering it as a percentage against 75%/50%
+    thresholds painted essentially every job grey at "23%". The ordering
+    was always right; only the number was meaningless.
+    """
+
+    job: Job
+    score: float | None
+    percentile: int | None
+    reasons: list[str]
+
+
+def percentile_ranks(scores: list[float]) -> list[int]:
+    """Map raw scores onto 0-100 by position within this candidate set.
+
+    Uses the midpoint of the tied range, so equal scores get equal
+    percentiles and the single best job in a set of n does not always read
+    as a flat 100%.
+    """
+    n = len(scores)
+    if n == 0:
+        return []
+    if n == 1:
+        # A percentile of one thing is not information. Call it the middle.
+        return [50]
+
+    order = sorted(range(n), key=lambda i: scores[i])
+    ranks = [0.0] * n
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and scores[order[j + 1]] == scores[order[i]]:
+            j += 1
+        # Everything strictly below, plus half of the tied block.
+        midpoint = i + (j - i) / 2.0
+        for k in range(i, j + 1):
+            ranks[order[k]] = midpoint
+        i = j + 1
+
+    return [int(round(rank / (n - 1) * 100)) for rank in ranks]
 
 _WORD_RE = re.compile(r"[a-zA-Z][a-zA-Z+#.]{2,}")
 
@@ -111,8 +159,8 @@ async def build_user_vector(user_id: int) -> np.ndarray | None:
 
 async def get_feed(
     user_id: int, page: int = 1, per_page: int = 50,
-) -> tuple[list[tuple[Job, float | None, list[str]]], int]:
-    """Ranked (job, score, reasons) for the user's feed, plus total count.
+) -> tuple[list[FeedItem], int]:
+    """Ranked FeedItems for the user's feed, plus the total count.
 
     Jobs the user already gave feedback on or applied to are excluded.
     Without any personalization signal, falls back to newest-first with
@@ -175,25 +223,49 @@ async def get_feed(
         total = len(candidates)
         start = (page - 1) * per_page
         return (
-            [(job, None, []) for job in candidates[start : start + per_page]],
+            [
+                FeedItem(job, None, None, [])
+                for job in candidates[start : start + per_page]
+            ],
             total,
         )
 
-    scored: list[tuple[Job, float | None, list[str]]] = []
-    if candidates:
-        matrix = np.stack([bytes_to_vec(j.embedding) for j in candidates])
-        scores = matrix @ user_vector
-        order = np.argsort(-scores)
-        for idx in order:
-            job = candidates[int(idx)]
-            score = float(max(0.0, min(1.0, scores[int(idx)])))
-            reasons = (
+    if not candidates:
+        return [], 0
+
+    matrix = np.stack([bytes_to_vec(j.embedding) for j in candidates])
+    scores = matrix @ user_vector
+    order = np.argsort(-scores)
+
+    ranked_jobs = [candidates[int(i)] for i in order]
+    ranked_scores = [float(max(0.0, min(1.0, scores[int(i)]))) for i in order]
+    # Percentiles are computed against the WHOLE candidate set, not the
+    # page — otherwise page 2 would relabel its own worst jobs as top
+    # matches.
+    ranked_percentiles = percentile_ranks(ranked_scores)
+
+    total = len(ranked_jobs)
+    start = (page - 1) * per_page
+    page_slice = slice(start, start + per_page)
+
+    # Reasons are the expensive part (regex tokenisation over every job
+    # description), so they are computed for the page being returned
+    # rather than for all ~2000 candidates that get thrown away.
+    return (
+        [
+            FeedItem(
+                job,
+                score,
+                percentile,
                 match_reasons(cv_text, f"{job.title} {job.description or ''}")
                 if cv_text
-                else []
+                else [],
             )
-            scored.append((job, score, reasons))
-
-    total = len(scored)
-    start = (page - 1) * per_page
-    return scored[start : start + per_page], total
+            for job, score, percentile in zip(
+                ranked_jobs[page_slice],
+                ranked_scores[page_slice],
+                ranked_percentiles[page_slice],
+            )
+        ],
+        total,
+    )

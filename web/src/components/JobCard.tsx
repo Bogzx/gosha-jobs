@@ -36,7 +36,7 @@ export function JobCard({ job, selected = false, onSelect }: Props) {
           </p>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
-          <MatchBadge score={job.match_score} />
+          <MatchBadge percentile={job.match_percentile} />
           {job.applied && (
             <span
               className="inline-flex items-center gap-1 font-mono text-[10px] font-bold text-go"

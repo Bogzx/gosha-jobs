@@ -1,0 +1,28 @@
+# Project metadata. Runtime dependencies stay in requirements.txt (that is
+# what the Dockerfile installs); this file exists so the license, the name
+# and the tooling config are declared in one machine-readable place.
+
+[project]
+name = "gosha-jobs"
+version = "1.0.0"
+description = "The job feed that reads your CV — job matching for CS students in Romania and beyond."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [{ name = "Bogdan Truta" }]
+keywords = ["jobs", "scraper", "discord", "embeddings", "recruitment"]
+classifiers = [
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+  "Framework :: FastAPI",
+]
+
+[project.urls]
+Homepage = "https://gosha.bogdantruta.com"
+Source = "https://github.com/Bogzx/gosha-jobs"
+Issues = "https://github.com/Bogzx/gosha-jobs/issues"
+
+# pytest configuration deliberately stays in pytest.ini — one source of
+# truth, and pytest.ini wins over this file anyway.

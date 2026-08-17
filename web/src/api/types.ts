@@ -24,7 +24,10 @@ export interface Job {
   source: string
   posted_at: string | null
   first_seen_at: string | null
+  /** Raw cosine similarity. Do not render it — see match_percentile. */
   match_score: number | null
+  /** 0-100 position within the whole ranked candidate set. */
+  match_percentile: number | null
   match_reasons: string[] | null
   feedback: 'interested' | 'not_relevant' | null
   applied: boolean

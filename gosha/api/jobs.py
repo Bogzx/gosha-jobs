@@ -28,6 +28,7 @@ def job_to_out(
     feedback: str | None = None,
     applied: bool = False,
     match_score: float | None = None,
+    match_percentile: int | None = None,
     match_reasons: list[str] | None = None,
 ) -> JobOut:
     description = job.description
@@ -47,6 +48,7 @@ def job_to_out(
         posted_at=job.posted_at,
         first_seen_at=job.first_seen_at,
         match_score=match_score,
+        match_percentile=match_percentile,
         match_reasons=match_reasons,
         feedback=feedback,
         applied=applied,

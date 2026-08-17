@@ -2,6 +2,11 @@
   "name": "web",
   "private": true,
   "version": "0.0.0",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bogzx/gosha-jobs.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

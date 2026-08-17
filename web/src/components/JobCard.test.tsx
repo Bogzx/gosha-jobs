@@ -17,7 +17,9 @@ const JOB: Job = {
   source: 'indeed',
   posted_at: null,
   first_seen_at: new Date(Date.now() - 2 * 86400_000).toISOString(),
-  match_score: 0.92,
+  // Raw cosine stays realistic; the badge reads the percentile.
+  match_score: 0.31,
+  match_percentile: 92,
   match_reasons: ['python', 'docker'],
   feedback: null,
   applied: false,
@@ -40,9 +42,23 @@ describe('JobCard', () => {
     expect(screen.getByText('APPLIED')).toBeInTheDocument()
   })
 
-  it('hides the match badge without a score', () => {
-    render(<JobCard job={{ ...JOB, match_score: null }} onSelect={() => undefined} />)
+  it('hides the match badge without a ranking', () => {
+    render(
+      <JobCard
+        job={{ ...JOB, match_score: null, match_percentile: null }}
+        onSelect={() => undefined}
+      />,
+    )
     expect(screen.queryByText(/%$/)).not.toBeInTheDocument()
+  })
+
+  it('shows a reachable badge tone for a strong match', () => {
+    // A raw cosine of 0.31 rendered as "31%" never reached the >=75% green
+    // tone; the percentile does.
+    render(<JobCard job={JOB} onSelect={() => undefined} />)
+    const badge = screen.getByText('92%')
+    expect(badge.className).toContain('bg-go')
+    expect(badge).toHaveAttribute('title', expect.stringContaining('Top'))
   })
 
   it('fires onSelect when clicked', async () => {

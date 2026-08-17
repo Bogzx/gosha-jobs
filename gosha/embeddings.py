@@ -22,6 +22,23 @@ log = logging.getLogger(__name__)
 EMBEDDING_DIM = 768  # all-mpnet-base-v2
 DEFAULT_BATCH = 500
 
+# all-mpnet-base-v2 has max_seq_length = 384 tokens and silently drops
+# everything past it — and nothing in this repo raises that limit. Passing
+# it 8,000 characters therefore embedded roughly the first 1,500 and threw
+# away the rest, which for most CVs is everything after the first job.
+# "The job feed that reads your CV" read about a quarter of one.
+#
+# So the CV is windowed instead. ~350 tokens of headroom under the 384
+# limit, ~4 characters per token for mixed English/Romanian technical
+# prose, and windows overlap so a skill sitting on a boundary is whole in
+# at least one of them.
+CV_CHUNK_CHARS = 1400
+CV_CHUNK_OVERLAP_CHARS = 200
+# Ceiling on how much of a CV is considered at all. 40 chunks is ~56k
+# characters — far past any real CV, and it bounds the work one upload can
+# ask the model to do.
+MAX_CV_CHUNKS = 40
+
 
 def encode_texts(texts: list[str]) -> np.ndarray | None:
     """Encode texts with the shared semantic model. None when unavailable."""
@@ -97,17 +114,82 @@ def score_jobs_against_query(query_vec: np.ndarray, jobs: list[Job]) -> list[flo
     ]
 
 
-async def embed_user_cv(user_id: int, cv_text: str) -> bool:
-    """Compute and store the embedding of a user's CV text."""
-    vectors = encode_texts([cv_text[:8000]])
+def chunk_cv_text(
+    text: str,
+    chunk_chars: int = CV_CHUNK_CHARS,
+    overlap: int = CV_CHUNK_OVERLAP_CHARS,
+    max_chunks: int = MAX_CV_CHUNKS,
+) -> list[str]:
+    """Split a CV into overlapping windows the model can actually read.
+
+    Breaks on whitespace where possible so a window never ends mid-token,
+    which would otherwise turn a skill name into two meaningless fragments.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= chunk_chars:
+        return [text]
+
+    step = max(1, chunk_chars - overlap)
+    chunks: list[str] = []
+    start = 0
+    while start < len(text) and len(chunks) < max_chunks:
+        end = start + chunk_chars
+        if end < len(text):
+            # Prefer the last whitespace in the final quarter of the window.
+            boundary = text.rfind(" ", start + (chunk_chars * 3) // 4, end)
+            if boundary > start:
+                end = boundary
+        piece = text[start:end].strip()
+        if piece:
+            chunks.append(piece)
+        if end >= len(text):
+            break
+        start = max(start + step, end - overlap)
+
+    return chunks
+
+
+def embed_long_text(text: str) -> np.ndarray | None:
+    """Embed a document longer than the model's window, as one vector.
+
+    Every window is encoded, then mean-pooled and re-normalised. Mean
+    rather than max because a CV is a description of one person: averaging
+    keeps the overall profile while still letting a skill that appears in
+    exactly one window pull the vector toward that skill's neighbourhood.
+    Under the old truncation that skill contributed nothing at all.
+    """
+    chunks = chunk_cv_text(text)
+    if not chunks:
+        return None
+
+    vectors = encode_texts(chunks)
     if vectors is None:
+        return None
+
+    pooled = np.asarray(vectors, dtype=np.float32).mean(axis=0)
+    norm = float(np.linalg.norm(pooled))
+    if norm == 0:
+        return None
+    return (pooled / norm).astype(np.float32)
+
+
+async def embed_user_cv(user_id: int, cv_text: str) -> bool:
+    """Compute and store the embedding of a user's CV text.
+
+    Chunked (see embed_long_text) rather than truncated: the whole CV
+    reaches the vector, not just whatever fits in one model window.
+    """
+    pooled = embed_long_text(cv_text)
+    if pooled is None:
         return False
 
     async with get_session() as session:
         user = await session.get(User, user_id)
         if user is None:
             return False
-        user.cv_embedding = vec_to_bytes(vectors[0])
+        user.cv_embedding = vec_to_bytes(pooled)
         await session.commit()
     return True
 

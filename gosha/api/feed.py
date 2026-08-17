@@ -22,8 +22,13 @@ async def feed(
     items, total = await get_feed(user.id, page=page, per_page=per_page)
     return JobListOut(
         items=[
-            job_to_out(job, match_score=score, match_reasons=reasons)
-            for job, score, reasons in items
+            job_to_out(
+                item.job,
+                match_score=item.score,
+                match_percentile=item.percentile,
+                match_reasons=item.reasons,
+            )
+            for item in items
         ],
         total=total,
         page=page,

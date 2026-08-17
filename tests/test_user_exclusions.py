@@ -55,8 +55,8 @@ async def user_with_blacklist(session: AsyncSession):
 @pytest.mark.asyncio
 async def test_feed_never_shows_blacklisted(patched_db, user_with_blacklist):
     items, total = await recommend.get_feed(user_with_blacklist.id, page=1, per_page=50)
-    companies = {job.company for job, _, _ in items}
-    urls = {job.url for job, _, _ in items}
+    companies = {item.job.company for item in items}
+    urls = {item.job.url for item in items}
 
     assert "Bending Spoons Milan" not in companies
     assert "https://x.com/gamble" not in urls

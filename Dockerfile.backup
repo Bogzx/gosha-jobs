@@ -1,0 +1,17 @@
+# Backup sidecar: pg_dump + restic in one image.
+#
+# postgres:16-alpine is the base because the dump MUST come from a
+# pg_dump matching the server major version; restic comes from Alpine's
+# community repo. Doing it this way avoids the usual two-container dance
+# (dump into a shared volume, then back the volume up) and its window
+# where a half-written dump gets snapshotted.
+#
+# UNVERIFIED: this image has never been built or run. See docs/BACKUPS.md.
+FROM postgres:16-alpine
+
+RUN apk add --no-cache restic ca-certificates tzdata
+
+COPY scripts/backup/run-backup.sh /usr/local/bin/run-backup.sh
+RUN chmod +x /usr/local/bin/run-backup.sh
+
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/run-backup.sh"]

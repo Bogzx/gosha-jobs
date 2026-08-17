@@ -64,6 +64,22 @@ class WebSettings:
     invite_url: str = ""
 
 
+# 32 bytes is the shortest secret that is not brute-forceable offline
+# against a signed cookie; itsdangerous will happily sign with "dev".
+MIN_SESSION_SECRET_LEN = 32
+
+
+def _relaxed_secrets() -> bool:
+    """True when the caller is a test suite or explicitly opted out.
+
+    GOSHA_ALLOW_WEAK_SECRET exists so a self-hoster poking at the stack
+    locally is not blocked, but it has to be typed on purpose.
+    """
+    if os.getenv("GOSHA_ALLOW_WEAK_SECRET") == "1":
+        return True
+    return "PYTEST_CURRENT_TEST" in os.environ
+
+
 def load_web_settings() -> WebSettings:
     """Build WebSettings from the current environment.
 
@@ -87,6 +103,17 @@ def load_web_settings() -> WebSettings:
             f"Missing required environment variables: {', '.join(missing)}"
         )
 
+    # The session cookie payload is {"uid": N} over a tiny id space, and
+    # admin is an id-membership test — so a guessable secret is a direct
+    # path to forging an admin session, not a theoretical weakness.
+    # Tests set a short secret deliberately; everything else must not.
+    if len(secret) < MIN_SESSION_SECRET_LEN and not _relaxed_secrets():
+        raise RuntimeError(
+            f"SESSION_SECRET must be at least {MIN_SESSION_SECRET_LEN} "
+            "characters. Generate one with: "
+            'python -c "import secrets;print(secrets.token_urlsafe(48))"'
+        )
+
     public_base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
     redirect_uri = os.getenv(
         "DISCORD_REDIRECT_URI",
@@ -96,13 +123,25 @@ def load_web_settings() -> WebSettings:
     guild_raw = os.getenv("DISCORD_GUILD_ID", "0")
     guild_id = int(guild_raw) if guild_raw.isdigit() else 0
 
+    # Explicit override first; the URL scheme is only the default guess.
+    # Deriving Secure purely from a config string means a deployment behind
+    # a TLS-terminating proxy with an http:// PUBLIC_BASE_URL silently ships
+    # session cookies that a downgrade attack can read.
+    secure_raw = os.getenv("COOKIE_SECURE", "").strip().lower()
+    if secure_raw in ("1", "true", "yes"):
+        cookie_secure = True
+    elif secure_raw in ("0", "false", "no"):
+        cookie_secure = False
+    else:
+        cookie_secure = public_base_url.startswith("https")
+
     return WebSettings(
         session_secret=secret,
         discord_client_id=client_id,
         discord_client_secret=client_secret,
         redirect_uri=redirect_uri,
         public_base_url=public_base_url,
-        cookie_secure=public_base_url.startswith("https"),
+        cookie_secure=cookie_secure,
         guild_id=guild_id,
         invite_url=os.getenv("DISCORD_INVITE_URL", ""),
     )

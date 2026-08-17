@@ -28,9 +28,32 @@ export function formatSalary(
   return `${fmt((min ?? max)!)} ${cur}`.trim()
 }
 
-export function matchPercent(score: number | null): number | null {
-  if (score == null) return null
-  return Math.round(Math.min(1, Math.max(0, score)) * 100)
+/**
+ * The badge number.
+ *
+ * This used to render the raw cosine similarity as a percentage. Real
+ * values from a 768-dim sentence embedding land around 0.15–0.45, so the
+ * badge showed "23%" for a perfectly good match and never reached the
+ * ≥75% green or ≥50% amber thresholds it was styled against — nearly every
+ * job in the feed rendered grey, and the one number users were meant to
+ * trust said "bad match" about all of them.
+ *
+ * The API now returns `match_percentile`: the job's position within the
+ * whole ranked candidate set (gosha/recommend.py percentile_ranks). The
+ * ordering was always correct; this makes the number say the same thing
+ * the ordering does.
+ */
+export function matchPercent(percentile: number | null): number | null {
+  if (percentile == null) return null
+  return Math.round(Math.min(100, Math.max(0, percentile)))
+}
+
+/** Plain-language reading of a percentile, for tooltips and detail views. */
+export function matchLabel(percentile: number | null): string | null {
+  if (percentile == null) return null
+  if (percentile >= 75) return `Top ${Math.max(1, 100 - percentile)}% of your feed`
+  if (percentile >= 50) return 'Above average for your feed'
+  return `Ranks below ${100 - percentile}% of your feed`
 }
 
 export const SOURCE_LABELS: Record<string, string> = {

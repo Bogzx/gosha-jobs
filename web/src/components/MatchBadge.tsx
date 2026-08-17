@@ -1,8 +1,21 @@
-import { matchPercent } from '../lib/format'
+import { matchLabel, matchPercent } from '../lib/format'
 
-/** The hero metric: how well a job fits the user's CV. */
-export function MatchBadge({ score, size = 'sm' }: { score: number | null; size?: 'sm' | 'lg' }) {
-  const percent = matchPercent(score)
+/**
+ * The hero metric: where this job sits among everything ranked for you.
+ *
+ * The value is a percentile, not a raw similarity — see matchPercent in
+ * lib/format.ts for why. Because percentiles are uniform by construction,
+ * the ≥75 / ≥50 thresholds below now mean what they look like they mean:
+ * top quarter green, next quarter amber, bottom half quiet.
+ */
+export function MatchBadge({
+  percentile,
+  size = 'sm',
+}: {
+  percentile: number | null
+  size?: 'sm' | 'lg'
+}) {
+  const percent = matchPercent(percentile)
   if (percent == null) return null
 
   const tone =
@@ -17,7 +30,7 @@ export function MatchBadge({ score, size = 'sm' }: { score: number | null; size?
       className={`inline-flex items-center rounded-md border font-mono font-bold ${tone} ${
         size === 'lg' ? 'px-2.5 py-1 text-sm' : 'px-1.5 py-0.5 text-xs'
       }`}
-      title="How well this job matches your CV"
+      title={matchLabel(percentile) ?? undefined}
     >
       {percent}%
     </span>

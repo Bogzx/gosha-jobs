@@ -58,3 +58,49 @@ def test_web_settings_missing_secret_raises(monkeypatch):
     monkeypatch.setenv("DISCORD_CLIENT_SECRET", "x")
     with pytest.raises(RuntimeError):
         load_web_settings()
+
+
+def test_short_session_secret_is_rejected_outside_tests(monkeypatch):
+    """`SESSION_SECRET=dev` signs a {"uid": N} cookie over a tiny id space,
+    and admin is an id-membership test — so a weak secret is the practical
+    admin-forgery path, not a theoretical one."""
+    _set_required(monkeypatch)
+    monkeypatch.setenv("SESSION_SECRET", "dev")
+    # Simulate a real process: no pytest marker, no opt-out.
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("GOSHA_ALLOW_WEAK_SECRET", raising=False)
+
+    with pytest.raises(RuntimeError, match="at least 32"):
+        load_web_settings()
+
+
+def test_weak_secret_opt_out_is_explicit(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("SESSION_SECRET", "dev")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("GOSHA_ALLOW_WEAK_SECRET", "1")
+
+    assert load_web_settings().session_secret == "dev"
+
+
+def test_long_session_secret_accepted_without_opt_out(monkeypatch):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("SESSION_SECRET", "s" * 48)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("GOSHA_ALLOW_WEAK_SECRET", raising=False)
+
+    assert load_web_settings().session_secret == "s" * 48
+
+
+def test_cookie_secure_can_be_set_explicitly(monkeypatch):
+    """Behind a TLS-terminating proxy the base URL may be http:// while the
+    browser connection is https — the guess is then wrong in the unsafe
+    direction."""
+    _set_required(monkeypatch)
+    monkeypatch.setenv("PUBLIC_BASE_URL", "http://localhost:8000")
+    monkeypatch.setenv("COOKIE_SECURE", "true")
+    assert load_web_settings().cookie_secure is True
+
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://gosha.example")
+    monkeypatch.setenv("COOKIE_SECURE", "false")
+    assert load_web_settings().cookie_secure is False

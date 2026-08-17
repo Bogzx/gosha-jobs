@@ -42,7 +42,12 @@ class JobOut(BaseModel):
     source: str
     posted_at: datetime | None
     first_seen_at: datetime | None
+    # Raw cosine, kept for debugging and API consumers.
     match_score: float | None = None
+    # 0-100 position within the ranked candidate set. This is what the UI
+    # renders: raw cosine sits in a narrow band and reads as a meaningless
+    # low percentage.
+    match_percentile: int | None = None
     match_reasons: list[str] | None = None
     feedback: str | None = None
     applied: bool = False

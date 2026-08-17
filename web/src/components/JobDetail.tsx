@@ -102,7 +102,7 @@ export function JobDetail({ job, onClose }: Props) {
           </button>
         )}
         <div className="flex items-start gap-3">
-          <MatchBadge score={job.match_score} size="lg" />
+          <MatchBadge percentile={job.match_percentile} size="lg" />
           <div className="min-w-0">
             <h2 className="headline text-xl leading-tight">{job.title}</h2>
             <p className="mt-0.5 text-sm text-ink-soft">
