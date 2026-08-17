@@ -14,7 +14,6 @@ from gosha.filters import (
     matches_company_blacklist,
     matches_excluded_keywords,
     matches_experience_level,
-    matches_salary_minimum,
     normalize_location,
     title_is_relevant,
 )
@@ -198,29 +197,6 @@ class TestMatchesCompanyBlacklist:
 
     def test_empty_blacklist(self):
         assert matches_company_blacklist("Anyone", []) is False
-
-
-# ── matches_salary_minimum ────────────────────────────────────────────
-
-
-class TestMatchesSalaryMinimum:
-    def test_no_filter(self):
-        assert matches_salary_minimum(None, 30000, 50000) is True
-
-    def test_meets_minimum(self):
-        assert matches_salary_minimum(40000, 30000, 50000) is True
-
-    def test_below_minimum(self):
-        assert matches_salary_minimum(60000, 30000, 50000) is False
-
-    def test_no_salary_data_includes(self):
-        assert matches_salary_minimum(40000, None, None) is True
-
-    def test_only_min_salary(self):
-        assert matches_salary_minimum(30000, 35000, None) is True
-
-    def test_only_min_salary_below(self):
-        assert matches_salary_minimum(50000, 35000, None) is False
 
 
 # ── matches_experience_level ──────────────────────────────────────────

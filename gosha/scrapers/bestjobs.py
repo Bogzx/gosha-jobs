@@ -62,6 +62,8 @@ def _parse(payload: dict, query: SearchQuery) -> list[RawJob]:
             salary_min=salary_min,
             salary_max=salary_max,
             salary_currency=currency,
+            # BestJobs quotes monthly figures, usually in EUR.
+            salary_period="monthly" if (salary_min or salary_max) else None,
             posted_at=None,  # list payload has no posting date
             source="bestjobs",
         ))

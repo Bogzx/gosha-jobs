@@ -42,6 +42,11 @@ class RawJob:
     salary_min: float | None = None
     salary_max: float | None = None
     salary_currency: str | None = None
+    # What the amounts are per: "monthly", "yearly", "hourly", ... Adapters
+    # must state it, because boards disagree — eJobs quotes monthly RON and
+    # RemoteOK quotes annual USD, and without the label the two are
+    # indistinguishable numbers. See gosha/salary.py.
+    salary_period: str | None = None
     posted_at: datetime | None = None
     source: str = "unknown"
 
@@ -57,6 +62,7 @@ class RawJob:
             "min_amount": self.salary_min,
             "max_amount": self.salary_max,
             "currency": self.salary_currency,
+            "interval": self.salary_period,
             "date_posted": self.posted_at,
         }
 

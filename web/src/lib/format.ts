@@ -15,17 +15,56 @@ export function timeAgo(iso: string | null): string {
   return months === 1 ? '1mo ago' : `${months}mo ago`
 }
 
+const PERIOD_SUFFIX: Record<string, string> = {
+  yearly: '/yr',
+  year: '/yr',
+  annual: '/yr',
+  monthly: '/mo',
+  month: '/mo',
+  weekly: '/wk',
+  daily: '/day',
+  hourly: '/hr',
+  hour: '/hr',
+}
+
 export function formatSalary(
   min: number | null,
   max: number | null,
   currency: string | null,
+  period?: string | null,
 ): string | null {
   if (min == null && max == null) return null
   const cur = currency ?? ''
+  // The period matters: RemoteOK quotes annual USD and eJobs monthly RON,
+  // so "90k USD" next to "8k RON" without it is actively misleading.
+  const suffix = period ? (PERIOD_SUFFIX[period.toLowerCase()] ?? '') : ''
   const fmt = (n: number) =>
     n >= 10000 ? `${Math.round(n / 1000)}k` : `${Math.round(n)}`
-  if (min != null && max != null && min !== max) return `${fmt(min)}–${fmt(max)} ${cur}`.trim()
-  return `${fmt((min ?? max)!)} ${cur}`.trim()
+  const amount =
+    min != null && max != null && min !== max
+      ? `${fmt(min)}–${fmt(max)}`
+      : fmt((min ?? max)!)
+  return `${amount} ${cur}${suffix}`.trim()
+}
+
+/**
+ * The comparable figure: gross RON per month, normalised at ingest
+ * (gosha/salary.py). Shown alongside the quoted amount so a Romanian
+ * student can tell at a glance whether an annual-USD remote listing
+ * actually beats a local monthly-RON one.
+ */
+export function formatMonthlyRon(
+  min: number | null | undefined,
+  max: number | null | undefined,
+): string | null {
+  if (min == null && max == null) return null
+  const fmt = (n: number) =>
+    n >= 10000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : `${Math.round(n)}`
+  const amount =
+    min != null && max != null && Math.round(min) !== Math.round(max)
+      ? `${fmt(min)}–${fmt(max)}`
+      : fmt((min ?? max)!)
+  return `≈${amount} RON/mo`
 }
 
 /**

@@ -168,20 +168,27 @@ export function FilterPanel({ filters, onChange }: Props) {
         </div>
         <div>
           <label htmlFor="filter-salary" className="mb-1.5 block font-mono text-[11px] font-semibold tracking-wider text-ink-faint uppercase">
-            Min salary
+            Min RON / month
           </label>
           <input
             id="filter-salary"
             type="number"
             min={0}
-            step={100}
+            step={500}
             className="input-ink"
             placeholder="any"
+            // Everything is compared as gross RON per month, converted at
+            // ingest, so a monthly-EUR and an annual-USD posting are judged
+            // on the same scale (gosha/salary.py).
+            title="Gross RON per month. Listings in EUR or USD, and annual figures, are converted before filtering. Jobs that don't state a salary are always included."
             value={filters.salary_min ?? ''}
             onChange={(e) =>
               set({ salary_min: Number(e.target.value) || undefined })
             }
           />
+          <p className="mt-1 font-mono text-[10px] leading-tight text-ink-faint">
+            other currencies converted
+          </p>
         </div>
       </div>
 

@@ -189,7 +189,9 @@ async def test_job_excluded_by_salary(session: AsyncSession, sample_job):
     session.add(sub)
     await session.commit()
 
-    # sample_job salary_max is 55000 < 100000
+    # sample_job normalises to ~22,917 RON/month, well under the 100,000
+    # RON/month floor. The comparison is on the normalised figures, so the
+    # raw "55000 EUR/year" is never mistaken for 55,000 of anything monthly.
     assert job_matches_subscription(sample_job, sub) is False
 
 

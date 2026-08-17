@@ -14,6 +14,9 @@ const JOB: Job = {
   salary_min: 1000,
   salary_max: 1500,
   salary_currency: 'EUR',
+  salary_period: 'monthly',
+  salary_monthly_min_ron: 5000,
+  salary_monthly_max_ron: 7500,
   source: 'indeed',
   posted_at: null,
   first_seen_at: new Date(Date.now() - 2 * 86400_000).toISOString(),
@@ -21,6 +24,11 @@ const JOB: Job = {
   match_score: 0.31,
   match_percentile: 92,
   match_reasons: ['python', 'docker'],
+  match_signals: [
+    { kind: 'rank', text: 'Top 8% of 342 jobs ranked for you' },
+    { kind: 'skill', text: 'Your CV mentions python, docker' },
+    { kind: 'gap', text: 'Not in your CV: kubernetes' },
+  ],
   feedback: null,
   applied: false,
 }
@@ -33,7 +41,9 @@ describe('JobCard', () => {
     expect(screen.getByText('92%')).toBeInTheDocument()
     expect(screen.getByText(/python, docker/)).toBeInTheDocument()
     expect(screen.getByText('Indeed')).toBeInTheDocument()
-    expect(screen.getByText(/1k–1.5k EUR|1000–1500 EUR/)).toBeInTheDocument()
+    expect(screen.getByText(/1000–1500 EUR\/mo/)).toBeInTheDocument()
+    // EUR is not comparable to a Romanian monthly figure on its own.
+    expect(screen.getByText(/≈5000–7500 RON\/mo/)).toBeInTheDocument()
     expect(screen.getByText('2d ago')).toBeInTheDocument()
   })
 

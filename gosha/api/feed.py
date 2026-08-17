@@ -27,6 +27,7 @@ async def feed(
                 match_score=item.score,
                 match_percentile=item.percentile,
                 match_reasons=item.reasons,
+                match_signals=list(item.signals),
             )
             for item in items
         ],

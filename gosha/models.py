@@ -160,9 +160,17 @@ class Job(Base):
     company: Mapped[str] = mapped_column(String(256), nullable=False, default="Unknown")
     location: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # As quoted by the source: could be monthly RON, annual USD, hourly EUR.
+    # Display these; never compare them (see the normalised pair below).
     salary_min: Mapped[float | None] = mapped_column(Float, nullable=True)
     salary_max: Mapped[float | None] = mapped_column(Float, nullable=True)
     salary_currency: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    salary_period: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Gross RON per month — the one basis on which salaries from eJobs
+    # (monthly RON), BestJobs (monthly EUR) and RemoteOK (annual USD) can
+    # actually be filtered and sorted against each other. See gosha/salary.py.
+    salary_monthly_min_ron: Mapped[float | None] = mapped_column(Float, nullable=True)
+    salary_monthly_max_ron: Mapped[float | None] = mapped_column(Float, nullable=True)
     source: Mapped[str] = mapped_column(String(64), nullable=False)  # indeed, linkedin, glassdoor
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(

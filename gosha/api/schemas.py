@@ -29,6 +29,13 @@ class JobSummaryOut(BaseModel):
     source: str
 
 
+class MatchSignalOut(BaseModel):
+    """One human-readable reason a job is where it is in the ranking."""
+
+    kind: str  # "skill" | "gap" | "liked" | "rank"
+    text: str
+
+
 class JobOut(BaseModel):
     id: int
     url: str
@@ -39,6 +46,10 @@ class JobOut(BaseModel):
     salary_min: float | None
     salary_max: float | None
     salary_currency: str | None
+    salary_period: str | None = None
+    # Gross RON/month — the only figure comparable across sources.
+    salary_monthly_min_ron: float | None = None
+    salary_monthly_max_ron: float | None = None
     source: str
     posted_at: datetime | None
     first_seen_at: datetime | None
@@ -49,6 +60,8 @@ class JobOut(BaseModel):
     # low percentage.
     match_percentile: int | None = None
     match_reasons: list[str] | None = None
+    # The expanded "why this matched" breakdown for the detail view.
+    match_signals: list[MatchSignalOut] | None = None
     feedback: str | None = None
     applied: bool = False
 

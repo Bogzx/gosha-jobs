@@ -1,6 +1,6 @@
 import { CheckCircle2, MapPin } from 'lucide-react'
 import type { Job } from '../api/types'
-import { formatSalary, sourceLabel, timeAgo } from '../lib/format'
+import { formatMonthlyRon, formatSalary, sourceLabel, timeAgo } from '../lib/format'
 import { MatchBadge } from './MatchBadge'
 
 interface Props {
@@ -10,7 +10,14 @@ interface Props {
 }
 
 export function JobCard({ job, selected = false, onSelect }: Props) {
-  const salary = formatSalary(job.salary_min, job.salary_max, job.salary_currency)
+  const salary = formatSalary(
+    job.salary_min, job.salary_max, job.salary_currency, job.salary_period,
+  )
+  // Only worth showing when the quoted figure is not already monthly RON.
+  const comparable =
+    job.salary_currency && job.salary_currency.toUpperCase() !== 'RON'
+      ? formatMonthlyRon(job.salary_monthly_min_ron, job.salary_monthly_max_ron)
+      : null
 
   return (
     <button
@@ -56,7 +63,17 @@ export function JobCard({ job, selected = false, onSelect }: Props) {
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <span className="chip">{sourceLabel(job.source)}</span>
-        {salary && <span className="chip border-amber bg-amber-soft text-amber">{salary}</span>}
+        {salary && (
+          <span
+            className="chip border-amber bg-amber-soft text-amber"
+            title={comparable ? `${salary} — ${comparable}` : undefined}
+          >
+            {salary}
+            {comparable && (
+              <span className="ml-1 font-normal opacity-70">{comparable}</span>
+            )}
+          </span>
+        )}
         <span className="chip border-transparent bg-transparent">
           {timeAgo(job.posted_at ?? job.first_seen_at)}
         </span>

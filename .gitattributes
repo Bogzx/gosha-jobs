@@ -1,2 +1,9 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Files that are executed inside Linux containers must keep LF endings no
+# matter what the contributor's platform does. A CRLF shebang line makes
+# the kernel report "no such file or directory" for the interpreter.
+*.sh text eol=lf
+Dockerfile* text eol=lf
+Caddyfile text eol=lf

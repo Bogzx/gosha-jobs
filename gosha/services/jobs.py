@@ -84,12 +84,19 @@ async def list_jobs(
     if filters.sources:
         stmt = stmt.where(Job.source.in_([s.lower() for s in filters.sources]))
     if filters.salary_min is not None:
+        # Compared on the normalised monthly-RON columns, not the raw
+        # amounts: those mix monthly RON, monthly EUR and annual USD, so
+        # the old comparison let a USD 3,000/YEAR listing through a
+        # "3000 minimum" filter while excluding EUR 2,500/month.
         stmt = stmt.where(
             or_(
-                Job.salary_max >= filters.salary_min,
-                Job.salary_min >= filters.salary_min,
-                # No salary data — benefit of the doubt (mirrors matching logic)
-                Job.salary_min.is_(None) & Job.salary_max.is_(None),
+                Job.salary_monthly_max_ron >= filters.salary_min,
+                Job.salary_monthly_min_ron >= filters.salary_min,
+                # No usable salary data — benefit of the doubt. Most
+                # Romanian postings omit salary; excluding them would empty
+                # the feed for anyone who touches this filter.
+                Job.salary_monthly_min_ron.is_(None)
+                & Job.salary_monthly_max_ron.is_(None),
             )
         )
     if filters.posted_within_days is not None:
@@ -132,6 +139,45 @@ async def list_jobs(
     total = len(candidates)
     start = (page - 1) * per_page
     return candidates[start : start + per_page], total
+
+
+async def backfill_salary_normalisation(limit: int = 2000) -> int:
+    """Fill salary_monthly_*_ron for rows that predate normalisation.
+
+    Upserts compute these going forward, but a posting that is never
+    re-seen would otherwise stay invisible to the salary filter forever.
+    Returns the number of rows updated.
+    """
+    from gosha.salary import normalise_range
+
+    async with get_session() as session:
+        result = await session.execute(
+            select(Job)
+            .where(
+                Job.salary_monthly_min_ron.is_(None),
+                Job.salary_monthly_max_ron.is_(None),
+                or_(Job.salary_min.isnot(None), Job.salary_max.isnot(None)),
+            )
+            .limit(limit)
+        )
+        jobs = list(result.scalars().all())
+        if not jobs:
+            return 0
+
+        updated = 0
+        for job in jobs:
+            low, high = normalise_range(
+                job.salary_min, job.salary_max, job.salary_currency, job.salary_period,
+            )
+            if low is None and high is None:
+                continue
+            job.salary_monthly_min_ron = low
+            job.salary_monthly_max_ron = high
+            updated += 1
+        await session.commit()
+
+    log.info("Backfilled salary normalisation for %d jobs", updated)
+    return updated
 
 
 async def get_job(job_id: int) -> Job:

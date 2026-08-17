@@ -79,6 +79,9 @@ def _parse(feed: list[dict], query: SearchQuery) -> list[RawJob]:
             salary_min=salary_min or None,
             salary_max=salary_max or None,
             salary_currency="USD" if (salary_min or salary_max) else None,
+            # RemoteOK publishes ANNUAL USD. Left unlabelled it looks like
+            # a huge monthly figure next to eJobs' monthly RON.
+            salary_period="yearly" if (salary_min or salary_max) else None,
             posted_at=posted_at,
             source="remoteok",
         ))

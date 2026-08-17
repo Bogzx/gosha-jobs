@@ -25,6 +25,11 @@ async def jobs_fixture(session):
             salary_min=1000.0,
             salary_max=1500.0,
             salary_currency="EUR",
+            salary_period="monthly",
+            # Normalised at ingest in production (gosha/salary.py); the
+            # filter compares these, not the raw EUR figures.
+            salary_monthly_min_ron=5000.0,
+            salary_monthly_max_ron=7500.0,
         ),
         Job(
             url="https://j.com/buch-senior",
@@ -36,6 +41,9 @@ async def jobs_fixture(session):
             salary_min=4000.0,
             salary_max=5000.0,
             salary_currency="EUR",
+            salary_period="monthly",
+            salary_monthly_min_ron=20000.0,
+            salary_monthly_max_ron=25000.0,
         ),
         Job(
             url="https://j.com/remote-qa",
@@ -117,10 +125,11 @@ async def test_list_filter_sources_and_salary(client, web_user, jobs_fixture):
     assert [i["source"] for i in resp.json()["items"]] == ["linkedin"]
 
     resp = await client.get(
-        "/api/v1/jobs", params={"salary_min": 3000}, cookies=cookies
+        "/api/v1/jobs", params={"salary_min": 10000}, cookies=cookies
     )
     titles = {i["title"] for i in resp.json()["items"]}
-    # MegaBank pays >=3000; QA has no salary data (benefit of the doubt)
+    # Compared as monthly RON: MegaBank (20-25k) clears 10k, the intern
+    # (5-7.5k) does not, and QA has no salary data (benefit of the doubt).
     assert titles == {"Senior Java Engineer", "QA Intern"}
 
 

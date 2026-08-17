@@ -11,6 +11,7 @@ from gosha.api.schemas import (
     JobListOut,
     JobOut,
     JobSummaryOut,
+    MatchSignalOut,
     OkOut,
 )
 from gosha.models import Application, Job, User
@@ -30,6 +31,7 @@ def job_to_out(
     match_score: float | None = None,
     match_percentile: int | None = None,
     match_reasons: list[str] | None = None,
+    match_signals: list[tuple[str, str]] | None = None,
 ) -> JobOut:
     description = job.description
     if truncate and description and len(description) > LIST_DESCRIPTION_CHARS:
@@ -44,12 +46,20 @@ def job_to_out(
         salary_min=job.salary_min,
         salary_max=job.salary_max,
         salary_currency=job.salary_currency,
+        salary_period=job.salary_period,
+        salary_monthly_min_ron=job.salary_monthly_min_ron,
+        salary_monthly_max_ron=job.salary_monthly_max_ron,
         source=job.source,
         posted_at=job.posted_at,
         first_seen_at=job.first_seen_at,
         match_score=match_score,
         match_percentile=match_percentile,
         match_reasons=match_reasons,
+        match_signals=(
+            [MatchSignalOut(kind=kind, text=text) for kind, text in match_signals]
+            if match_signals
+            else None
+        ),
         feedback=feedback,
         applied=applied,
     )

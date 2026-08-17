@@ -107,13 +107,20 @@ async def main() -> None:
         replace_existing=True,
     )
 
-    # Backfill embeddings for jobs that predate the web platform (hourly)
+    # Backfill embeddings for jobs that predate the web platform (hourly),
+    # plus salary normalisation for rows scraped before gosha/salary.py.
     async def _embed_backfill() -> None:
         from gosha.embeddings import embed_new_jobs
         try:
             await embed_new_jobs()
         except Exception as exc:
             log.warning("Embedding backfill failed: %s", exc)
+
+        from gosha.services.jobs import backfill_salary_normalisation
+        try:
+            await backfill_salary_normalisation()
+        except Exception as exc:
+            log.warning("Salary normalisation backfill failed: %s", exc)
 
     scheduler.add_job(
         _embed_backfill,

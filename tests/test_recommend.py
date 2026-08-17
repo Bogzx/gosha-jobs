@@ -208,6 +208,107 @@ def test_percentile_ranks_handles_ties_and_edges():
     assert recommend.percentile_ranks([0.2, 0.2, 0.9]) == [25, 25, 100]
 
 
+class TestWhyThisMatched:
+    """The explanation behind the badge — see gosha/recommend.explain_match."""
+
+    CV = "Python developer with Docker and Postgres experience"
+    JOB = (
+        "Backend engineer. Python and Docker daily. Docker Compose, Python "
+        "services, and heavy Kubernetes usage. Kubernetes knowledge required."
+    )
+
+    def test_names_the_shared_terms(self):
+        _reasons, signals = recommend.explain_match(
+            cv_text=self.CV, job_text=self.JOB,
+            percentile=90, total_candidates=200,
+        )
+        skill = next(s for s in signals if s.kind == "skill")
+        assert "python" in skill.text and "docker" in skill.text
+
+    def test_names_the_gap(self):
+        """The actionable half: the term standing between CV and posting."""
+        _reasons, signals = recommend.explain_match(
+            cv_text=self.CV, job_text=self.JOB,
+            percentile=90, total_candidates=200,
+        )
+        gap = next(s for s in signals if s.kind == "gap")
+        assert "kubernetes" in gap.text
+
+    def test_reports_rank_within_the_candidate_set(self):
+        _reasons, signals = recommend.explain_match(
+            cv_text=self.CV, job_text=self.JOB,
+            percentile=92, total_candidates=342,
+        )
+        rank = next(s for s in signals if s.kind == "rank")
+        assert "Top 8%" in rank.text
+        assert "342" in rank.text
+
+    def test_mid_pack_jobs_get_a_position_not_a_top_claim(self):
+        _reasons, signals = recommend.explain_match(
+            cv_text=self.CV, job_text=self.JOB,
+            percentile=40, total_candidates=100,
+        )
+        rank = next(s for s in signals if s.kind == "rank")
+        assert "Top" not in rank.text
+        assert "#60" in rank.text
+
+    def test_feedback_influence_is_only_claimed_when_real(self):
+        weak = recommend.explain_match(
+            cv_text=self.CV, job_text=self.JOB, percentile=80,
+            total_candidates=50, liked_similarity=0.1,
+        )[1]
+        assert not any(s.kind == "liked" for s in weak)
+
+        strong = recommend.explain_match(
+            cv_text=self.CV, job_text=self.JOB, percentile=80,
+            total_candidates=50, liked_similarity=0.8,
+        )[1]
+        assert any(s.kind == "liked" for s in strong)
+
+    def test_no_cv_means_no_skill_or_gap_claims(self):
+        _reasons, signals = recommend.explain_match(
+            cv_text="", job_text=self.JOB, percentile=80, total_candidates=50,
+        )
+        kinds = {s.kind for s in signals}
+        assert "skill" not in kinds and "gap" not in kinds
+
+    def test_gaps_ignore_one_off_words_and_stopwords(self):
+        gaps = recommend.match_gaps(
+            "Python developer", "We need Python and one mention of rust. The team is great."
+        )
+        # "rust" appears once — incidental, not something the posting leans on.
+        assert gaps == []
+        assert "the" not in gaps
+
+
+@pytest.mark.asyncio
+async def test_feed_attaches_explanations(patched_db, session: AsyncSession, tmp_path):
+    """End to end: the feed carries the explanation, not just a number."""
+    import gosha.cover_letter as cl_mod
+
+    cl_mod.CV_DIR = tmp_path / "cvs"
+    user = User(discord_user_id=20, cv_embedding=vec_to_bytes(unit_vec(0)))
+    session.add(user)
+    await session.flush()
+    cl_mod.save_cv(user.id, "Python and Docker engineer")
+
+    job = make_job(
+        "https://r.com/why", 0,
+        title="Python Engineer",
+        description="Python and Docker every day. Docker Swarm, Python tooling, "
+                    "and Kubernetes. Kubernetes is essential here.",
+    )
+    session.add(job)
+    await session.commit()
+
+    items, _ = await recommend.get_feed(user.id, page=1, per_page=10)
+    kinds = {s.kind for s in items[0].signals}
+
+    assert "skill" in kinds
+    assert "gap" in kinds
+    assert items[0].reasons  # compact card line still populated
+
+
 def test_match_reasons_overlap():
     cv = "Experienced with Python, React and Docker deployments"
     jd = "We need Python and Docker skills. Docker is used daily, Kubernetes a plus"

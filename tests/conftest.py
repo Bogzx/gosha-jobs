@@ -75,6 +75,11 @@ async def sample_job(session: AsyncSession) -> Job:
         salary_min=40000,
         salary_max=55000,
         salary_currency="EUR",
+        salary_period="yearly",
+        # ~40-55k EUR/year is ~16.7-22.9k RON/month once normalised
+        # (gosha/salary.py). Subscription salary_min is monthly RON.
+        salary_monthly_min_ron=16667.0,
+        salary_monthly_max_ron=22917.0,
     )
     session.add(job)
     await session.commit()

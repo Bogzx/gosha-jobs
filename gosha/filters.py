@@ -363,24 +363,6 @@ def matches_company_blacklist(company: str, blacklist: list[str]) -> bool:
     return any(bl.lower().strip() in company_lower for bl in blacklist)
 
 
-def matches_salary_minimum(
-    salary_min_filter: int | None,
-    job_salary_min: float | None,
-    job_salary_max: float | None,
-) -> bool:
-    """Return True if the job meets the minimum salary requirement.
-
-    If no salary data on the job, we include it (benefit of the doubt).
-    """
-    if salary_min_filter is None:
-        return True
-    if job_salary_max is not None:
-        return job_salary_max >= salary_min_filter
-    if job_salary_min is not None:
-        return job_salary_min >= salary_min_filter
-    return True  # No salary data — include
-
-
 # Strictly internships/traineeships — NOT junior/graduate/entry-level.
 # Includes the Romanian terms local boards use (stagiar, practicant).
 INTERN_RE = re.compile(

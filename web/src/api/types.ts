@@ -11,6 +11,12 @@ export interface Me {
   is_admin: boolean
 }
 
+export interface MatchSignal {
+  /** 'rank' | 'skill' | 'liked' | 'gap' */
+  kind: string
+  text: string
+}
+
 export interface Job {
   id: number
   url: string
@@ -18,9 +24,14 @@ export interface Job {
   company: string
   location: string
   description: string | null
+  /** As quoted by the source — could be annual USD or monthly RON. */
   salary_min: number | null
   salary_max: number | null
   salary_currency: string | null
+  salary_period: string | null
+  /** Gross RON per month: the only figure comparable across sources. */
+  salary_monthly_min_ron: number | null
+  salary_monthly_max_ron: number | null
   source: string
   posted_at: string | null
   first_seen_at: string | null
@@ -29,6 +40,8 @@ export interface Job {
   /** 0-100 position within the whole ranked candidate set. */
   match_percentile: number | null
   match_reasons: string[] | null
+  /** Expanded "why this matched" breakdown; feed only. */
+  match_signals: MatchSignal[] | null
   feedback: 'interested' | 'not_relevant' | null
   applied: boolean
 }

@@ -135,6 +135,8 @@ def _parse(
             salary_min=salary_min,
             salary_max=salary_max,
             salary_currency=currency,
+            # eJobs quotes gross monthly figures.
+            salary_period="monthly" if (salary_min or salary_max) else None,
             posted_at=posted_at,
             source="ejobs",
         ))

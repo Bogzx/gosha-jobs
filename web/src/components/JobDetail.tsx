@@ -18,8 +18,14 @@ import {
   useJobDetail,
   useUndoApply,
 } from '../hooks/useJobs'
-import { formatSalary, sourceLabel, timeAgo } from '../lib/format'
+import {
+  formatMonthlyRon,
+  formatSalary,
+  sourceLabel,
+  timeAgo,
+} from '../lib/format'
 import { MatchBadge } from './MatchBadge'
+import { WhyThisMatched } from './WhyThisMatched'
 import { useToast } from './Toast'
 
 interface Props {
@@ -40,7 +46,13 @@ export function JobDetail({ job, onClose }: Props) {
   const detail = useJobDetail(job.id)
   const description = detail.data?.description ?? job.description
 
-  const salary = formatSalary(job.salary_min, job.salary_max, job.salary_currency)
+  const salary = formatSalary(
+    job.salary_min, job.salary_max, job.salary_currency, job.salary_period,
+  )
+  const comparable =
+    job.salary_currency && job.salary_currency.toUpperCase() !== 'RON'
+      ? formatMonthlyRon(job.salary_monthly_min_ron, job.salary_monthly_max_ron)
+      : null
 
   const handleApply = () => {
     window.open(job.url, '_blank', 'noopener')
@@ -116,16 +128,17 @@ export function JobDetail({ job, onClose }: Props) {
           </div>
         </div>
 
-        {job.match_reasons && job.match_reasons.length > 0 && (
-          <p className="mt-2 text-sm text-go">
-            ✦ Matches your <strong>{job.match_reasons.join(', ')}</strong>
-          </p>
-        )}
+        <WhyThisMatched signals={job.match_signals} />
 
         <div className="mt-3 flex flex-wrap gap-1.5">
           <span className="chip">{sourceLabel(job.source)}</span>
           {salary && (
-            <span className="chip border-amber bg-amber-soft text-amber">{salary}</span>
+            <span className="chip border-amber bg-amber-soft text-amber">
+              {salary}
+              {comparable && (
+                <span className="ml-1 font-normal opacity-70">{comparable}</span>
+              )}
+            </span>
           )}
           <span className="chip">{timeAgo(job.posted_at ?? job.first_seen_at)}</span>
         </div>

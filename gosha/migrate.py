@@ -53,6 +53,12 @@ async def run_migrations(conn: AsyncConnection) -> None:
             "embedding": blob_type,
             "dedup_group_id": "INTEGER",
             "last_checked_at": dt_type,
+            # Salary normalisation (gosha/salary.py). Backfilled by
+            # gosha.services.jobs.backfill_salary_normalisation, which the
+            # bot runs hourly, and recomputed on every upsert.
+            "salary_period": "VARCHAR(16)",
+            "salary_monthly_min_ron": "FLOAT",
+            "salary_monthly_max_ron": "FLOAT",
         })
 
     if "applications" in existing_tables:

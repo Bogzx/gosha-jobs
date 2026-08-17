@@ -23,13 +23,13 @@ from gosha.filters import (
     matches_company_blacklist,
     matches_excluded_keywords,
     matches_experience_level,
-    matches_salary_minimum,
     normalize_location,
     title_is_relevant,
 )
 from gosha.matching import SemanticMatcher
 from gosha.models import Job, Subscription, User, UserJob
 from gosha.queue import enqueue_deliveries_batch
+from gosha.salary import meets_minimum, normalise_range
 from gosha.scrape_health import CycleReport, ScrapeHealth
 
 if TYPE_CHECKING:
@@ -79,6 +79,17 @@ async def upsert_jobs(df: pd.DataFrame) -> list[Job]:
                 if "currency" in row and pd.notna(row.get("currency"))
                 else None
             )
+            # JobSpy calls it "interval"; our adapters emit the same key.
+            salary_period = (
+                str(row["interval"])
+                if "interval" in row and pd.notna(row.get("interval"))
+                else None
+            )
+            # Normalise once, here, so the filter and the sort can compare
+            # eJobs' monthly RON with RemoteOK's annual USD.
+            monthly_min, monthly_max = normalise_range(
+                salary_min, salary_max, salary_currency, salary_period,
+            )
             posted_at = _parse_datetime(row, "date_posted")
 
             result = await session.execute(select(Job).where(Job.url == url))
@@ -101,6 +112,12 @@ async def upsert_jobs(df: pd.DataFrame) -> list[Job]:
                     existing.salary_max = salary_max
                 if salary_currency:
                     existing.salary_currency = salary_currency
+                if salary_period:
+                    existing.salary_period = salary_period
+                if monthly_min is not None:
+                    existing.salary_monthly_min_ron = monthly_min
+                if monthly_max is not None:
+                    existing.salary_monthly_max_ron = monthly_max
                 if posted_at is not None:
                     existing.posted_at = posted_at
                 jobs.append(existing)
@@ -114,6 +131,9 @@ async def upsert_jobs(df: pd.DataFrame) -> list[Job]:
                     salary_min=salary_min,
                     salary_max=salary_max,
                     salary_currency=salary_currency,
+                    salary_period=salary_period,
+                    salary_monthly_min_ron=monthly_min,
+                    salary_monthly_max_ron=monthly_max,
                     source=source,
                     first_seen_at=now,
                     last_seen_at=now,
@@ -276,7 +296,12 @@ def job_matches_subscription(job: Job, sub: Subscription) -> bool:
         return False
     if matches_company_blacklist(job.company, sub.company_blacklist):
         return False
-    if not matches_salary_minimum(sub.salary_min, job.salary_min, job.salary_max):
+    # Compared on the normalised monthly-RON figures so a subscription's
+    # "salary_min" means the same thing regardless of which board the
+    # posting came from.
+    if not meets_minimum(
+        sub.salary_min, job.salary_monthly_min_ron, job.salary_monthly_max_ron,
+    ):
         return False
     if not matches_experience_level(job.title, sub.experience_levels):
         return False
