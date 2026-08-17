@@ -28,6 +28,18 @@ log() {
   echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"
 }
 
+# docker-compose.prod.yml passes these through with a plain :- default rather
+# than :?, because Compose interpolates every service at file-parse time —
+# including profile-gated ones — so a :? there would abort `docker compose up`
+# on any host that has no backup remote configured. The check therefore lives
+# here, where it only runs when the backup service actually starts.
+if [ -z "${RESTIC_REPOSITORY:-}" ] || [ -z "${RESTIC_PASSWORD:-}" ]; then
+  log "FATAL: RESTIC_REPOSITORY and RESTIC_PASSWORD must both be set in .env."
+  log "Refusing to run: an unconfigured backup that exits 0 is worse than no"
+  log "backup at all, because it looks like it worked. See docs/BACKUPS.md."
+  exit 1
+fi
+
 fail() {
   log "ERROR: $*"
   # A backup that fails quietly is worse than no backup, because it looks

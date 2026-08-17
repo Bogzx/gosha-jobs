@@ -158,10 +158,15 @@ services:
     environment:
       # Where the snapshots go, e.g. s3:s3.eu-central-1.amazonaws.com/gosha-backups
       # or b2:gosha-backups:/ or sftp:user@host:/srv/gosha-backups
-      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:?set RESTIC_REPOSITORY in .env}
+      # NOTE: plain :- default, not :? — Compose interpolates every service at
+      # file-parse time, including profile-gated ones. A :? here aborts
+      # `docker compose up` on any host without these set, even though this
+      # service only runs under --profile backup. run-backup.sh fails loudly
+      # on an empty repository instead.
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
       # Encrypts the snapshots. LOSE THIS AND THE BACKUPS ARE UNREADABLE —
       # keep a copy somewhere that is not this server.
-      RESTIC_PASSWORD: ${RESTIC_PASSWORD:?set RESTIC_PASSWORD in .env}
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
       AWS_ACCESS_KEY_ID: ${RESTIC_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${RESTIC_SECRET_ACCESS_KEY:-}
       B2_ACCOUNT_ID: ${B2_ACCOUNT_ID:-}

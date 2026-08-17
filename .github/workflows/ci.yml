@@ -114,7 +114,9 @@ jobs:
           os.environ.setdefault('DISCORD_CLIENT_ID', '1')
           os.environ.setdefault('DISCORD_CLIENT_SECRET', '1')
           app = create_app()
-          routes = {r.path for r in app.routes}
+          # app.routes is not uniformly Route objects — newer Starlette mixes in
+          # Mount/_IncludedRouter entries that have no .path. Filter, don't assume.
+          routes = {r.path for r in app.routes if hasattr(r, 'path')}
           assert '/api/v1/health' in routes, routes
           assert '/api/v1/account' in routes, routes
           assert '/api/v1/auth/debug-login' not in routes, 'debug backdoor is in the image'
