@@ -161,6 +161,16 @@ def _mount_routers(app: FastAPI) -> None:
     ):
         try:
             module = import_module(f"gosha.api.{module_name}")
-        except ModuleNotFoundError:
-            continue  # feature not built yet
+        except ModuleNotFoundError as exc:
+            # "feature not built yet" is only a valid excuse when the feature
+            # module *itself* is absent — which is the case for debug_login,
+            # deliberately excluded from production images via .dockerignore.
+            #
+            # If instead one of its dependencies is missing, swallowing that
+            # drops the entire router while the app still starts and reports
+            # healthy, so a broken image sails through every check and reaches
+            # production with endpoints silently missing. Fail loudly instead.
+            if exc.name == f"gosha.api.{module_name}":
+                continue
+            raise
         app.include_router(module.router, prefix=API_PREFIX)
