@@ -103,27 +103,6 @@ jobs:
           RESTIC_REPOSITORY: ci-placeholder
           RESTIC_PASSWORD: ci-placeholder
 
-      - name: Show what the image actually contains
-        run: |
-          # Diagnostic: if a router module is missing from the image the app
-          # still starts and reports healthy, so prove the files are there.
-          docker run --rm gosha-app:ci sh -c 'ls -1 /app/gosha/api/*.py | xargs -n1 basename | tr "\n" " "; echo'
-          docker run --rm gosha-app:ci python -c "
-          import fastapi, starlette
-          print('  fastapi', fastapi.__version__, 'starlette', starlette.__version__)
-          import os
-          os.environ.setdefault('SESSION_SECRET', 'x' * 40)
-          os.environ.setdefault('DISCORD_CLIENT_ID', '1')
-          os.environ.setdefault('DISCORD_CLIENT_SECRET', '1')
-          from gosha.api import account
-          print('  account.router routes:', len(account.router.routes))
-          from gosha.api.app import create_app
-          app = create_app()
-          print('  app.routes:', len(app.routes))
-          for r in app.routes:
-              print('   ', type(r).__name__, getattr(r, 'path', None))
-          "
-
       - name: Smoke-test the app image
         run: |
           # The image must at least import the app and answer its own
@@ -135,20 +114,14 @@ jobs:
           os.environ.setdefault('DISCORD_CLIENT_ID', '1')
           os.environ.setdefault('DISCORD_CLIENT_SECRET', '1')
           app = create_app()
-          # app.routes is not a flat list of Route objects. Newer FastAPI keeps
-          # included routers nested as _IncludedRouter entries that carry their
-          # own .routes, so anything registered via include_router is invisible
-          # at the top level. Walk the tree instead of assuming it is flat —
-          # filtering on hasattr(r, 'path') alone silently hides those routes
-          # and turns this smoke test into a no-op that asserts nothing useful.
-          stack = list(app.routes)
-          routes = set()
-          while stack:
-              r = stack.pop()
-              p = getattr(r, 'path', None)
-              if isinstance(p, str):
-                  routes.add(p)
-              stack.extend(getattr(r, 'routes', None) or [])
+          # Ask FastAPI what it serves rather than introspecting app.routes.
+          # requirements.txt pins no upper bound, so a fresh build resolves
+          # Starlette 1.x, where included routers sit on app.routes as wrapper
+          # objects instead of flattened APIRoutes — the endpoints are all
+          # registered and served, but any structural walk reads the old shape
+          # and silently sees three routes instead of thirty. The OpenAPI
+          # schema is the public contract and survives those internals moving.
+          routes = set(app.openapi()['paths'])
           assert '/api/v1/health' in routes, routes
           assert '/api/v1/account' in routes, routes
           assert '/api/v1/auth/debug-login' not in routes, 'debug backdoor is in the image'
