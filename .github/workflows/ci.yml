@@ -114,9 +114,20 @@ jobs:
           os.environ.setdefault('DISCORD_CLIENT_ID', '1')
           os.environ.setdefault('DISCORD_CLIENT_SECRET', '1')
           app = create_app()
-          # app.routes is not uniformly Route objects — newer Starlette mixes in
-          # Mount/_IncludedRouter entries that have no .path. Filter, don't assume.
-          routes = {r.path for r in app.routes if hasattr(r, 'path')}
+          # app.routes is not a flat list of Route objects. Newer FastAPI keeps
+          # included routers nested as _IncludedRouter entries that carry their
+          # own .routes, so anything registered via include_router is invisible
+          # at the top level. Walk the tree instead of assuming it is flat —
+          # filtering on hasattr(r, 'path') alone silently hides those routes
+          # and turns this smoke test into a no-op that asserts nothing useful.
+          stack = list(app.routes)
+          routes = set()
+          while stack:
+              r = stack.pop()
+              p = getattr(r, 'path', None)
+              if isinstance(p, str):
+                  routes.add(p)
+              stack.extend(getattr(r, 'routes', None) or [])
           assert '/api/v1/health' in routes, routes
           assert '/api/v1/account' in routes, routes
           assert '/api/v1/auth/debug-login' not in routes, 'debug backdoor is in the image'
