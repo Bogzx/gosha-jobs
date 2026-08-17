@@ -109,13 +109,19 @@ jobs:
           # still starts and reports healthy, so prove the files are there.
           docker run --rm gosha-app:ci sh -c 'ls -1 /app/gosha/api/*.py | xargs -n1 basename | tr "\n" " "; echo'
           docker run --rm gosha-app:ci python -c "
-          from importlib import import_module
-          for m in ['auth','account','legal','jobs','feed','applications','subscriptions','cv','cover_letters','analytics','admin','debug_login']:
-              try:
-                  import_module('gosha.api.' + m)
-                  print('  ok   ', m)
-              except Exception as e:
-                  print('  FAIL ', m, type(e).__name__, getattr(e, 'name', ''), e)
+          import fastapi, starlette
+          print('  fastapi', fastapi.__version__, 'starlette', starlette.__version__)
+          import os
+          os.environ.setdefault('SESSION_SECRET', 'x' * 40)
+          os.environ.setdefault('DISCORD_CLIENT_ID', '1')
+          os.environ.setdefault('DISCORD_CLIENT_SECRET', '1')
+          from gosha.api import account
+          print('  account.router routes:', len(account.router.routes))
+          from gosha.api.app import create_app
+          app = create_app()
+          print('  app.routes:', len(app.routes))
+          for r in app.routes:
+              print('   ', type(r).__name__, getattr(r, 'path', None))
           "
 
       - name: Smoke-test the app image
