@@ -133,3 +133,83 @@ async def test_scrape_stage_survives_broken_extra_scraper(patched_db, session, m
 
     jobs = await pipeline.run_scrape_stage(DummyTunnels())
     assert {j.url for j in jobs} == {"https://indeed.com/ok"}  # cycle survived
+
+
+@pytest.mark.asyncio
+async def test_upsert_batches_the_existence_lookup(patched_db, session, monkeypatch):
+    """upsert_jobs used to run one SELECT per scraped row inside the loop.
+
+    A broad keyword expands into ~19 searches across 7 sources, so that was
+    hundreds of round trips per cycle against Postgres in another container.
+    """
+    from sqlalchemy import Select
+
+    rows = [
+        {
+            "job_url": f"https://batch.com/{i}",
+            "title": f"Engineer {i}",
+            "company": "Acme",
+            "location": "Cluj-Napoca, Romania",
+            "site": "ejobs",
+        }
+        for i in range(25)
+    ]
+
+    selects: list[str] = []
+
+    import gosha.database as db
+
+    class CountingSession:
+        def __init__(self, inner):
+            self._inner = inner
+
+        async def execute(self, statement, *a, **kw):
+            if isinstance(statement, Select):
+                selects.append(str(statement))
+            return await self._inner.execute(statement, *a, **kw)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    class CountingCtx:
+        def __init__(self, ctx):
+            self._ctx = ctx
+
+        async def __aenter__(self):
+            return CountingSession(await self._ctx.__aenter__())
+
+        async def __aexit__(self, *exc):
+            return await self._ctx.__aexit__(*exc)
+
+    monkeypatch.setattr(
+        pipeline, "get_session", lambda: CountingCtx(db.get_session())
+    )
+
+    jobs = await pipeline.upsert_jobs(pd.DataFrame(rows))
+
+    assert len(jobs) == 25
+    job_selects = [s for s in selects if "FROM jobs" in s]
+    assert len(job_selects) == 1, f"expected one batched SELECT, got {len(job_selects)}"
+
+
+@pytest.mark.asyncio
+async def test_upsert_handles_the_same_url_twice_in_one_batch(patched_db, session):
+    """Two keywords can surface the same posting; the batched lookup must
+    not turn that into a duplicate insert."""
+    rows = [
+        {
+            "job_url": "https://dupe.com/1",
+            "title": "Engineer",
+            "company": "Acme",
+            "location": "Cluj",
+            "site": "ejobs",
+        }
+    ] * 2
+
+    jobs = await pipeline.upsert_jobs(pd.DataFrame(rows))
+    assert len({id(j) for j in jobs}) == 1
+
+    stored = (
+        await session.execute(select(Job).where(Job.url == "https://dupe.com/1"))
+    ).scalars().all()
+    assert len(stored) == 1

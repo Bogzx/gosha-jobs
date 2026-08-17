@@ -56,6 +56,27 @@ async def upsert_jobs(df: pd.DataFrame) -> list[Job]:
     now = datetime.now(timezone.utc)
 
     async with get_session() as session:
+        # One SELECT for the whole batch instead of one per scraped row.
+        # A broad keyword expands into ~19 searches x 30 results across 7
+        # sources, so the per-row lookup was hundreds of round trips per
+        # cycle against a Postgres in another container.
+        urls = [
+            str(u)
+            for u in (
+                df.get("job_url", pd.Series(dtype=object))
+                .fillna(
+                    df.get("job_url_direct", pd.Series(dtype=object))
+                )
+                .fillna(df.get("link", pd.Series(dtype=object)))
+                .tolist()
+            )
+            if u and str(u) != "nan"
+        ]
+        existing_by_url: dict[str, Job] = {}
+        if urls:
+            found = await session.execute(select(Job).where(Job.url.in_(urls)))
+            existing_by_url = {job.url: job for job in found.scalars().all()}
+
         for _, row in df.iterrows():
             url = str(
                 row.get("job_url")
@@ -92,8 +113,7 @@ async def upsert_jobs(df: pd.DataFrame) -> list[Job]:
             )
             posted_at = _parse_datetime(row, "date_posted")
 
-            result = await session.execute(select(Job).where(Job.url == url))
-            existing = result.scalar_one_or_none()
+            existing = existing_by_url.get(url)
 
             if existing:
                 existing.last_seen_at = now
@@ -141,6 +161,10 @@ async def upsert_jobs(df: pd.DataFrame) -> list[Job]:
                 )
                 session.add(job)
                 jobs.append(job)
+                # A batch can contain the same URL twice (two keywords hit
+                # the same posting); without this the second occurrence
+                # would insert a duplicate and trip the unique constraint.
+                existing_by_url[url] = job
 
         await session.commit()
 

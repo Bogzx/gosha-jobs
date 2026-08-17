@@ -41,7 +41,15 @@ async def pageview(
     body: PageviewIn,
     user: User | None = Depends(optional_user),
 ) -> OkOut:
-    client_key = request.client.host if request.client else "unknown"
+    # Key on the session when there is one. uvicorn is told which proxy
+    # networks to trust (docker-compose.prod.yml), but a signed-in user is
+    # a stronger identity than any IP: rotating X-Forwarded-For or hopping
+    # networks buys a fresh bucket, rotating a signed session does not.
+    client_key = (
+        f"user:{user.id}"
+        if user is not None
+        else f"ip:{request.client.host if request.client else 'unknown'}"
+    )
     if _allow(client_key):
         await service.record_pageview(user.id if user else None, body.path)
     return OkOut()
