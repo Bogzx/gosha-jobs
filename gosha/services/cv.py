@@ -55,7 +55,29 @@ async def upload_cv(user_id: int, filename: str, content: bytes) -> dict:
 
 
 async def delete_cv(user_id: int) -> None:
+    """Delete the CV and everything derived from it.
+
+    "Delete" has to mean the derived artefacts too. Cover letters are
+    written *from* the CV — leaving them behind meant the personal data the
+    user asked us to erase was still sitting in the database, quoted back at
+    them on the CV page.
+    """
     storage.delete_cv(user_id)
+
+    try:
+        from sqlalchemy import delete as sql_delete
+
+        from gosha.database import get_session
+        from gosha.models import CoverLetter
+
+        async with get_session() as session:
+            await session.execute(
+                sql_delete(CoverLetter).where(CoverLetter.user_id == user_id)
+            )
+            await session.commit()
+    except Exception as exc:
+        log.warning("Cover-letter cleanup failed for user %d: %s", user_id, exc)
+
     try:
         from gosha.embeddings import clear_user_cv_embedding
         await clear_user_cv_embedding(user_id)

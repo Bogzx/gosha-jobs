@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Copy, FileCheck2, Loader2, Trash2 } from 'lucide-react'
 import { CvDropzone } from '../components/CvDropzone'
 import { useToast } from '../components/Toast'
@@ -28,7 +29,18 @@ export default function CvPage() {
         </h1>
         <p className="mb-5 text-sm text-ink-soft">
           One upload powers everything: match scores in your feed and AI cover
-          letters per job. Stored as plain text, deletable any time.
+          letters per job. Stored as plain text on our server (not encrypted
+          at rest). Deleting it here removes the file, the match vector and
+          every cover letter generated from it — your saved searches,
+          applications and delivery history stay. To remove those too, use{' '}
+          <Link to="/profile" className="text-moss underline underline-offset-2">
+            delete account
+          </Link>
+          . Full detail in the{' '}
+          <Link to="/privacy" className="text-moss underline underline-offset-2">
+            privacy notice
+          </Link>
+          .
         </p>
 
         {cv?.has_cv ? (
@@ -46,7 +58,7 @@ export default function CvPage() {
                 className="rounded-md border border-rule p-1.5 text-ink-faint transition-colors hover:border-tomato hover:text-tomato"
                 aria-label="Delete CV"
                 onClick={() => {
-                  if (window.confirm('Delete your CV? Match scores and cover letters will stop working.')) {
+                  if (window.confirm('Delete your CV? This also deletes every cover letter generated from it, and match scores stop working. This cannot be undone.')) {
                     deleteCv.mutate(undefined, {
                       onSuccess: () => toast({ message: 'CV deleted' }),
                     })

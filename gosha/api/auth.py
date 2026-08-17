@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from gosha.api.deps import ApiError, clear_session_cookie, set_session_cookie
@@ -67,23 +67,74 @@ def _consume_state(state: str) -> bool:
     return True
 
 
-def _state_allowed(state: str, cookie_value: str) -> bool:
-    """Decide whether a callback state is acceptable.
+def _state_is_valid(state: str) -> bool:
+    """Signature + TTL + single-use.
 
-    - The state must carry a valid, unexpired signature and be unused.
-    - Normally it must also appear in the state cookie (CSRF binding).
-      The cookie keeps the last few states so a second sign-in click
-      doesn't invalidate a pending authorize window.
-    - When the cookie is ABSENT entirely we accept the state anyway:
-      the desktop Discord app opens the callback in the system default
-      browser, which may not be the one the user clicked in. Signature,
-      TTL, and single-use still bound the risk.
+    This proves the state was minted by *us* and has not been replayed. It
+    does NOT prove it was minted by the browser presenting it — that is what
+    `_state_bound_to_browser` is for.
     """
-    if not state or not _verify_state(state) or not _consume_state(state):
-        return False
-    if not cookie_value:
-        return True  # cross-browser desktop app flow
-    return state in cookie_value.split("|")
+    return bool(state) and _verify_state(state) and _consume_state(state)
+
+
+def _state_bound_to_browser(state: str, cookie_value: str) -> bool:
+    """CSRF binding: the state must be one THIS browser started.
+
+    The cookie keeps the last few states so a second sign-in click doesn't
+    invalidate a pending authorize window.
+
+    An absent cookie is NOT a pass. Accepting one would let an attacker mint
+    a state, authorize their own Discord account, and hand the victim the
+    resulting callback URL — logging the victim into the attacker's account,
+    where anything the victim then uploads (their CV) belongs to the attacker.
+    The cross-browser desktop flow is preserved by the handoff below instead.
+    """
+    return bool(cookie_value) and state in cookie_value.split("|")
+
+
+# ---------------------------------------------------------------------------
+# Cross-browser handoff
+#
+# The desktop Discord app opens the callback in the system DEFAULT browser,
+# which may not be the browser the user clicked "sign in" from — so the
+# callback browser has no state cookie and must never be handed a session.
+#
+# Instead the callback parks the resolved user id server-side under the
+# state, and the browser that actually minted that state (it holds the
+# cookie) claims it from /auth/discord/handoff. The session cookie is only
+# ever set in the browser that started the flow, so an attacker-supplied
+# callback URL grants nothing: the attacker cannot make the victim's browser
+# hold a cookie containing the attacker's state, and cannot learn a state
+# the victim minted.
+# ---------------------------------------------------------------------------
+
+HANDOFF_MAX_AGE = 300  # seconds the originating browser has to collect
+
+# state -> (user_id, is_new, expires_at)
+_pending_handoffs: dict[str, tuple[int, bool, float]] = {}
+
+
+def _park_handoff(state: str, user_id: int, is_new: bool) -> None:
+    now = time.monotonic()
+    for key, (_uid, _new, expiry) in list(_pending_handoffs.items()):
+        if expiry < now:
+            del _pending_handoffs[key]
+    _pending_handoffs[state] = (user_id, is_new, now + HANDOFF_MAX_AGE)
+
+
+def _claim_handoff(cookie_value: str) -> tuple[int, bool] | None:
+    """Pop a completed sign-in for any state this browser minted."""
+    now = time.monotonic()
+    for state in [s for s in (cookie_value or "").split("|") if s]:
+        entry = _pending_handoffs.get(state)
+        if entry is None:
+            continue
+        user_id, is_new, expiry = entry
+        del _pending_handoffs[state]
+        if expiry < now:
+            continue
+        return user_id, is_new
+    return None
 
 
 # Deep-link scheme handled by the Discord mobile app — opens the authorize
@@ -107,8 +158,6 @@ async def discord_login(request: Request, format: str = ""):
     if format == "json":
         # The SPA uses this on mobile: try the app deep link first,
         # fall back to the browser URL. State cookie set either way.
-        from fastapi.responses import JSONResponse
-
         response: JSONResponse | RedirectResponse = JSONResponse({
             "web_url": f"{AUTHORIZE_URL}?{params}",
             "app_url": f"{APP_AUTHORIZE_URL}?{params}",
@@ -137,8 +186,9 @@ async def discord_callback(request: Request, code: str = "", state: str = "") ->
     settings = load_web_settings()
 
     cookie_state = request.cookies.get(OAUTH_STATE_COOKIE, "")
-    if not _state_allowed(state, cookie_state):
+    if not _state_is_valid(state):
         raise ApiError(400, "invalid_state", "OAuth state check failed — try signing in again.")
+    same_browser = _state_bound_to_browser(state, cookie_state)
     if not code:
         raise ApiError(400, "invalid_request", "Discord did not return a code.")
 
@@ -192,7 +242,33 @@ async def discord_callback(request: Request, code: str = "", state: str = "") ->
     except Exception:
         pass
 
+    if not same_browser:
+        # Different browser than the one that started the flow (desktop app
+        # deep link). Park the result; the originating browser collects it.
+        _park_handoff(state, user_id, is_new)
+        return RedirectResponse("/signed-in", status_code=307)
+
     response = RedirectResponse("/welcome" if is_new else "/", status_code=307)
+    response.delete_cookie(OAUTH_STATE_COOKIE, path="/")
+    set_session_cookie(response, user_id)
+    return response
+
+
+@router.get("/discord/handoff")
+async def discord_handoff(request: Request) -> JSONResponse:
+    """Collect a sign-in completed in another browser.
+
+    Only the browser holding the state cookie that minted the state can
+    claim it, so this is the CSRF binding — moved from the callback (which
+    an attacker can drive) to a request the victim's browser makes itself.
+    """
+    cookie_state = request.cookies.get(OAUTH_STATE_COOKIE, "")
+    claimed = _claim_handoff(cookie_state)
+    if claimed is None:
+        return JSONResponse({"signed_in": False})
+
+    user_id, is_new = claimed
+    response = JSONResponse({"signed_in": True, "new_user": is_new})
     response.delete_cookie(OAUTH_STATE_COOKIE, path="/")
     set_session_cookie(response, user_id)
     return response
@@ -230,14 +306,6 @@ async def logout(response: Response) -> OkOut:
     return OkOut()
 
 
-@router.get("/debug-login")
-async def debug_login(uid: int) -> RedirectResponse:
-    """Local-testing backdoor: session for an arbitrary user id.
-
-    Hard-disabled unless DEBUG_LOGIN=1 is set — never enable in production.
-    """
-    if os.getenv("DEBUG_LOGIN") != "1":
-        raise ApiError(404, "not_found", "Not found.")
-    response = RedirectResponse("/", status_code=307)
-    set_session_cookie(response, uid)
-    return response
+# The local-testing backdoor lives in gosha/api/debug_login.py, which
+# .dockerignore keeps out of the production image entirely — the route
+# cannot be enabled by a stray env var because the code is not there.

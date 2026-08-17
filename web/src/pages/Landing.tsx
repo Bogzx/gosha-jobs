@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { ArrowRight, FileText, MessageCircle, Sparkles } from 'lucide-react'
 import { Logo } from '../components/Logo'
 import { DISCORD_INVITE } from '../lib/constants'
@@ -184,6 +185,13 @@ export default function Landing() {
           >
             join our Discord
           </a>
+          {' / '}
+          <Link
+            to="/privacy"
+            className="text-moss underline underline-offset-2 hover:text-go"
+          >
+            privacy
+          </Link>
           {' / '}made by{' '}
           <a
             href="https://bogdantruta.com"

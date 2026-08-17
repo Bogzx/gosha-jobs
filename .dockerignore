@@ -19,3 +19,6 @@ shots/
 .superpowers/
 .playwright-cli/
 docs/
+
+# Local-testing sign-in backdoor — must never exist in a production image
+gosha/api/debug_login.py

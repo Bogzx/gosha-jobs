@@ -147,6 +147,9 @@ def _mount_routers(app: FastAPI) -> None:
 
     for module_name in (
         "auth",
+        "debug_login",  # absent from production images (see .dockerignore)
+        "account",
+        "legal",
         "jobs",
         "feed",
         "applications",

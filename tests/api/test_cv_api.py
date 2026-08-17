@@ -77,6 +77,37 @@ async def test_upload_rejects_oversize(client, web_user):
 
 
 @pytest.mark.asyncio
+async def test_upload_is_read_in_chunks_and_aborted_early():
+    """The oversize check must not materialise the whole body first.
+
+    Reading it all and then measuring is a one-request OOM for any signed-in
+    user; the guard has to stop at the cap.
+    """
+    from gosha.api.cv import read_capped
+    from gosha.domain.errors import FileTooLargeError
+
+    class CountingUpload:
+        """Pretends to be an endless upload; counts what was consumed."""
+
+        def __init__(self) -> None:
+            self.consumed = 0
+
+        async def read(self, size: int = -1) -> bytes:
+            self.consumed += size
+            return b"x" * size
+
+    upload = CountingUpload()
+    limit = 5 * 1024 * 1024
+    with pytest.raises(FileTooLargeError):
+        await read_capped(upload, limit)
+
+    # Stopped within one chunk of the limit rather than reading forever.
+    from gosha.api.cv import UPLOAD_CHUNK_BYTES
+
+    assert upload.consumed <= limit + UPLOAD_CHUNK_BYTES
+
+
+@pytest.mark.asyncio
 async def test_cover_letter_generation_and_cache(client, web_user, session, monkeypatch):
     user, cookies = web_user
     await _upload(client, cookies)

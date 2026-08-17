@@ -92,14 +92,18 @@ async def generate_gemini(prompt: str) -> str | None:
         },
     }
 
+    # The key goes in a header, not the query string: URLs are logged by
+    # proxies, browsers and error trackers, and this one bills real money.
+    headers = {"x-goog-api-key": api_key}
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         for model in GEMINI_MODELS:
             url = (
                 "https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{model}:generateContent?key={api_key}"
+                f"{model}:generateContent"
             )
             try:
-                resp = await client.post(url, json=payload)
+                resp = await client.post(url, json=payload, headers=headers)
                 if resp.status_code != 200:
                     log.warning(
                         "Gemini model %s returned %d — trying next",

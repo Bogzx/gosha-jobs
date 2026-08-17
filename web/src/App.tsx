@@ -11,6 +11,8 @@ import CvPage from './pages/CvPage'
 import Profile from './pages/Profile'
 import Admin from './pages/Admin'
 import Welcome from './pages/Welcome'
+import SignedIn from './pages/SignedIn'
+import Privacy from './pages/Privacy'
 
 function usePageviews() {
   const location = useLocation()
@@ -45,6 +47,8 @@ export default function App() {
         }
       />
       <Route path="/welcome" element={<Welcome />} />
+      <Route path="/signed-in" element={<SignedIn />} />
+      <Route path="/privacy" element={<Privacy />} />
       <Route path="/feed" element={<Protected><Feed /></Protected>} />
       <Route path="/tracker" element={<Protected><Tracker /></Protected>} />
       <Route path="/searches" element={<Protected><Searches /></Protected>} />

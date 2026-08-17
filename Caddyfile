@@ -5,6 +5,14 @@
 {$CADDY_SITE:gosha.bogdantruta.com} {
 	encode gzip zstd
 
+	# Hard ceiling on request bodies, enforced at the edge so an oversized
+	# upload never reaches the API process at all. The application limit is
+	# 5 MB (gosha/services/cv.py MAX_CV_BYTES); this leaves room for the
+	# multipart envelope while still bounding memory.
+	request_body {
+		max_size 6MB
+	}
+
 	# API -> FastAPI container
 	handle /api/* {
 		reverse_proxy api:8000
@@ -21,6 +29,18 @@
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
 		Referrer-Policy strict-origin-when-cross-origin
+		# One year, and the domain is HTTPS-only in practice.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# script-src is 'self' only — no third-party JS can execute, which
+		# is the property that matters for a site holding CVs.
+		#
+		# The font and image origins below are the SPA's remaining
+		# third-party dependencies (Google Fonts in web/index.html, Unsplash
+		# hero art in web/src/pages/Landing.tsx). They leak visitor IPs and
+		# should be self-hosted; until the assets are vendored, allowing
+		# them here is the difference between a policy that works and one
+		# that blanks the landing page. Tracked in PRIVACY.md.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https://images.unsplash.com https://cdn.discordapp.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
 		-Server
 	}
 }

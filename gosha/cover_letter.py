@@ -25,6 +25,12 @@ log = logging.getLogger(__name__)
 # CV storage directory
 CV_DIR = Path(__file__).resolve().parent.parent / "data" / "cvs"
 
+# How much of a CV is sent to the external LLM per cover-letter request.
+# This is the single largest disclosure surface in the product, so the
+# number is named rather than inlined and is quoted verbatim by the privacy
+# notice (gosha/api/legal.py) — the two can never drift.
+CV_CHARS_TO_LLM = 15000
+
 
 # ---------------------------------------------------------------------------
 # CV management
@@ -109,22 +115,65 @@ def extract_text(filename: str, content: bytes) -> str | None:
 
     if filename.endswith(".docx"):
         try:
-            import io
-            import xml.etree.ElementTree as ET
-            import zipfile
-
-            # Minimal .docx text extraction without python-docx dependency
-            zf = zipfile.ZipFile(io.BytesIO(content))
-            xml_content = zf.read("word/document.xml")
-            tree = ET.fromstring(xml_content)
-            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-            texts = [node.text for node in tree.iter(f"{{{ns['w']}}}t") if node.text]
-            return " ".join(texts).strip() or None
+            return _extract_docx_text(content)
         except Exception as exc:
             log.error("DOCX extraction failed: %s", exc)
             return None
 
     return None
+
+
+# A .docx is a zip, so an attacker controls the DECOMPRESSED size — a few
+# hundred KB of upload can expand to gigabytes. The 5 MB upload cap does
+# nothing about that, so the expansion is bounded here as well. A real CV's
+# document.xml is tens of KB; 32 MB is absurdly generous.
+MAX_DOCX_MEMBER_BYTES = 32 * 1024 * 1024
+MAX_DOCX_TOTAL_BYTES = 96 * 1024 * 1024
+
+# Second primitive in the same three lines: ET.fromstring honours internal
+# entity definitions, so a DTD with nested entities ("billion laughs") turns
+# a small file into unbounded memory. Word never emits a DTD, so any DOCTYPE
+# or ENTITY declaration is a refusal rather than something to parse safely.
+_XML_DTD_RE = re.compile(rb"<!\s*(?:DOCTYPE|ENTITY)", re.IGNORECASE)
+
+_DOCX_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+
+def _extract_docx_text(content: bytes) -> str | None:
+    """Minimal .docx text extraction, bounded against zip bombs and DTDs."""
+    import io
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+        declared_total = sum(info.file_size for info in zf.infolist())
+        if declared_total > MAX_DOCX_TOTAL_BYTES:
+            raise ValueError(
+                f"DOCX expands to {declared_total} bytes — refusing to unpack"
+            )
+
+        try:
+            info = zf.getinfo("word/document.xml")
+        except KeyError:
+            raise ValueError("DOCX has no word/document.xml") from None
+        if info.file_size > MAX_DOCX_MEMBER_BYTES:
+            raise ValueError(
+                f"word/document.xml declares {info.file_size} bytes — too large"
+            )
+
+        # Read with a hard cap too: the header size is attacker-controlled
+        # and may understate what the stream actually produces.
+        with zf.open(info) as handle:
+            xml_content = handle.read(MAX_DOCX_MEMBER_BYTES + 1)
+        if len(xml_content) > MAX_DOCX_MEMBER_BYTES:
+            raise ValueError("word/document.xml exceeded the decompression cap")
+
+    if _XML_DTD_RE.search(xml_content):
+        raise ValueError("DOCX XML carries a DTD — refusing to parse")
+
+    tree = ET.fromstring(xml_content)
+    texts = [node.text for node in tree.iter(f"{{{_DOCX_NS}}}t") if node.text]
+    return " ".join(texts).strip() or None
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +235,7 @@ Rules:
 ---
 
 CANDIDATE CV:
-{cv_text[:15000]}
+{cv_text[:CV_CHARS_TO_LLM]}
 
 ---
 
