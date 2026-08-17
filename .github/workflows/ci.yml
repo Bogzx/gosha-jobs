@@ -103,6 +103,21 @@ jobs:
           RESTIC_REPOSITORY: ci-placeholder
           RESTIC_PASSWORD: ci-placeholder
 
+      - name: Show what the image actually contains
+        run: |
+          # Diagnostic: if a router module is missing from the image the app
+          # still starts and reports healthy, so prove the files are there.
+          docker run --rm gosha-app:ci sh -c 'ls -1 /app/gosha/api/*.py | xargs -n1 basename | tr "\n" " "; echo'
+          docker run --rm gosha-app:ci python -c "
+          from importlib import import_module
+          for m in ['auth','account','legal','jobs','feed','applications','subscriptions','cv','cover_letters','analytics','admin','debug_login']:
+              try:
+                  import_module('gosha.api.' + m)
+                  print('  ok   ', m)
+              except Exception as e:
+                  print('  FAIL ', m, type(e).__name__, getattr(e, 'name', ''), e)
+          "
+
       - name: Smoke-test the app image
         run: |
           # The image must at least import the app and answer its own
