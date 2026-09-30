@@ -1,7 +1,17 @@
+# Exact versions live in constraints.txt; every install (Dockerfile, CI,
+# scraper smoke) passes `-c constraints.txt`. These ranges say what the code
+# supports, the lock says what actually ships. See constraints.txt header.
+
 # Core
 discord.py>=2.3,<3
-python-jobspy>=1.1
-sqlalchemy>=2.0,<3
+# 1.1.82 is the release verified to accept everything gosha/scraper.py
+# passes (hours_old, country_indeed, linkedin_fetch_description).
+# Without the floor a resolver may legally pick 1.1.13 — it satisfies ">=1.1"
+# and coexists with numpy 2 — and every JobSpy call raises TypeError.
+python-jobspy>=1.1.82,<1.2
+# [asyncio] pulls in greenlet. SQLAlchemy 2.1 stopped installing it by
+# default, so a fresh image could not even import the async engine.
+sqlalchemy[asyncio]>=2.0,<3
 aiosqlite>=0.19
 apscheduler>=3.10,<4
 pandas>=2.0
