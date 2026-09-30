@@ -95,14 +95,35 @@ async def test_with_a_cv_the_cv_decides_between_postings():
     assert names(matches) == {"on_query", "on_cv"}
 
 
-def test_blend_keeps_unit_norm_and_ignores_mismatched_models():
+def test_blend_weighs_search_and_cv_equally_and_ignores_mismatched_models():
     blended = blend_with_user_vector(SUB, CV)
-    assert np.linalg.norm(blended) == pytest.approx(1.0, abs=1e-6)
     assert blended @ SUB == pytest.approx(blended @ CV)
 
     other_model = np.ones(384, dtype=np.float32) / np.sqrt(384)
     np.testing.assert_array_equal(blend_with_user_vector(SUB, other_model), SUB)
     np.testing.assert_array_equal(blend_with_user_vector(SUB, None), SUB)
+
+
+def test_blend_keeps_the_threshold_scale_when_search_and_cv_agree():
+    """A search and a CV in the same field are far from orthogonal (q.u ~
+    0.5 measured under all-mpnet-base-v2). A posting scoring s against
+    each must score s against the blend — not s * sqrt(2 / (1 + q.u)),
+    which is what re-normalising the sum did, passing more jobs rather
+    than better ones."""
+    cv = unit((0, 0.5), (1, np.sqrt(0.75)))  # cos(search, cv) = 0.5
+    assert float(SUB @ cv) == pytest.approx(0.5, abs=1e-6)
+    # A posting at cosine 0.37 to both: below 0.40 on either signal alone.
+    a0 = 0.37
+    a1 = (0.37 - 0.5 * a0) / np.sqrt(0.75)
+    job = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+    job[:3] = (a0, a1, np.sqrt(1 - a0**2 - a1**2))  # already unit length
+    assert float(job @ SUB) == pytest.approx(0.37, abs=1e-3)
+    assert float(job @ cv) == pytest.approx(0.37, abs=1e-3)
+
+    score = float(job @ blend_with_user_vector(SUB, cv))
+
+    assert score == pytest.approx(0.37, abs=1e-3)
+    assert not FakeMatcher().is_match(score)
 
 
 async def _seed(session: AsyncSession, *, with_cv: bool) -> tuple[User, list[Job]]:

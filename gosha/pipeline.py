@@ -372,7 +372,7 @@ def _title_relevant_for_any_keyword(title: str, keywords: list[str]) -> bool:
 def blend_with_user_vector(
     query_emb: np.ndarray, user_vector: np.ndarray | None,
 ) -> np.ndarray:
-    """The subscription query pulled toward the user's CV, re-normalised.
+    """The subscription query pulled toward the user's CV.
 
     Discord delivery used to score jobs against the subscription string
     alone ("Job role: software engineer. Location: Cluj"), so the product's
@@ -381,9 +381,13 @@ def blend_with_user_vector(
     the user asked this search for); the CV decides between postings that
     fit it equally well on paper.
 
-    An equal-weight sum of two unit vectors, re-normalised, keeps scores on
-    the same cosine scale, so the configured threshold still means roughly
-    what it did: a job must now be near the *pair*, not just the words.
+    The midpoint (q + u) / 2, deliberately NOT re-normalised: a job's score
+    is then the mean of its cosine to the search and to the CV, which stays
+    on the scale the configured threshold was tuned for. Re-normalising
+    divides by |q + u| = sqrt(2 + 2 q.u), inflating every score by
+    sqrt(2 / (1 + q.u)); a search and a CV in the same field have
+    q.u ~ 0.5 under all-mpnet-base-v2 (measured), i.e. +15%, which let
+    more jobs through for CV holders instead of better ones.
     Vectors from different models (shape mismatch) are not mixed.
     """
     if user_vector is None:
@@ -397,11 +401,7 @@ def blend_with_user_vector(
             user.shape, query.shape,
         )
         return query
-    blended = query + user
-    norm = float(np.linalg.norm(blended))
-    if norm == 0.0:
-        return query
-    return (blended / norm).astype(np.float32)
+    return ((query + user) / 2).astype(np.float32)
 
 
 async def match_jobs_for_subscription(
