@@ -453,7 +453,9 @@ async def _cv_vector_for(user: User) -> np.ndarray | None:
     Users without a CV keep pure subscription matching: a vector built from
     a handful of thumbs-up alone is too thin to override what they asked for.
     """
-    if not user.cv_embedding:
+    from gosha.embeddings import is_current
+
+    if not user.cv_embedding or not is_current(user.cv_embedding_model):
         return None
     try:
         from gosha.recommend import build_user_signal

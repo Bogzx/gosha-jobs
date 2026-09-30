@@ -161,6 +161,9 @@ class User(Base):
     in_guild: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # float32 bytes of the user's CV embedding (see gosha/embeddings.py)
     cv_embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # Model that produced cv_embedding; NULL = the legacy default
+    # (gosha.matching.LEGACY_MODEL). See gosha/embeddings.py.
+    cv_embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # When the user agreed to CV storage/processing (web checkbox or the
     # bot's consent option). Recorded server-side because consent has to be
     # provable; cleared when the CV is deleted, which is how it is withdrawn.
@@ -218,6 +221,8 @@ class Job(Base):
     )
     # float32 bytes of the job-text embedding (see gosha/embeddings.py)
     embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # Model that produced `embedding`; NULL = the legacy default.
+    embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # Cross-board duplicate group: id of the canonical job (the canonical
     # row points at itself; NULL = not yet grouped / unique)
     dedup_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
