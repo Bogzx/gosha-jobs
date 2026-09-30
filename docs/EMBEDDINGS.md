@@ -29,6 +29,23 @@ because it needs a re-embed and a threshold re-tune.
   batched, one commit per batch, resumable (a rerun skips rows already on
   the target model), with `--dry-run`.
 
+## Why switch — measured
+
+Ten English job phrases and their Romanian translations ("Junior Python
+developer" / "Programator Python junior", "Accountant" / "Contabil", …),
+encoded by each model on 2026-09-30:
+
+| Model | cos(EN, its RO translation) | cos(EN, unrelated RO) | top-1 translation found |
+|---|---|---|---|
+| `all-mpnet-base-v2` (current) | 0.376 | 0.095 | 60% |
+| `paraphrase-multilingual-mpnet-base-v2` | **0.875** | 0.213 | **100%** |
+
+With the current model a Romanian posting that means *exactly* what an
+English saved search asks for scores ~0.38 — below the 0.40 delivery
+threshold. `scripts/reembed.py` with the multilingual model re-embedded 117
+live-scraped eJobs/BestJobs postings on Postgres in ~5 s on CPU (model
+load included); a production corpus of a few thousand takes minutes.
+
 ## Procedure
 
 Recommended target: **`paraphrase-multilingual-mpnet-base-v2`** — 768
