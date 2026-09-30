@@ -35,7 +35,7 @@ The best roles get 200 applicants in the first 48 hours. GOSHA makes sure you're
 | 🔭 **7 job boards, one feed** | Indeed, LinkedIn, Glassdoor (via [JobSpy](https://github.com/speedyapply/JobSpy)) plus native adapters for **eJobs.ro**, **BestJobs.ro**, **Hipo.ro**, and **RemoteOK**. Cross-board duplicates collapse into one card. |
 | 📬 **Discord alerts** | The bot scrapes around the clock and DMs you fresh matches. Saved searches are managed on the web — zero slash-command setup (slash commands still work too). |
 | ✅ **Self-filling tracker** | Click **Apply** and the job is already in your tracker. Move it through applied → screen → interview → offer, with notes. |
-| ✍️ **AI cover letters** | One click per job: your CV + the posting → a tailored letter via DeepSeek (OpenRouter) or Gemini. Cached 30 days. |
+| ✍️ **AI cover letters** | One click per job: your CV + the posting → a tailored letter via DeepSeek (direct or through OpenRouter) or Gemini. Cached 30 days. |
 | 👍 **Feedback learning** | Thumbs up/down tune your personal ranking — more of what you like, less of what you don't. |
 | 🧹 **Fresh by construction** | Daily dead-link checks expire filled positions; real posted-dates from the boards. |
 | 📊 **Built-in analytics** | Privacy-friendly homegrown trackers: DAU, signups, applies — no third-party scripts, no extra cookies. |
@@ -96,7 +96,7 @@ Three processes share one database — the bot (Discord + scheduler), the API (F
 
 ## Self-hosting
 
-Prerequisites: Docker + Compose, a [Discord application](https://discord.com/developers/applications) (bot token + OAuth2 credentials), and optionally a Gemini or OpenRouter API key for cover letters.
+Prerequisites: Docker + Compose, a [Discord application](https://discord.com/developers/applications) (bot token + OAuth2 credentials), and optionally a DeepSeek, OpenRouter or Gemini API key for cover letters.
 
 ```bash
 git clone https://github.com/Bogzx/gosha-jobs.git && cd gosha-jobs
@@ -196,7 +196,7 @@ gosha/
 ├── bot.py         # Discord adapter (slash commands)
 ├── pipeline.py    # scrape → match → deliver cycle
 ├── recommend.py   # CV-similarity feed ranking
-└── llm.py         # OpenRouter / Gemini provider port
+└── llm.py         # DeepSeek / OpenRouter / Gemini provider port
 web/               # React SPA (Vite + Tailwind)
 tests/             # pytest suite (~420 tests)
 ```
@@ -218,4 +218,4 @@ GOSHA holds real CVs. [`PRIVACY.md`](PRIVACY.md) is the operator-facing version 
 ## Credits
 
 Built by [Bogdan Truta](https://bogdantruta.com) for a friend named Gosha — then for everyone.
-Scraping via [JobSpy](https://github.com/speedyapply/JobSpy) · matching via [sentence-transformers](https://www.sbert.net/) · letters via [OpenRouter](https://openrouter.ai/) / [Gemini](https://ai.google.dev/).
+Scraping via [JobSpy](https://github.com/speedyapply/JobSpy) · matching via [sentence-transformers](https://www.sbert.net/) · letters via [DeepSeek](https://api-docs.deepseek.com/) / [OpenRouter](https://openrouter.ai/) / [Gemini](https://ai.google.dev/).
