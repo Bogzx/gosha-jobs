@@ -11,6 +11,74 @@ from httpx import Response
 from gosha import llm
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_llm_env(monkeypatch):
+    # A developer's shell (or the prod .env) must not pick the provider here.
+    for var in ("LLM_PROVIDER", "DEEPSEEK_API_KEY", "DEEPSEEK_MODEL",
+                "OPENROUTER_API_KEY", "OPENROUTER_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_deepseek_used_when_key_set(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
+
+    route = respx.post(DEEPSEEK_URL).mock(
+        return_value=Response(200, json={
+            "choices": [{"message": {"content": "  Letter from DeepSeek. "}}]
+        })
+    )
+
+    assert llm.active_provider() == "deepseek"
+    assert await llm.generate("Write a letter") == "Letter from DeepSeek."
+
+    request = route.calls[0].request
+    assert request.headers["authorization"] == "Bearer ds-key"
+    assert "x-title" not in request.headers
+    body = json.loads(request.content)
+    assert body["model"] == "deepseek-flash"
+    assert body["messages"] == [{"role": "user", "content": "Write a letter"}]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_deepseek_model_is_configurable(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
+    route = respx.post(DEEPSEEK_URL).mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+    )
+
+    await llm.generate("x")
+    assert json.loads(route.calls[0].request.content)["model"] == "deepseek-v4-pro"
+
+
+def test_deepseek_key_beats_openrouter_key(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+    assert llm.active_provider() == "deepseek"
+
+    monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+    assert llm.active_provider() == "openrouter"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_deepseek_error_returns_none(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
+    respx.post(DEEPSEEK_URL).mock(return_value=Response(401, text="bad key"))
+
+    assert await llm.generate("x") is None
+
+
+@pytest.mark.asyncio
+async def test_deepseek_without_key_returns_none(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+    assert await llm.generate("x") is None
 
 
 @pytest.mark.asyncio

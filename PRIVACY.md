@@ -37,8 +37,10 @@ tracking, and no third-party JavaScript (`script-src 'self'` in the
 Discord id and the content of job alerts DMed to them.
 <https://discord.com/privacy>
 
-**The configured LLM provider** — OpenRouter (US) or Google Gemini,
-selected by `LLM_PROVIDER` / `OPENROUTER_API_KEY` (`gosha/llm.py`).
+**The configured LLM provider** — DeepSeek (China), OpenRouter (US) or
+Google Gemini, selected by `LLM_PROVIDER` / `DEEPSEEK_API_KEY` /
+`OPENROUTER_API_KEY` (`gosha/llm.py`). The `/privacy` page names the one
+the deployment actually uses.
 
 > When a user presses **Cover letter**, up to **15,000 characters of their
 > CV** (`CV_CHARS_TO_LLM` in `gosha/cover_letter.py`) are sent to that

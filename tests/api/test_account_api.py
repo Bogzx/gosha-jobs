@@ -182,3 +182,13 @@ async def test_privacy_notice_follows_the_configured_provider(client, monkeypatc
     assert any(
         "Gemini" in p["name"] for p in body["third_party_processors"]
     )
+
+
+@pytest.mark.asyncio
+async def test_privacy_notice_names_deepseek_when_it_is_the_provider(client, monkeypatch):
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
+    body = (await client.get("/api/v1/legal/privacy")).json()
+    deepseek = [p for p in body["third_party_processors"] if p["name"] == "DeepSeek API"]
+    assert deepseek, body["third_party_processors"]
+    assert "China" in deepseek[0]["operator"]
