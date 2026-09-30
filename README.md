@@ -85,14 +85,14 @@ flowchart LR
 
 Three processes share one database — the bot (Discord + scheduler), the API (FastAPI for the SPA), and Caddy (static SPA + TLS). The web app never talks to the bot directly: the database, including an `outbox` table for DM requests, is the only contract. Full layering details in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-**The matching engine:** jobs and CVs are embedded with `all-mpnet-base-v2` (sentence-transformers). Your feed is a cosine ranking of recent jobs against your CV vector, nudged by your 👍/👎 history. At this scale numpy brute force beats a vector database — embeddings live as `float32` bytes in regular columns.
+**The matching engine:** jobs and CVs are embedded with `all-mpnet-base-v2` (sentence-transformers). Your feed is a cosine ranking of recent jobs against your CV vector, nudged by your 👍/👎 history. At this scale numpy brute force beats a vector database — embeddings live as `float32` bytes in regular columns. Discord DMs use the same CV vector: each saved search's query is blended with it, so the search decides what is relevant and your CV decides between postings that fit it equally well (users without a CV are matched on the search alone).
 
 ## Tech stack
 
 **Backend** · Python 3.11, FastAPI, SQLAlchemy 2 (async), discord.py, APScheduler, sentence-transformers, httpx
 **Frontend** · React 18, TypeScript, Vite, Tailwind CSS v4, TanStack Query, Recharts
 **Infra** · PostgreSQL 16, Caddy, Docker Compose, GitHub Actions (CI + auto-deploy on push to `main`)
-**Tests** · ~300 backend (pytest) + frontend (vitest), scraper adapters tested on live-recorded fixtures
+**Tests** · ~420 backend (pytest) + frontend (vitest), scraper adapters tested on live-recorded fixtures, plus a daily live smoke of the boards (`.github/workflows/scraper-smoke.yml`; Glassdoor excluded)
 
 ## Self-hosting
 
@@ -147,10 +147,11 @@ Users, searches, delivery history, applications, and cover letters all carry ove
 
 ```bash
 python -m venv .venv && .venv/Scripts/activate   # or bin/activate
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.txt -c constraints.txt   # pinned versions
 pytest                                            # backend tests
 
 python scripts/seed_dev.py                        # demo data + dev user
+export DATABASE_URL=sqlite+aiosqlite:///data/dev.db  # the DB seed_dev.py wrote
 
 # SESSION_SECRET must be >= 32 chars — it signs session cookies, whose
 # payload is just {"uid": N} over a small id space, and admin is an id
@@ -194,7 +195,7 @@ gosha/
 ├── recommend.py   # CV-similarity feed ranking
 └── llm.py         # OpenRouter / Gemini provider port
 web/               # React SPA (Vite + Tailwind)
-tests/             # pytest suite (~300 tests)
+tests/             # pytest suite (~420 tests)
 ```
 
 ## License

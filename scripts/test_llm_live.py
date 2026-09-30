@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
+# Runnable as `python scripts/<name>.py` from anywhere: that puts scripts/
+# on sys.path, not the repo root, so `import gosha` would fail.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gosha import llm  # noqa: E402
 
