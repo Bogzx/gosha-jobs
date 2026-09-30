@@ -1,4 +1,5 @@
-"""Wrapper around JobSpy that routes requests through SOCKS5 tunnels.
+"""Wrapper around JobSpy that routes requests through SOCKS5 tunnels (and,
+with SCRAPE_DIRECT=true, the server's own connection).
 
 This module only handles raw scraping — no filtering, no DB writes.
 """
@@ -7,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 from functools import partial
 from typing import TYPE_CHECKING
@@ -104,6 +106,11 @@ def jobspy_kwargs(
     return kwargs
 
 
+def scrape_direct_enabled() -> bool:
+    """SCRAPE_DIRECT=true lets JobSpy also use the server's own IP."""
+    return os.getenv("SCRAPE_DIRECT", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 async def _scrape_single(
     tunnel_manager: SSHTunnelManager,
     search_term: str,
@@ -115,9 +122,17 @@ async def _scrape_single(
 
     Indeed/LinkedIn get the full location; Glassdoor gets city-only.
     """
-    proxies = tunnel_manager.active_proxies()
+    # Each route is a SOCKS5 tunnel URL, or None for the server's own
+    # connection when SCRAPE_DIRECT is on. Shuffling spreads searches across
+    # the available IPs; later routes are the fallback when one is blocked.
+    proxies: list[str | None] = list(tunnel_manager.active_proxies())
+    if scrape_direct_enabled():
+        proxies.append(None)
     if not proxies:
-        log.warning("No active proxies — skipping '%s' in '%s'", search_term, location)
+        log.warning(
+            "No active proxies and SCRAPE_DIRECT is off — skipping '%s' in '%s'",
+            search_term, location,
+        )
         return pd.DataFrame()
 
     random.shuffle(proxies)
@@ -132,7 +147,7 @@ async def _scrape_single(
         try:
             log.info(
                 "Searching '%s' in '%s' (max_age=%dd) via %s",
-                search_term, location, max_age_days, proxy,
+                search_term, location, max_age_days, proxy or "direct (server IP)",
             )
             loop = asyncio.get_running_loop()
             frames: list[pd.DataFrame] = []
@@ -176,7 +191,7 @@ async def _scrape_single(
             return df
 
         except Exception as exc:
-            log.error("Proxy %s failed for '%s': %s", proxy, search_term, exc)
+            log.error("Route %s failed for '%s': %s", proxy or "direct", search_term, exc)
             last_error = exc
 
     log.error(
