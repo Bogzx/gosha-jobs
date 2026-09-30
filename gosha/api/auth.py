@@ -10,17 +10,28 @@ from __future__ import annotations
 import logging
 import os
 import secrets
-import time
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
-from gosha.api.deps import ApiError, clear_session_cookie, set_session_cookie
+from gosha import ratelimit
+from gosha.api.deps import (
+    ApiError,
+    clear_session_cookie,
+    client_ip,
+    enforce_rate_limit,
+    set_session_cookie,
+)
 from gosha.api.schemas import OkOut
 from gosha.config import load_web_settings
+from gosha.database import get_session
+from gosha.models import OAuthConsumedState, OAuthHandoff
 
 log = logging.getLogger(__name__)
 
@@ -50,31 +61,41 @@ def _verify_state(state: str) -> bool:
         return False
 
 
-# States are single-use: once a callback consumes one, replays fail.
-# In-memory is fine — one API process, and states expire in 10 minutes.
-_consumed_states: dict[str, float] = {}
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-def _consume_state(state: str) -> bool:
+# States are single-use: once a callback consumes one, replays fail. The
+# record lives in the database (oauth_consumed_states), not process memory,
+# so a replay is caught whichever API worker serves it. Rows outlive the
+# state's own signature TTL by nothing — past STATE_MAX_AGE the signature
+# check rejects the state anyway — and are purged on the next consume.
+async def _consume_state(state: str) -> bool:
     """Mark a state used; False when it was already consumed."""
-    now = time.monotonic()
-    for key, expiry in list(_consumed_states.items()):
-        if expiry < now:
-            del _consumed_states[key]
-    if state in _consumed_states:
-        return False
-    _consumed_states[state] = now + STATE_MAX_AGE
+    now = _now()
+    async with get_session() as session:
+        await session.execute(
+            delete(OAuthConsumedState).where(OAuthConsumedState.expires_at < now)
+        )
+        session.add(OAuthConsumedState(
+            state=state[:255], expires_at=now + timedelta(seconds=STATE_MAX_AGE),
+        ))
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            return False
     return True
 
 
-def _state_is_valid(state: str) -> bool:
+async def _state_is_valid(state: str) -> bool:
     """Signature + TTL + single-use.
 
     This proves the state was minted by *us* and has not been replayed. It
     does NOT prove it was minted by the browser presenting it — that is what
     `_state_bound_to_browser` is for.
     """
-    return bool(state) and _verify_state(state) and _consume_state(state)
+    return bool(state) and _verify_state(state) and await _consume_state(state)
 
 
 def _state_bound_to_browser(state: str, cookie_value: str) -> bool:
@@ -110,30 +131,48 @@ def _state_bound_to_browser(state: str, cookie_value: str) -> bool:
 
 HANDOFF_MAX_AGE = 300  # seconds the originating browser has to collect
 
-# state -> (user_id, is_new, expires_at)
-_pending_handoffs: dict[str, tuple[int, bool, float]] = {}
+
+# Parked in the database (oauth_handoffs): the callback and the poll that
+# collects it are separate requests and may hit different API workers.
+async def _park_handoff(state: str, user_id: int, is_new: bool) -> None:
+    now = _now()
+    async with get_session() as session:
+        await session.execute(
+            delete(OAuthHandoff).where(
+                (OAuthHandoff.expires_at < now) | (OAuthHandoff.state == state[:255])
+            )
+        )
+        session.add(OAuthHandoff(
+            state=state[:255], user_id=user_id, is_new=is_new,
+            expires_at=now + timedelta(seconds=HANDOFF_MAX_AGE),
+        ))
+        await session.commit()
 
 
-def _park_handoff(state: str, user_id: int, is_new: bool) -> None:
-    now = time.monotonic()
-    for key, (_uid, _new, expiry) in list(_pending_handoffs.items()):
-        if expiry < now:
-            del _pending_handoffs[key]
-    _pending_handoffs[state] = (user_id, is_new, now + HANDOFF_MAX_AGE)
+async def _claim_handoff(cookie_value: str) -> tuple[int, bool] | None:
+    """Pop a completed sign-in for any state this browser minted.
 
-
-def _claim_handoff(cookie_value: str) -> tuple[int, bool] | None:
-    """Pop a completed sign-in for any state this browser minted."""
-    now = time.monotonic()
-    for state in [s for s in (cookie_value or "").split("|") if s]:
-        entry = _pending_handoffs.get(state)
-        if entry is None:
-            continue
-        user_id, is_new, expiry = entry
-        del _pending_handoffs[state]
-        if expiry < now:
-            continue
-        return user_id, is_new
+    Claim = a DELETE that must remove exactly one row, so two concurrent
+    polls for the same handoff cannot both get a session.
+    """
+    now = _now()
+    states = [s[:255] for s in (cookie_value or "").split("|") if s]
+    if not states:
+        return None
+    async with get_session() as session:
+        rows = (await session.execute(
+            select(OAuthHandoff).where(OAuthHandoff.state.in_(states))
+        )).scalars().all()
+        for row in rows:
+            claimed = await session.execute(
+                delete(OAuthHandoff).where(OAuthHandoff.state == row.state)
+            )
+            await session.commit()
+            expires = row.expires_at
+            if expires.tzinfo is None:  # SQLite returns naive UTC
+                expires = expires.replace(tzinfo=timezone.utc)
+            if claimed.rowcount == 1 and expires >= now:
+                return row.user_id, row.is_new
     return None
 
 
@@ -144,6 +183,7 @@ APP_AUTHORIZE_URL = "discord://-/oauth2/authorize"
 
 @router.get("/discord/login")
 async def discord_login(request: Request, format: str = ""):
+    await enforce_rate_limit(ratelimit.AUTH, client_ip(request))
     settings = load_web_settings()
     state = make_state()
     params = urlencode({
@@ -183,10 +223,11 @@ async def discord_login(request: Request, format: str = ""):
 
 @router.get("/discord/callback")
 async def discord_callback(request: Request, code: str = "", state: str = "") -> RedirectResponse:
+    await enforce_rate_limit(ratelimit.AUTH, client_ip(request))
     settings = load_web_settings()
 
     cookie_state = request.cookies.get(OAUTH_STATE_COOKIE, "")
-    if not _state_is_valid(state):
+    if not await _state_is_valid(state):
         raise ApiError(400, "invalid_state", "OAuth state check failed — try signing in again.")
     same_browser = _state_bound_to_browser(state, cookie_state)
     if not code:
@@ -245,7 +286,7 @@ async def discord_callback(request: Request, code: str = "", state: str = "") ->
     if not same_browser:
         # Different browser than the one that started the flow (desktop app
         # deep link). Park the result; the originating browser collects it.
-        _park_handoff(state, user_id, is_new)
+        await _park_handoff(state, user_id, is_new)
         return RedirectResponse("/signed-in", status_code=307)
 
     response = RedirectResponse("/welcome" if is_new else "/", status_code=307)
@@ -262,8 +303,9 @@ async def discord_handoff(request: Request) -> JSONResponse:
     claim it, so this is the CSRF binding — moved from the callback (which
     an attacker can drive) to a request the victim's browser makes itself.
     """
+    await enforce_rate_limit(ratelimit.AUTH_HANDOFF, client_ip(request))
     cookie_state = request.cookies.get(OAUTH_STATE_COOKIE, "")
-    claimed = _claim_handoff(cookie_state)
+    claimed = await _claim_handoff(cookie_state)
     if claimed is None:
         return JSONResponse({"signed_in": False})
 

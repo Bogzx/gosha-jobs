@@ -375,3 +375,54 @@ async def test_logout_clears_cookie(client, web_user):
     assert resp.json() == {"ok": True}
     set_cookie = " ".join(resp.headers.get_list("set-cookie"))
     assert "gosha_session=" in set_cookie  # deletion sets empty value
+
+
+# ── shared state + rate limits ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_consumed_state_and_handoff_live_in_the_database(client, session):
+    """Survives --workers N: nothing about a sign-in is in process memory."""
+    from sqlalchemy import select
+
+    from gosha.api import auth
+    from gosha.models import OAuthConsumedState, OAuthHandoff
+
+    state = auth.make_state()
+    assert await auth._state_is_valid(state)
+    assert not await auth._state_is_valid(state)  # replay
+    assert (await session.execute(select(OAuthConsumedState))).scalars().one().state == state
+
+    await auth._park_handoff(state, user_id=42, is_new=True)
+    assert (await session.execute(select(OAuthHandoff))).scalars().one().user_id == 42
+    assert await auth._claim_handoff(f"other|{state}") == (42, True)
+    assert await auth._claim_handoff(state) is None  # single use
+
+
+@pytest.mark.asyncio
+async def test_expired_handoff_cannot_be_claimed(client, monkeypatch):
+    from datetime import timedelta
+
+    from gosha.api import auth
+
+    state = auth.make_state()
+    await auth._park_handoff(state, user_id=7, is_new=False)
+    later = auth._now() + timedelta(seconds=auth.HANDOFF_MAX_AGE + 1)
+    monkeypatch.setattr(auth, "_now", lambda: later)
+    assert await auth._claim_handoff(state) is None
+
+
+@pytest.mark.asyncio
+async def test_login_is_rate_limited_per_ip(client, monkeypatch):
+    from gosha import ratelimit
+
+    monkeypatch.setattr(ratelimit, "AUTH", ratelimit.Limit("auth", 2, 60))
+    codes = [
+        (await client.get("/api/v1/auth/discord/login", follow_redirects=False)).status_code
+        for _ in range(3)
+    ]
+    assert codes[:2] == [307, 307]
+    assert codes[2] == 429
+    resp = await client.get("/api/v1/auth/discord/login", follow_redirects=False)
+    assert resp.json()["error"]["code"] == "rate_limited"
+    assert int(resp.headers["retry-after"]) >= 1

@@ -244,3 +244,13 @@ async def test_cv_round_trip_is_encrypted_at_rest(client, web_user, cv_dir, monk
 
     assert (await client.delete("/api/v1/cv", cookies=cookies)).status_code == 200
     assert not stored.exists()
+
+
+@pytest.mark.asyncio
+async def test_cv_upload_is_rate_limited_per_user(client, web_user, monkeypatch):
+    from gosha import ratelimit
+
+    monkeypatch.setattr(ratelimit, "CV_UPLOAD", ratelimit.Limit("cv-upload", 2, 3600))
+    _user, cookies = web_user
+    codes = [(await _upload(client, cookies)).status_code for _ in range(3)]
+    assert codes == [200, 200, 429]
