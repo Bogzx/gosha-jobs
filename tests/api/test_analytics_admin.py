@@ -37,8 +37,6 @@ async def test_pageview_anonymous_and_signed_in(client, web_user, session):
 async def test_pageview_rate_limited_per_client(client, session, monkeypatch):
     import gosha.api.analytics as analytics
 
-    monkeypatch.setattr(analytics, "_buckets", {})
-
     for _ in range(analytics.RATE_LIMIT_PER_MINUTE + 10):
         resp = await client.post("/api/v1/events/pageview", json={"path": "/spam"})
         assert resp.status_code == 200  # never breaks the SPA
@@ -47,18 +45,6 @@ async def test_pageview_rate_limited_per_client(client, session, monkeypatch):
         await session.execute(select(Event).where(Event.event_type == "web.pageview"))
     ).scalars().all()
     assert len(events) == analytics.RATE_LIMIT_PER_MINUTE  # excess dropped
-
-
-def test_rate_limit_window_resets():
-    import gosha.api.analytics as analytics
-
-    analytics._buckets.clear()
-    for _ in range(analytics.RATE_LIMIT_PER_MINUTE):
-        assert analytics._allow("1.2.3.4", now=1000.0)
-    assert not analytics._allow("1.2.3.4", now=1030.0)   # same window: blocked
-    assert analytics._allow("5.6.7.8", now=1030.0)       # other client: fine
-    assert analytics._allow("1.2.3.4", now=1061.0)       # window reset
-    analytics._buckets.clear()
 
 
 @pytest.mark.asyncio

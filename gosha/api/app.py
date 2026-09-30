@@ -87,7 +87,9 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(ApiError)
     async def _api_error_handler(request: Request, exc: ApiError):
-        return _error_response(exc.status_code, exc.code, exc.message)
+        response = _error_response(exc.status_code, exc.code, exc.message)
+        response.headers.update(exc.headers)
+        return response
 
     @app.exception_handler(DomainError)
     async def _domain_error_handler(request: Request, exc: DomainError):

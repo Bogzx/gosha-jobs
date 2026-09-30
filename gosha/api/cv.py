@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Form, UploadFile
 
-from gosha.api.deps import current_user
+from gosha import ratelimit
+from gosha.api.deps import current_user, enforce_rate_limit
 from gosha.api.schemas import OkOut
 from gosha.domain.errors import FileTooLargeError
 from gosha.models import User
@@ -50,6 +51,8 @@ async def upload_cv(
     consent: bool = Form(False),
     user: User = Depends(current_user),
 ) -> dict:
+    # Each upload parses a file and runs the embedding model: per-user cap.
+    await enforce_rate_limit(ratelimit.CV_UPLOAD, f"user:{user.id}")
     content = await read_capped(file, service.MAX_CV_BYTES)
     return await service.upload_cv(
         user.id, file.filename or "cv", content, consent=consent,

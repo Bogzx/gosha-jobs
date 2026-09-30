@@ -497,3 +497,48 @@ class CoverLetter(Base):
 
     def __repr__(self) -> str:
         return f"<CoverLetter user={self.user_id} job={self.job_id}>"
+
+
+# ---------------------------------------------------------------------------
+# Web auth + rate limiting state
+#
+# Shared through the database rather than process memory so the API is
+# correct with any number of uvicorn workers (or replicas): an OAuth
+# callback, the handoff poll and a rate-limited request can each land on a
+# different process. Every row expires; expired rows are purged lazily.
+# ---------------------------------------------------------------------------
+
+class OAuthConsumedState(Base):
+    """An OAuth `state` that has been used once (replay protection)."""
+
+    __tablename__ = "oauth_consumed_states"
+
+    state: Mapped[str] = mapped_column(String(255), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
+class OAuthHandoff(Base):
+    """A sign-in finished in another browser, waiting for its originator."""
+
+    __tablename__ = "oauth_handoffs"
+
+    state: Mapped[str] = mapped_column(String(255), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_new: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
+class RateLimitHit(Base):
+    """Request count for one client in one fixed window (gosha/ratelimit.py)."""
+
+    __tablename__ = "rate_limit_hits"
+
+    bucket: Mapped[str] = mapped_column(String(255), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
