@@ -58,7 +58,12 @@ on request content.
 
 ## Retention
 
-- **CV text and embedding** — until the user deletes the CV or the account.
+- **CV text and embedding** — until the user deletes the CV or the account,
+  or until they have been inactive for `CV_RETENTION_MONTHS` (default 12):
+  a daily job then deletes the CV, its embedding and the cover letters
+  generated from it (`gosha/services/retention.py`). Deliveries do not
+  count as activity; signing in, uploading, feedback, tracking and
+  searches do.
 - **Cover letters** — until the account is deleted. Deleting a CV now also
   deletes every letter generated from it (`gosha/services/cv.py`); it
   previously left them behind indefinitely.
@@ -86,9 +91,11 @@ both.
 These are real and currently unfixed. A privacy notice that omits them is
 worse than none.
 
-1. **CVs are stored unencrypted** as plain text under `data/cvs/`, on a
-   volume mounted read-write into both the `api` and `bot` containers.
-   Encryption at rest is not implemented.
+1. **CV encryption protects the disk, not a compromised container.** CVs
+   are Fernet-encrypted under `data/cvs/` with `CV_ENCRYPTION_KEY`, which
+   both the `api` and `bot` containers hold in their environment. A stolen
+   disk or backup is unreadable without the key; an attacker inside either
+   container can still read CVs.
 2. **No backups exist yet.** See [`docs/BACKUPS.md`](docs/BACKUPS.md). The
    backup service is written but unverified. Until a restore has been
    tested, a disk failure loses everyone's data — which is a privacy

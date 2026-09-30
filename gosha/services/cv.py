@@ -22,7 +22,7 @@ ALLOWED_EXTENSIONS = (".pdf", ".docx", ".txt", ".md")
 # What the user agrees to. The web checkbox (web/src/components/
 # CvDropzone.tsx) and the bot's /upload_cv say the same thing.
 CONSENT_TEXT = (
-    "GOSHA may store my CV as plain text and use it to rank job postings "
+    "GOSHA may store my CV (encrypted) and use it to rank job postings "
     "for me. If I ask for a cover letter, part of my CV is sent to a "
     "third-party AI provider. I can delete it at any time."
 )

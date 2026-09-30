@@ -150,6 +150,9 @@ python -m venv .venv && .venv/Scripts/activate   # or bin/activate
 pip install -r requirements-dev.txt -c constraints.txt   # pinned versions
 pytest                                            # backend tests
 
+export GOSHA_ENV=development   # plaintext CVs allowed locally; production
+                               # requires CV_ENCRYPTION_KEY (.env.example)
+
 python scripts/seed_dev.py                        # demo data + dev user
 export DATABASE_URL=sqlite+aiosqlite:///data/dev.db  # the DB seed_dev.py wrote
 

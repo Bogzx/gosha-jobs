@@ -55,9 +55,11 @@ def create_app() -> FastAPI:
     import os
     from contextlib import asynccontextmanager
 
+    from gosha import cv_crypto
     from gosha.config import load_web_settings
 
     load_web_settings()  # fail fast when required env vars are missing
+    cv_crypto.require_key_configured()  # no plaintext CVs outside dev
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -69,6 +71,10 @@ def create_app() -> FastAPI:
             url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///data/jobs.db")
             await db.init_db(url)
             log.info("API database initialised")
+
+        from gosha.cover_letter import encrypt_plaintext_cvs
+
+        encrypt_plaintext_cvs()
         yield
 
     app = FastAPI(

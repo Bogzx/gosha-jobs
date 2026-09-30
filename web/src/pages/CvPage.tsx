@@ -30,8 +30,8 @@ export default function CvPage() {
         </h1>
         <p className="mb-5 text-sm text-ink-soft">
           One upload powers everything: match scores in your feed and AI cover
-          letters per job. Stored as plain text on our server (not encrypted
-          at rest). Deleting it here removes the file, the match vector and
+          letters per job. Stored encrypted on our server, and deleted
+          automatically after 12 months of inactivity. Deleting it here removes the file, the match vector and
           every cover letter generated from it — your saved searches,
           applications and delivery history stay. To remove those too, use{' '}
           <Link to="/profile" className="text-moss underline underline-offset-2">

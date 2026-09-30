@@ -221,3 +221,26 @@ async def test_deleting_the_cv_withdraws_consent(client, web_user, session):
     resp = await _upload(client, cookies, consent=None)
     assert resp.status_code == 422
     assert resp.json()["error"]["code"] == "consent_required"
+
+
+@pytest.mark.asyncio
+async def test_cv_round_trip_is_encrypted_at_rest(client, web_user, cv_dir, monkeypatch):
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("CV_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    user, cookies = web_user
+
+    assert (await _upload(client, cookies)).status_code == 200
+
+    stored = cv_dir / f"{user.id}.enc"
+    assert stored.exists() and not (cv_dir / f"{user.id}.txt").exists()
+    assert b"React" not in stored.read_bytes()
+    body = (await client.get("/api/v1/cv", cookies=cookies)).json()
+    assert "Python and React" in body["text"]
+    assert body["uploaded_at"]
+
+    export = (await client.get("/api/v1/account/export", cookies=cookies)).json()
+    assert "Python and React" in export["cv_text"]
+
+    assert (await client.delete("/api/v1/cv", cookies=cookies)).status_code == 200
+    assert not stored.exists()
