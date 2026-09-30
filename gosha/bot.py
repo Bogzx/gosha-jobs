@@ -13,7 +13,7 @@ from discord.ext import commands
 from sqlalchemy import func, select
 
 from gosha.database import get_session
-from gosha.models import Subscription, User
+from gosha.models import Subscription, User, get_tier_limits, plan_lines
 
 if TYPE_CHECKING:
     from gosha.config import Settings
@@ -910,48 +910,34 @@ class SubscriptionCog(commands.Cog):
                 )).scalar_one_or_none()
 
             tier = user.tier if user else "free"
-            limits = user.limits if user else User().limits
+            limits = get_tier_limits(tier)
+
+            def bullets(lines: list[str]) -> str:
+                return "\n".join(f"- {line}" for line in lines)
 
             if tier == "free":
                 embed = discord.Embed(
                     title="GOSHA Free vs Pro",
-                    description="You're on the **Free** plan.",
+                    description=(
+                        "You're on the **Free** plan. Matching, sources and "
+                        "delivery are the same on every plan; Pro raises the "
+                        "limits below."
+                    ),
                     color=discord.Color.gold(),
                 )
                 embed.add_field(
-                    name="Free (current)",
-                    value=(
-                        f"- {limits['max_subscriptions']} subscriptions\n"
-                        f"- {limits['max_applications']} tracked applications\n"
-                        f"- Basic keyword matching\n"
-                        f"- Indeed + LinkedIn + Glassdoor"
-                    ),
+                    name="Free (current)", value=bullets(plan_lines(limits)),
                     inline=True,
                 )
                 embed.add_field(
-                    name="Pro",
-                    value=(
-                        "- **15** subscriptions\n"
-                        "- **Unlimited** application tracking\n"
-                        "- **AI semantic matching** (smarter results)\n"
-                        "- **Priority delivery** (get jobs first)\n"
-                        "- **Email digests**\n"
-                        "- **2 min** scrape cooldown"
-                    ),
+                    name="Pro", value=bullets(plan_lines(get_tier_limits("pro"))),
                     inline=True,
                 )
                 embed.set_footer(text="Contact the bot admin to upgrade.")
             else:
                 embed = discord.Embed(
                     title=f"Your Plan: {tier.capitalize()}",
-                    description=(
-                        f"**Subscriptions:** {limits['max_subscriptions']}\n"
-                        f"**Applications:** {'Unlimited' if int(limits['max_applications']) > 100 else limits['max_applications']}\n"
-                        f"**Semantic matching:** {'Yes' if limits['semantic_matching'] else 'No'}\n"
-                        f"**Priority delivery:** {'Yes' if limits['priority_delivery'] else 'No'}\n"
-                        f"**Email delivery:** {'Yes' if limits['email_delivery'] else 'No'}\n"
-                        f"**Scrape cooldown:** {int(limits['scrape_now_cooldown']) // 60} min"
-                    ),
+                    description=bullets(plan_lines(limits)),
                     color=discord.Color.green(),
                 )
 
