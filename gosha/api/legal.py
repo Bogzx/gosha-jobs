@@ -19,6 +19,15 @@ router = APIRouter(prefix="/legal", tags=["legal"])
 # egress is added: gosha/cover_letter.py truncates the CV to CV_CHARS_TO_LLM
 # characters and posts it to whichever provider gosha/llm.py selects.
 _PROVIDER_DETAILS = {
+    "deepseek": {
+        "name": "DeepSeek API",
+        "operator": "Hangzhou DeepSeek Artificial Intelligence Co., Ltd. (China)",
+        "url": "https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html",
+        "note": (
+            "Requests are sent to DeepSeek's chat completions endpoint "
+            "(model set by DEEPSEEK_MODEL) and processed in China."
+        ),
+    },
     "openrouter": {
         "name": "OpenRouter",
         "operator": "OpenRouter, Inc. (United States)",

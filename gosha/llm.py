@@ -1,8 +1,9 @@
 """LLM provider port: one `generate()` entry point, pluggable providers.
 
 Providers are adapters around external APIs. Selection:
-  LLM_PROVIDER=gemini|openrouter forces one; otherwise OpenRouter is used
-  whenever OPENROUTER_API_KEY is set, falling back to Gemini.
+  LLM_PROVIDER=deepseek|openrouter|gemini forces one; otherwise the first
+  provider with a key wins: DEEPSEEK_API_KEY, then OPENROUTER_API_KEY, then
+  Gemini.
 """
 
 from __future__ import annotations
@@ -17,6 +18,11 @@ log = logging.getLogger(__name__)
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_OPENROUTER_MODEL = "deepseek/deepseek-v4-flash"
 
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-flash"
+
+PROVIDERS = ("deepseek", "openrouter", "gemini")
+
 GEMINI_MODELS = [
     "gemini-3-flash-preview",
     "gemini-3.1-flash-lite-preview",
@@ -30,16 +36,36 @@ GEMINI_MODELS = [
 
 def active_provider() -> str:
     provider = os.getenv("LLM_PROVIDER", "").lower().strip()
-    if provider in ("gemini", "openrouter"):
+    if provider in PROVIDERS:
         return provider
+    if os.getenv("DEEPSEEK_API_KEY"):
+        return "deepseek"
     return "openrouter" if os.getenv("OPENROUTER_API_KEY") else "gemini"
 
 
 async def generate(prompt: str) -> str | None:
     """Generate text with the configured provider; None on failure."""
-    if active_provider() == "openrouter":
+    provider = active_provider()
+    if provider == "deepseek":
+        return await generate_deepseek(prompt)
+    if provider == "openrouter":
         return await generate_openrouter(prompt)
     return await generate_gemini(prompt)
+
+
+async def generate_deepseek(prompt: str) -> str | None:
+    """DeepSeek's own OpenAI-compatible chat completions API."""
+    api_key = os.getenv("DEEPSEEK_API_KEY", "")
+    if not api_key:
+        log.error("DEEPSEEK_API_KEY not set — DeepSeek unavailable")
+        return None
+    return await _chat_completion(
+        "DeepSeek",
+        DEEPSEEK_URL,
+        api_key,
+        os.getenv("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL),
+        prompt,
+    )
 
 
 async def generate_openrouter(prompt: str) -> str | None:
@@ -48,8 +74,25 @@ async def generate_openrouter(prompt: str) -> str | None:
     if not api_key:
         log.error("OPENROUTER_API_KEY not set — OpenRouter unavailable")
         return None
-    model = os.getenv("OPENROUTER_MODEL", DEFAULT_OPENROUTER_MODEL)
+    return await _chat_completion(
+        "OpenRouter",
+        OPENROUTER_URL,
+        api_key,
+        os.getenv("OPENROUTER_MODEL", DEFAULT_OPENROUTER_MODEL),
+        prompt,
+        extra_headers={"X-Title": "GOSHA Jobs"},
+    )
 
+
+async def _chat_completion(
+    name: str,
+    url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    extra_headers: dict[str, str] | None = None,
+) -> str | None:
+    """POST one user message to an OpenAI-compatible endpoint; None on failure."""
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -59,21 +102,18 @@ async def generate_openrouter(prompt: str) -> str | None:
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
-                OPENROUTER_URL,
+                url,
                 json=payload,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "X-Title": "GOSHA Jobs",
-                },
+                headers={"Authorization": f"Bearer {api_key}", **(extra_headers or {})},
             )
         if resp.status_code != 200:
-            log.error("OpenRouter error %d: %s", resp.status_code, resp.text[:300])
+            log.error("%s error %d: %s", name, resp.status_code, resp.text[:300])
             return None
         choices = resp.json().get("choices") or []
         content = (choices[0].get("message") or {}).get("content") if choices else None
         return content.strip() if content else None
     except httpx.HTTPError as exc:
-        log.error("OpenRouter request failed: %s", exc)
+        log.error("%s request failed: %s", name, exc)
         return None
 
 
