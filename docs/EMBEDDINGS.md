@@ -73,8 +73,9 @@ choose it.
 ## Descriptions
 
 A vector is only as good as its text. eJobs, BestJobs and Hipo list pages
-carry no description, so their adapters fetch detail pages for the jobs
-that survive filtering (capped per query, concurrency-limited, cached; see
-`gosha/scrapers/`). Jobs scraped before that change keep their title-only
-vectors until they are re-embedded — `scripts/reembed.py` does not refetch
-descriptions; the adapters fill them in when the posting is next scraped.
+carry no description, so their adapters fetch detail pages for the jobs a
+search returns (capped per search, 3 concurrent requests, cached for 24 h
+per URL; `gosha/scrapers/details.py`). Jobs first stored title-only get
+their description the next time they are scraped; `upsert_jobs` then drops
+the old title-only vector and the embed step re-encodes the posting.
+`scripts/reembed.py` does not refetch descriptions.

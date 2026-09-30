@@ -119,6 +119,17 @@ async def upsert_jobs(df: pd.DataFrame) -> list[Job]:
             if existing:
                 existing.last_seen_at = now
                 existing.is_active = True
+                # The vector embeds title, company and description; when
+                # any of them changes (typically a description arriving
+                # from a detail page for a job first seen title-only),
+                # drop it so the embed step re-encodes the posting.
+                if (
+                    (title != "Unknown Title" and title != existing.title)
+                    or (company != "Unknown" and company != existing.company)
+                    or (description and description != existing.description)
+                ):
+                    existing.embedding = None
+                    existing.embedding_model = None
                 if title != "Unknown Title":
                     existing.title = title
                 if company != "Unknown":
