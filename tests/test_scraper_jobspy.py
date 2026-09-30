@@ -98,3 +98,60 @@ async def test_scrape_single_routes_through_proxy_with_country(monkeypatch):
     assert gd["location"] == "Cluj-Napoca"
     assert gd["proxies"] == "socks5://127.0.0.1:1080"
     assert "country_indeed" not in gd
+
+
+class _NoTunnels:
+    def active_proxies(self) -> list[str]:
+        return []
+
+
+async def test_no_tunnels_and_no_direct_skips_the_search(monkeypatch):
+    monkeypatch.delenv("SCRAPE_DIRECT", raising=False)
+    monkeypatch.setattr(
+        scraper, "scrape_jobs", lambda **_: pytest.fail("must not scrape")
+    )
+    df = await scraper._scrape_single(
+        _NoTunnels(), "python", "Cluj-Napoca, Romania", 7, ["indeed"],
+    )
+    assert df.empty
+
+
+async def test_direct_scrape_uses_the_server_ip_when_no_tunnel_is_up(monkeypatch):
+    monkeypatch.setenv("SCRAPE_DIRECT", "true")
+    calls: list[dict] = []
+
+    def fake_scrape_jobs(**kwargs):
+        calls.append(kwargs)
+        return pd.DataFrame([{"job_url": "https://x/1"}])
+
+    monkeypatch.setattr(scraper, "scrape_jobs", fake_scrape_jobs)
+    df = await scraper._scrape_single(
+        _NoTunnels(), "python", "Cluj-Napoca, Romania", 7, ["indeed"],
+    )
+    assert len(df) == 1
+    assert calls[0]["proxies"] is None
+
+
+async def test_direct_is_a_fallback_route_when_the_tunnel_fails(monkeypatch):
+    monkeypatch.setenv("SCRAPE_DIRECT", "1")
+    monkeypatch.setattr(scraper.random, "shuffle", lambda routes: None)  # tunnel first
+    seen: list[object] = []
+
+    def fake_scrape_jobs(**kwargs):
+        seen.append(kwargs["proxies"])
+        if kwargs["proxies"]:
+            raise ConnectionError("tunnel blocked")
+        return pd.DataFrame([{"job_url": "https://x/1"}])
+
+    monkeypatch.setattr(scraper, "scrape_jobs", fake_scrape_jobs)
+    df = await scraper._scrape_single(
+        _Tunnels(), "python", "Cluj-Napoca, Romania", 7, ["indeed"],
+    )
+    assert len(df) == 1
+    assert seen == ["socks5://127.0.0.1:1080", None]
+
+
+@pytest.mark.parametrize("value", ["", "false", "0", "no"])
+def test_scrape_direct_is_off_unless_enabled(monkeypatch, value):
+    monkeypatch.setenv("SCRAPE_DIRECT", value)
+    assert scraper.scrape_direct_enabled() is False
