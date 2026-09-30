@@ -13,13 +13,18 @@ from __future__ import annotations
 import asyncio
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import numpy as np
 
-from gosha import database
-from gosha.cover_letter import save_cv
-from gosha.embeddings import EMBEDDING_DIM, vec_to_bytes
-from gosha.models import Job, Subscription, User
+# Runnable as `python scripts/<name>.py` from anywhere: that puts scripts/
+# on sys.path, not the repo root, so `import gosha` would fail.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from gosha import database  # noqa: E402
+from gosha.cover_letter import save_cv  # noqa: E402
+from gosha.embeddings import EMBEDDING_DIM, vec_to_bytes  # noqa: E402
+from gosha.models import Job, Subscription, User  # noqa: E402
 
 CV_TEXT = """Bogdan Example — Computer Science student, Cluj-Napoca
 Skills: Python, FastAPI, React, TypeScript, Docker, PostgreSQL, Git
