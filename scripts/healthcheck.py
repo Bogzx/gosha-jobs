@@ -16,6 +16,12 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+# `python scripts/healthcheck.py` puts scripts/ on sys.path, not the repo
+# root, so `import gosha` in the bot check failed and the bot container was
+# reported unhealthy while it ran fine.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 API_HEALTH_URL = os.getenv("HEALTHCHECK_URL", "http://127.0.0.1:8000/api/v1/health")
 API_TIMEOUT = 5
