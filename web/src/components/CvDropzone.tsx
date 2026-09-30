@@ -4,7 +4,7 @@ import { FileUp, Loader2 } from 'lucide-react'
 import { ApiError } from '../api/client'
 import { useUploadCv } from '../hooks/useCv'
 import { hasStoredConsent, storeConsent } from '../lib/cvConsent'
-import { useToast } from './Toast'
+import { useToast } from '../hooks/useToast'
 
 // Consent has to be given before the file leaves the browser, and it has to
 // be a deliberate action rather than a pre-ticked box — a CV is special

@@ -26,7 +26,7 @@ import {
 } from '../lib/format'
 import { MatchBadge } from './MatchBadge'
 import { WhyThisMatched } from './WhyThisMatched'
-import { useToast } from './Toast'
+import { useToast } from '../hooks/useToast'
 
 interface Props {
   job: Job

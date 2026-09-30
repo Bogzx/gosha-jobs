@@ -1,27 +1,8 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react'
-
-export interface ToastInput {
-  message: string
-  tone?: 'ink' | 'go' | 'tomato'
-  action?: { label: string; onClick: () => void }
-  durationMs?: number
-}
+import { useCallback, useRef, useState, type ReactNode } from 'react'
+import { ToastContext, type ToastInput } from '../hooks/useToast'
 
 interface ToastItem extends ToastInput {
   id: number
-}
-
-const ToastContext = createContext<(toast: ToastInput) => void>(() => undefined)
-
-export function useToast() {
-  return useContext(ToastContext)
 }
 
 const TONE_CLASSES: Record<NonNullable<ToastInput['tone']>, string> = {

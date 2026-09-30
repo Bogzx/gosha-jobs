@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Archive, Loader2 } from 'lucide-react'
 import type { Application, ApplicationStatus } from '../api/types'
-import { ApplicationCard, STATUS_META } from '../components/ApplicationCard'
+import { ApplicationCard } from '../components/ApplicationCard'
+import { STATUS_META } from '../lib/applicationStatus'
 import { useApplications } from '../hooks/useApplications'
 
 const PIPELINE: ApplicationStatus[] = ['applied', 'phone_screen', 'interview', 'offer']
