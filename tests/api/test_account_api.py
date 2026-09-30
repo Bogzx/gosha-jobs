@@ -27,6 +27,7 @@ async def _seed_full_account(client, session, user, cookies) -> Job:
     await client.put(
         "/api/v1/cv",
         files={"file": ("cv.txt", b"Python, Kubernetes, Go", "text/plain")},
+        data={"consent": "true"},
         cookies=cookies,
     )
 
@@ -58,6 +59,7 @@ async def test_export_returns_everything_we_hold(client, web_user, session):
 
     body = resp.json()
     assert body["account"]["discord_user_id"] == str(user.discord_user_id)
+    assert body["account"]["cv_consent_at"]  # recorded at upload, exported
     assert "Kubernetes" in body["cv_text"]
     assert [s["name"] for s in body["searches"]] == ["internships"]
     assert len(body["delivered_jobs"]) == 1

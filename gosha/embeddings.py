@@ -7,6 +7,7 @@ of jobs) numpy brute-force cosine scoring beats running a vector database.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import numpy as np
@@ -181,7 +182,9 @@ async def embed_user_cv(user_id: int, cv_text: str) -> bool:
     Chunked (see embed_long_text) rather than truncated: the whole CV
     reaches the vector, not just whatever fits in one model window.
     """
-    pooled = embed_long_text(cv_text)
+    # Encoding is CPU-bound (up to MAX_CV_CHUNKS windows); in a thread so
+    # it does not stall the bot's gateway heartbeat or the API event loop.
+    pooled = await asyncio.to_thread(embed_long_text, cv_text)
     if pooled is None:
         return False
 

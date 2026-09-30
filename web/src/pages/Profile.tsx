@@ -4,6 +4,7 @@ import { Download, LogOut, ShieldCheck, Trash2 } from 'lucide-react'
 import { DiscordHelp } from '../components/DiscordHelp'
 import { useToast } from '../components/Toast'
 import { useLogout, useMe } from '../hooks/useMe'
+import { forgetConsent } from '../lib/cvConsent'
 
 const ERASE_PHRASE = 'DELETE'
 
@@ -32,6 +33,7 @@ export default function Profile() {
         credentials: 'include',
       })
       if (!resp.ok) throw new Error('failed')
+      forgetConsent()
       window.location.href = '/'
     } catch {
       toast({ message: 'Could not delete the account — try again.', tone: 'tomato' })

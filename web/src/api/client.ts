@@ -65,9 +65,10 @@ export const api = {
     return request<T>(path, { method: 'DELETE' })
   },
 
-  putFile<T>(path: string, file: File): Promise<T> {
+  putFile<T>(path: string, file: File, fields: Record<string, string> = {}): Promise<T> {
     const form = new FormData()
     form.append('file', file)
+    for (const [name, value] of Object.entries(fields)) form.append(name, value)
     return request<T>(path, { method: 'PUT', body: form })
   },
 }

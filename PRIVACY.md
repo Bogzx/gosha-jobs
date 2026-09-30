@@ -47,7 +47,10 @@ selected by `LLM_PROVIDER` / `OPENROUTER_API_KEY` (`gosha/llm.py`).
 This is the single largest disclosure in the product. It happens **only**
 on that explicit action — uploading a CV alone never sends it anywhere.
 The `/privacy` page states this in the user's own words, and the CV upload
-form requires a consent tick that names it.
+form requires a consent tick that names it. The bot's `/upload_cv` asks for
+the same agreement (`consent: True`) before reading the file. Either way the
+server records when consent was given (`users.cv_consent_at`, included in
+the data export) and refuses to store a CV without it.
 
 If you self-host, **this is your disclosure to make**: check the terms of
 whichever provider you configure, particularly whether they retain or train
@@ -71,7 +74,7 @@ delivery history. Rows accumulate. This is an open item.
 | Access / portability (Art. 15, 20) | `GET /api/v1/account/export` — everything we hold, as JSON. Button on the profile page. |
 | Erasure (Art. 17) | `DELETE /api/v1/account?confirm=DELETE` — account row, CV file, cover letters, saved searches, delivery history, tracked applications and the event log. Irreversible. Button on the profile page. |
 | Rectification | Discord profile fields refresh on each sign-in; the CV can be re-uploaded. |
-| Withdraw consent | Delete the CV, or the account. |
+| Withdraw consent | Delete the CV (web or `/delete_cv`), or the account. Deleting the CV also removes its embedding, the cover letters generated from it, and the consent record, so a new upload asks again. |
 
 Erasure is implemented as explicit statements rather than ORM cascades
 (`gosha/services/account.py`) because the `events` table has no foreign
