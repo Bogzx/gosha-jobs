@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { ArrowRight, Loader2, Sparkles } from 'lucide-react'
 import { Logo } from '../components/Logo'
 import { CvDropzone } from '../components/CvDropzone'
-import { useToast } from '../components/Toast'
+import { useToast } from '../hooks/useToast'
 import { useCreateSubscription } from '../hooks/useSubscriptions'
 
 const ROLE_PRESETS = [

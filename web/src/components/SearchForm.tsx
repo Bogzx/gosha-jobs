@@ -8,7 +8,7 @@ import {
   useUpdateSubscription,
 } from '../hooks/useSubscriptions'
 import { ChipInput } from './ChipInput'
-import { useToast } from './Toast'
+import { useToast } from '../hooks/useToast'
 
 const EXPERIENCE_OPTIONS = ['intern', 'junior', 'mid', 'senior'] as const
 

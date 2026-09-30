@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Download, LogOut, ShieldCheck, Trash2 } from 'lucide-react'
 import { DiscordHelp } from '../components/DiscordHelp'
-import { useToast } from '../components/Toast'
+import { useToast } from '../hooks/useToast'
 import { useLogout, useMe } from '../hooks/useMe'
 import { forgetConsent } from '../lib/cvConsent'
 

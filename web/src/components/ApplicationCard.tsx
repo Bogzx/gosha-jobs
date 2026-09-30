@@ -2,20 +2,9 @@ import { useState } from 'react'
 import { ExternalLink, NotebookPen, Trash2 } from 'lucide-react'
 import type { Application, ApplicationStatus } from '../api/types'
 import { useDeleteApplication, useUpdateApplication } from '../hooks/useApplications'
+import { STATUS_META } from '../lib/applicationStatus'
 import { sourceLabel, timeAgo } from '../lib/format'
-import { useToast } from './Toast'
-
-export const STATUS_META: Record<
-  ApplicationStatus,
-  { label: string; tone: string }
-> = {
-  applied: { label: 'Applied', tone: 'bg-sky-soft text-sky border-sky' },
-  phone_screen: { label: 'Phone screen', tone: 'bg-amber-soft text-amber border-amber' },
-  interview: { label: 'Interview', tone: 'bg-amber-soft text-amber border-amber' },
-  offer: { label: 'Offer 🎉', tone: 'bg-go-soft text-go border-go' },
-  rejected: { label: 'Rejected', tone: 'bg-tomato-soft text-tomato border-tomato' },
-  withdrawn: { label: 'Withdrawn', tone: 'bg-paper-warm text-ink-faint border-rule' },
-}
+import { useToast } from '../hooks/useToast'
 
 const STATUS_ORDER: ApplicationStatus[] = [
   'applied', 'phone_screen', 'interview', 'offer', 'rejected', 'withdrawn',
