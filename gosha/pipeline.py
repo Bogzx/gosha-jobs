@@ -13,6 +13,7 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import select
 
@@ -357,15 +358,53 @@ def _title_relevant_for_any_keyword(title: str, keywords: list[str]) -> bool:
     return False
 
 
+def blend_with_user_vector(
+    query_emb: np.ndarray, user_vector: np.ndarray | None,
+) -> np.ndarray:
+    """The subscription query pulled toward the user's CV, re-normalised.
+
+    Discord delivery used to score jobs against the subscription string
+    alone ("Job role: software engineer. Location: Cluj"), so the product's
+    promise — the job feed that reads your CV — held on the website and
+    not in the DMs. The subscription still anchors the query (it is what
+    the user asked this search for); the CV decides between postings that
+    fit it equally well on paper.
+
+    An equal-weight sum of two unit vectors, re-normalised, keeps scores on
+    the same cosine scale, so the configured threshold still means roughly
+    what it did: a job must now be near the *pair*, not just the words.
+    Vectors from different models (shape mismatch) are not mixed.
+    """
+    if user_vector is None:
+        return query_emb
+    query = np.asarray(query_emb, dtype=np.float32)
+    user = np.asarray(user_vector, dtype=np.float32)
+    if query.shape != user.shape:
+        log.warning(
+            "CV vector %s and subscription vector %s differ in shape — "
+            "embedded with different models? Matching on the subscription only.",
+            user.shape, query.shape,
+        )
+        return query
+    blended = query + user
+    norm = float(np.linalg.norm(blended))
+    if norm == 0.0:
+        return query
+    return (blended / norm).astype(np.float32)
+
+
 async def match_jobs_for_subscription(
     sub: Subscription,
     jobs: list[Job],
     semantic_matcher: SemanticMatcher | None = None,
+    user_vector: np.ndarray | None = None,
 ) -> list[tuple[Job, float]]:
     """Return (job, score) pairs for jobs matching a subscription.
 
     If a SemanticMatcher is provided and available, uses cosine similarity
-    for scoring. Otherwise falls back to regex with score=1.0.
+    for scoring — against the subscription blended with `user_vector` (the
+    user's CV, refined by feedback) when there is one. Otherwise falls back
+    to regex with score=1.0.
     """
     # Pre-filter: hard filters that must pass regardless of matching mode
     candidates: list[Job] = []
@@ -388,6 +427,7 @@ async def match_jobs_for_subscription(
         if query_emb is not None:
             from gosha.embeddings import score_jobs_against_query
 
+            query_emb = blend_with_user_vector(query_emb, user_vector)
             scores = score_jobs_against_query(query_emb, candidates)
             matches = [
                 (job, score)
@@ -405,6 +445,23 @@ async def match_jobs_for_subscription(
             continue
         matches.append((job, 1.0))
     return matches
+
+
+async def _cv_vector_for(user: User) -> np.ndarray | None:
+    """The user's ranking vector when they have uploaded a CV, else None.
+
+    Users without a CV keep pure subscription matching: a vector built from
+    a handful of thumbs-up alone is too thin to override what they asked for.
+    """
+    if not user.cv_embedding:
+        return None
+    try:
+        from gosha.recommend import build_user_signal
+
+        return (await build_user_signal(user.id)).vector
+    except Exception as exc:
+        log.warning("CV vector unavailable for user %d: %s", user.id, exc)
+        return None
 
 
 async def run_match_stage(
@@ -432,12 +489,20 @@ async def run_match_stage(
     from gosha.feedback import build_user_profile
 
     user_profiles: dict[int, object] = {}  # user_id -> UserPreferenceProfile
+    # user_id -> CV vector refined by feedback (the one the web feed ranks
+    # by); None without a CV. Only needed on the semantic path.
+    user_vectors: dict[int, np.ndarray | None] = {}
 
     # Build batch delivery items
     delivery_items: list[dict] = []
 
     for sub, user in sub_user_pairs:
-        matches = await match_jobs_for_subscription(sub, jobs, semantic_matcher)
+        if semantic_matcher is not None and user.id not in user_vectors:
+            user_vectors[user.id] = await _cv_vector_for(user)
+
+        matches = await match_jobs_for_subscription(
+            sub, jobs, semantic_matcher, user_vectors.get(user.id),
+        )
 
         # Build user profile lazily (once per user)
         if user.id not in user_profiles:
