@@ -116,6 +116,8 @@ jobs:
           os.environ.setdefault('SESSION_SECRET', 'x' * 40)
           os.environ.setdefault('DISCORD_CLIENT_ID', '1')
           os.environ.setdefault('DISCORD_CLIENT_SECRET', '1')
+          from cryptography.fernet import Fernet
+          os.environ.setdefault('CV_ENCRYPTION_KEY', Fernet.generate_key().decode())
           app = create_app()
           # Ask FastAPI what it serves rather than introspecting app.routes.
           # requirements.txt pins no upper bound, so a fresh build resolves

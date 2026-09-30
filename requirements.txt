@@ -41,3 +41,6 @@ asyncpg>=0.29
 
 # CV parsing for cover letter generation
 pymupdf>=1.24
+
+# CV encryption at rest (Fernet; see gosha/cv_crypto.py)
+cryptography>=42

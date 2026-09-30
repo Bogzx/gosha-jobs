@@ -48,7 +48,7 @@ export function CvDropzone({ onUploaded }: { onUploaded?: () => void }) {
           className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-go)]"
         />
         <span>
-          I agree that GOSHA may store my CV as plain text and use it to rank
+          I agree that GOSHA may store my CV (encrypted) and use it to rank
           job postings for me. If I ask for a cover letter, part of my CV is
           sent to a third-party AI provider — details in the{' '}
           <Link

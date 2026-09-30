@@ -18,6 +18,14 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
+# Both services refuse to start without it (gosha/cv_crypto.py). Failing
+# here beats a build, a failed health gate and a rollback.
+if ! grep -Eq '^CV_ENCRYPTION_KEY=.+' .env; then
+  echo "ERROR: CV_ENCRYPTION_KEY is not set in .env — see .env.example." >&2
+  echo '  python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"' >&2
+  exit 1
+fi
+
 log() { echo "[deploy] $*"; }
 
 health_ok() {
