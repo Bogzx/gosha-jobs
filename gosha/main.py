@@ -30,6 +30,13 @@ async def main() -> None:
     await init_db(settings.database_url)
     log.info("Database initialised")
 
+    # ── CV storage: refuse plaintext outside dev, encrypt leftovers ──
+    from gosha import cv_crypto
+    from gosha.cover_letter import prepare_cv_storage
+
+    cv_crypto.require_key_configured()
+    prepare_cv_storage()
+
     # ── SSH Tunnels ─────────────────────────────────────────────
     tunnel_mgr = SSHTunnelManager(settings.vps_list)
     if settings.vps_list:
@@ -146,6 +153,24 @@ async def main() -> None:
         next_run_time=datetime.now(timezone.utc) + timedelta(minutes=45),
         id="deadlink_check",
         name="Dead job link detection",
+        replace_existing=True,
+    )
+
+    # CV retention: delete CV data of users inactive > CV_RETENTION_MONTHS
+    # (gosha/services/retention.py). Daily, first run an hour after boot.
+    async def _cv_retention_tick() -> None:
+        from gosha.services.retention import purge_stale_cvs
+        try:
+            await purge_stale_cvs()
+        except Exception as exc:
+            log.warning("CV retention run failed: %s", exc)
+
+    scheduler.add_job(
+        _cv_retention_tick,
+        trigger=IntervalTrigger(hours=24),
+        next_run_time=datetime.now(timezone.utc) + timedelta(hours=1),
+        id="cv_retention",
+        name="CV retention",
         replace_existing=True,
     )
 

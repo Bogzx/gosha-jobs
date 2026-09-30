@@ -12,7 +12,7 @@ import {
 import type { Subscription } from '../api/types'
 import { DiscordHelp } from '../components/DiscordHelp'
 import { SearchForm } from '../components/SearchForm'
-import { useToast } from '../components/Toast'
+import { useToast } from '../hooks/useToast'
 import { useMe } from '../hooks/useMe'
 import {
   useDeleteSubscription,

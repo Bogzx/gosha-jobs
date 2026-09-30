@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from gosha.services.cv import MAX_CV_BYTES
+from gosha.services.retention import retention_months
 
 router = APIRouter(prefix="/legal", tags=["legal"])
 
@@ -128,9 +129,16 @@ async def privacy() -> dict:
         },
         "limits": {
             "cv_storage": (
-                f"CVs are stored as plain text on the server's disk (max "
-                f"{MAX_CV_BYTES // (1024 * 1024)} MB per upload). They are "
-                "not encrypted at rest yet — see the repository issues."
+                f"CVs are stored encrypted at rest on the server's disk (max "
+                f"{MAX_CV_BYTES // (1024 * 1024)} MB per upload). The key is "
+                "held by the running service, so this protects the disk and "
+                "backups, not a compromised server. "
+                + (
+                    f"CVs of accounts inactive for {retention_months()} months "
+                    "are deleted automatically."
+                    if retention_months()
+                    else "Automatic deletion of inactive CVs is turned off."
+                )
             ),
             "third_party_assets": (
                 "The landing page currently loads web fonts from Google and "

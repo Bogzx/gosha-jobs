@@ -1,0 +1,97 @@
+{
+  "items": [
+    {
+      "id": "52069605",
+      "slug": "wordpress-developer-84",
+      "title": "Wordpress developer",
+      "companyName": "OKKWEBMEDIA",
+      "locations": [
+        {
+          "name": "Cluj-Napoca, România",
+          "slug": "cluj-napoca-romania",
+          "geoLocation": {
+            "lat": 46.7712101,
+            "lng": 23.6236353
+          },
+          "withFullAddress": false
+        }
+      ],
+      "salary": "",
+      "estimatedSalary": "1795 - 1985",
+      "hasOwnApplyUrl": false
+    },
+    {
+      "id": "52068124",
+      "slug": "fivem-project-recruitment",
+      "title": "FiveM Project Recruitment",
+      "companyName": "Reinforce Roleplay",
+      "locations": [
+        {
+          "name": "Remote",
+          "slug": "remote",
+          "withFullAddress": false
+        }
+      ],
+      "salary": "1105 - 1605",
+      "estimatedSalary": "",
+      "hasOwnApplyUrl": false
+    },
+    {
+      "id": "52068768",
+      "slug": "full-stack-software-engineer-remote",
+      "title": "Full-Stack Software Engineer – Remote",
+      "companyName": "",
+      "locations": [
+        {
+          "name": "Remote",
+          "slug": "remote",
+          "withFullAddress": false
+        }
+      ],
+      "salary": "3000",
+      "estimatedSalary": "",
+      "hasOwnApplyUrl": true
+    },
+    {
+      "id": "52068347",
+      "slug": "software-developer-flutter-studios-hybrid-remote",
+      "title": "Software Developer - Flutter Studios, Hybrid & Remote",
+      "companyName": "Flutter International",
+      "locations": [
+        {
+          "name": "Cluj-Napoca, România",
+          "slug": "cluj-napoca-romania",
+          "geoLocation": {
+            "lat": 46.7712101,
+            "lng": 23.6236353
+          },
+          "withFullAddress": false
+        }
+      ],
+      "salary": "",
+      "estimatedSalary": "",
+      "hasOwnApplyUrl": false
+    },
+    {
+      "id": "52067624",
+      "slug": "senior-full-stack-software-engineer-12",
+      "title": "Senior Full Stack Software Engineer",
+      "companyName": "ascom",
+      "locations": [
+        {
+          "name": "Cluj-Napoca, România",
+          "slug": "cluj-napoca-romania",
+          "geoLocation": {
+            "lat": 46.7712101,
+            "lng": 23.6236353
+          },
+          "withFullAddress": false
+        }
+      ],
+      "salary": "",
+      "estimatedSalary": "",
+      "hasOwnApplyUrl": false
+    }
+  ],
+  "total": 5
+}

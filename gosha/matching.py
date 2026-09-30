@@ -7,18 +7,29 @@ Falls back to regex when the model isn't available.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import numpy as np
 
 log = logging.getLogger(__name__)
 
+# One model for everything that lands in the same vector space: job and CV
+# embeddings stored by gosha/embeddings.py (bot AND api processes) and the
+# subscription queries scored against them. Those stored vectors used to
+# ignore SEMANTIC_MODEL and always use the hardcoded default, so setting
+# it made the match stage compare vectors from two different models —
+# silently, when the dimensions happen to agree (768 for both mpnet
+# variants). Changing it still means re-embedding every stored vector.
+LEGACY_MODEL = "all-mpnet-base-v2"
+DEFAULT_MODEL = os.getenv("SEMANTIC_MODEL", LEGACY_MODEL)
+
 # Lazy-loaded model singleton
 _model: Any = None
 _model_name: str = ""
 
 
-def _get_model(model_name: str = "all-mpnet-base-v2") -> Any:
+def _get_model(model_name: str = DEFAULT_MODEL) -> Any:
     """Load the sentence-transformer model (lazy singleton)."""
     global _model, _model_name
     if _model is not None and _model_name == model_name:
@@ -38,12 +49,12 @@ def _get_model(model_name: str = "all-mpnet-base-v2") -> Any:
         return None
 
 
-def is_available(model_name: str = "all-mpnet-base-v2") -> bool:
+def is_available(model_name: str = DEFAULT_MODEL) -> bool:
     """Check if semantic matching is available."""
     return _get_model(model_name) is not None
 
 
-def encode_texts(texts: list[str], model_name: str = "all-mpnet-base-v2") -> np.ndarray | None:
+def encode_texts(texts: list[str], model_name: str = DEFAULT_MODEL) -> np.ndarray | None:
     """Encode a list of texts into embedding vectors.
 
     Returns an (N, D) numpy array, or None if the model isn't available.
@@ -54,7 +65,7 @@ def encode_texts(texts: list[str], model_name: str = "all-mpnet-base-v2") -> np.
     return model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
 
 
-def encode_single(text: str, model_name: str = "all-mpnet-base-v2") -> np.ndarray | None:
+def encode_single(text: str, model_name: str = DEFAULT_MODEL) -> np.ndarray | None:
     """Encode a single text into an embedding vector."""
     result = encode_texts([text], model_name)
     if result is None:
@@ -135,7 +146,7 @@ class SemanticMatcher:
 
     def __init__(
         self,
-        model_name: str = "all-mpnet-base-v2",
+        model_name: str = DEFAULT_MODEL,
         threshold: float = 0.40,
     ) -> None:
         self.model_name = model_name

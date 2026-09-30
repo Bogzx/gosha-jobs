@@ -193,9 +193,9 @@ Even with this running, these are open:
 - **No monitoring of backup age.** The dead-man-switch URL is optional and
   unset by default. Configure one — a stopped backup container is
   otherwise indistinguishable from a working one.
-- **CVs are backed up encrypted but stored unencrypted.** Restic protects
-  the copy, not the original on the VPS disk. Encryption at rest for
-  `data/cvs` is a separate, still-open item.
+- **`CV_ENCRYPTION_KEY` must be backed up too, separately.** CVs are now
+  encrypted at rest (`data/cvs/<uid>.enc`, gosha/cv_crypto.py), so a
+  restored `data/cvs` is unreadable without the key that wrote it.
 - **No off-site copy of `.env`.** The backups are useless without
   `RESTIC_PASSWORD`, and the stack will not boot without the Discord and
   database secrets. Store them separately and deliberately.

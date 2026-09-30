@@ -192,3 +192,26 @@ class TestSemanticMatcherIntegration:
         # Should be approximately unit norm (normalized)
         norm = np.linalg.norm(emb)
         assert norm == pytest.approx(1.0, abs=0.01)
+
+
+def test_semantic_model_env_reaches_stored_embeddings():
+    """Stored job/CV vectors must use SEMANTIC_MODEL, like the queries.
+
+    gosha.embeddings calls matching.encode_texts without a model name, so
+    the module default is what decides the stored vectors' model.
+    """
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "import inspect, gosha.matching as m;"
+        "print(m.DEFAULT_MODEL,"
+        " inspect.signature(m.encode_texts).parameters['model_name'].default)"
+    )
+    env = {**os.environ, "SEMANTIC_MODEL": "paraphrase-multilingual-mpnet-base-v2"}
+    out = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True,
+        check=True,
+    ).stdout.split()
+    assert out == ["paraphrase-multilingual-mpnet-base-v2"] * 2

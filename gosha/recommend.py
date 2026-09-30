@@ -17,7 +17,7 @@ import numpy as np
 from sqlalchemy import or_, select
 
 from gosha.database import get_session
-from gosha.embeddings import bytes_to_vec
+from gosha.embeddings import bytes_to_vec, current_model_clause, is_current
 from gosha.models import Application, Job, User, UserJob
 
 log = logging.getLogger(__name__)
@@ -241,7 +241,13 @@ async def build_user_signal(user_id: int) -> UserSignal:
         if user is None:
             return UserSignal(None, None)
 
-        base = bytes_to_vec(user.cv_embedding) if user.cv_embedding else None
+        # A CV vector from another model is in another space: ignore it
+        # until it is re-embedded (scripts/reembed.py) rather than rank by it.
+        base = (
+            bytes_to_vec(user.cv_embedding)
+            if user.cv_embedding and is_current(user.cv_embedding_model)
+            else None
+        )
 
         result = await session.execute(
             select(UserJob.feedback, Job.embedding)
@@ -250,6 +256,7 @@ async def build_user_signal(user_id: int) -> UserSignal:
                 UserJob.user_id == user_id,
                 UserJob.feedback.isnot(None),
                 Job.embedding.isnot(None),
+                current_model_clause(Job.embedding_model),
             )
         )
         liked: list[np.ndarray] = []
@@ -315,7 +322,9 @@ async def get_feed(
             or_(Job.dedup_group_id.is_(None), Job.dedup_group_id == Job.id),
         )
         if user_vector is not None:
-            stmt = stmt.where(Job.embedding.isnot(None))
+            stmt = stmt.where(
+                Job.embedding.isnot(None), current_model_clause(Job.embedding_model),
+            )
         if excluded_ids:
             stmt = stmt.where(Job.id.notin_(excluded_ids))
 
@@ -330,7 +339,12 @@ async def get_feed(
                 # reasons need the text, loaded lazily to avoid IO when
                 # there is no CV.
                 from gosha.cover_letter import load_cv
-                cv_text = load_cv(user_id) or ""
+                from gosha.cv_crypto import CvKeyError
+                try:
+                    cv_text = load_cv(user_id) or ""
+                except CvKeyError as exc:
+                    # Rank without match reasons rather than fail the feed.
+                    log.error("Feed for user %d without CV reasons: %s", user_id, exc)
 
     # Standing exclusions: blacklisted companies / excluded words from any
     # of the user's searches never appear in the feed.

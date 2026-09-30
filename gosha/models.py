@@ -63,6 +63,12 @@ class _JSONListMixin:
 
 # ---------------------------------------------------------------------------
 # Tier limits — used by the bot to gate features
+#
+# Enforced: max_subscriptions, max_keywords_per_sub, max_locations_per_sub,
+# cover_letters_per_month, scrape_now_cooldown. The remaining keys
+# (max_applications, semantic_matching, email_delivery, webhook_delivery,
+# priority_delivery) are read by nothing — there is no email digest and no
+# delivery ordering by tier — so plan_lines() never advertises them.
 # ---------------------------------------------------------------------------
 
 TIER_LIMITS: dict[str, dict[str, int | bool]] = {
@@ -110,6 +116,27 @@ def get_tier_limits(tier: str) -> dict[str, int | bool]:
     return TIER_LIMITS.get(tier, TIER_LIMITS["free"])
 
 
+def plan_lines(limits: dict[str, int | bool]) -> list[str]:
+    """What a plan gives, as display lines — enforced limits only.
+
+    /upgrade used to promise Pro "AI semantic matching", "priority
+    delivery" and "email digests". The first is on for every tier, the
+    other two do not exist; this renders only what the code enforces.
+    """
+    def amount(value: int | bool, unit: str) -> str:
+        return f"Unlimited {unit}" if int(value) >= 999 else f"{int(value)} {unit}"
+
+    letters = int(limits["cover_letters_per_month"])
+    return [
+        amount(limits["max_subscriptions"], "saved searches"),
+        f"{int(limits['max_keywords_per_sub'])} keywords and "
+        f"{int(limits['max_locations_per_sub'])} locations per search",
+        "Unlimited AI cover letters" if letters >= 999
+        else f"{letters} AI cover letters a month",
+        f"`/scrape_now` every {max(1, int(limits['scrape_now_cooldown']) // 60)} min",
+    ]
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -134,6 +161,15 @@ class User(Base):
     in_guild: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # float32 bytes of the user's CV embedding (see gosha/embeddings.py)
     cv_embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # Model that produced cv_embedding; NULL = the legacy default
+    # (gosha.matching.LEGACY_MODEL). See gosha/embeddings.py.
+    cv_embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # When the user agreed to CV storage/processing (web checkbox or the
+    # bot's consent option). Recorded server-side because consent has to be
+    # provable; cleared when the CV is deleted, which is how it is withdrawn.
+    cv_consent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     subscriptions: Mapped[list[Subscription]] = relationship(
         back_populates="user", cascade="all, delete-orphan", lazy="selectin"
@@ -185,6 +221,8 @@ class Job(Base):
     )
     # float32 bytes of the job-text embedding (see gosha/embeddings.py)
     embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # Model that produced `embedding`; NULL = the legacy default.
+    embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # Cross-board duplicate group: id of the canonical job (the canonical
     # row points at itself; NULL = not yet grouped / unique)
     dedup_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -464,3 +502,48 @@ class CoverLetter(Base):
 
     def __repr__(self) -> str:
         return f"<CoverLetter user={self.user_id} job={self.job_id}>"
+
+
+# ---------------------------------------------------------------------------
+# Web auth + rate limiting state
+#
+# Shared through the database rather than process memory so the API is
+# correct with any number of uvicorn workers (or replicas): an OAuth
+# callback, the handoff poll and a rate-limited request can each land on a
+# different process. Every row expires; expired rows are purged lazily.
+# ---------------------------------------------------------------------------
+
+class OAuthConsumedState(Base):
+    """An OAuth `state` that has been used once (replay protection)."""
+
+    __tablename__ = "oauth_consumed_states"
+
+    state: Mapped[str] = mapped_column(String(255), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
+class OAuthHandoff(Base):
+    """A sign-in finished in another browser, waiting for its originator."""
+
+    __tablename__ = "oauth_handoffs"
+
+    state: Mapped[str] = mapped_column(String(255), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_new: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
+class RateLimitHit(Base):
+    """Request count for one client in one fixed window (gosha/ratelimit.py)."""
+
+    __tablename__ = "rate_limit_hits"
+
+    bucket: Mapped[str] = mapped_column(String(255), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )

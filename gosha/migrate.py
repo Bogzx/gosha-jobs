@@ -33,7 +33,9 @@ async def run_migrations(conn: AsyncConnection) -> None:
     false_lit = "FALSE" if is_pg else "0"
     true_lit = "TRUE" if is_pg else "1"
     blob_type = "BYTEA" if is_pg else "BLOB"
-    dt_type = "TIMESTAMP" if is_pg else "DATETIME"
+    # The models declare DateTime(timezone=True); on Postgres a plain
+    # TIMESTAMP would drift from what create_all makes for a fresh DB.
+    dt_type = "TIMESTAMP WITH TIME ZONE" if is_pg else "DATETIME"
 
     # 1. Add missing columns to existing tables
     if "users" in existing_tables:
@@ -45,12 +47,15 @@ async def run_migrations(conn: AsyncConnection) -> None:
             "last_login_at": dt_type,
             "in_guild": f"BOOLEAN NOT NULL DEFAULT {false_lit}",
             "cv_embedding": blob_type,
+            "cv_consent_at": dt_type,
+            "cv_embedding_model": "VARCHAR(128)",
         })
 
     if "jobs" in existing_tables:
         await _add_missing_columns(conn, "jobs", {
             "posted_at": dt_type,
             "embedding": blob_type,
+            "embedding_model": "VARCHAR(128)",
             "dedup_group_id": "INTEGER",
             "last_checked_at": dt_type,
             # Salary normalisation (gosha/salary.py). Backfilled by

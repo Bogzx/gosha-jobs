@@ -89,6 +89,7 @@ async def export_account(user_id: int) -> dict:
                 "created_at": _iso(user.created_at),
                 "last_login_at": _iso(user.last_login_at),
                 "has_cv_embedding": user.cv_embedding is not None,
+                "cv_consent_at": _iso(user.cv_consent_at),
             },
             "cv_text": cv_storage.load_cv(user_id),
             "searches": [

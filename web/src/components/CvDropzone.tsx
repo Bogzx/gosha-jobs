@@ -3,29 +3,14 @@ import { Link } from 'react-router-dom'
 import { FileUp, Loader2 } from 'lucide-react'
 import { ApiError } from '../api/client'
 import { useUploadCv } from '../hooks/useCv'
-import { useToast } from './Toast'
+import { hasStoredConsent, storeConsent } from '../lib/cvConsent'
+import { useToast } from '../hooks/useToast'
 
 // Consent has to be given before the file leaves the browser, and it has to
 // be a deliberate action rather than a pre-ticked box — a CV is special
 // -category-adjacent personal data and "you uploaded it, so you agreed" is
-// not consent. Stored locally so it is asked once, not on every re-upload.
-const CONSENT_KEY = 'gosha.cv-consent.v1'
-
-function hasStoredConsent(): boolean {
-  try {
-    return window.localStorage.getItem(CONSENT_KEY) === 'yes'
-  } catch {
-    return false
-  }
-}
-
-function storeConsent(): void {
-  try {
-    window.localStorage.setItem(CONSENT_KEY, 'yes')
-  } catch {
-    /* private mode — the checkbox still gated this upload */
-  }
-}
+// not consent. The tick is sent with the upload and recorded server-side;
+// see lib/cvConsent.ts for the local copy.
 
 export function CvDropzone({ onUploaded }: { onUploaded?: () => void }) {
   const toast = useToast()
@@ -36,7 +21,7 @@ export function CvDropzone({ onUploaded }: { onUploaded?: () => void }) {
 
   const handleFile = (file: File | undefined) => {
     if (!file || !consented) return
-    upload.mutate(file, {
+    upload.mutate({ file, consent: true }, {
       onSuccess: () => {
         toast({ message: 'CV uploaded — your feed just got personal', tone: 'go' })
         onUploaded?.()
@@ -63,7 +48,7 @@ export function CvDropzone({ onUploaded }: { onUploaded?: () => void }) {
           className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-go)]"
         />
         <span>
-          I agree that GOSHA may store my CV as plain text and use it to rank
+          I agree that GOSHA may store my CV (encrypted) and use it to rank
           job postings for me. If I ask for a cover letter, part of my CV is
           sent to a third-party AI provider — details in the{' '}
           <Link

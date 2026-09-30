@@ -45,6 +45,7 @@ _DOMAIN_STATUS = {
     "invalid_request": 422,
     "invalid_status": 422,
     "no_cv": 422,
+    "consent_required": 422,
     "file_too_large": 413,
     "generation_failed": 502,
 }
@@ -54,9 +55,11 @@ def create_app() -> FastAPI:
     import os
     from contextlib import asynccontextmanager
 
+    from gosha import cv_crypto
     from gosha.config import load_web_settings
 
     load_web_settings()  # fail fast when required env vars are missing
+    cv_crypto.require_key_configured()  # no plaintext CVs outside dev
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -68,6 +71,10 @@ def create_app() -> FastAPI:
             url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///data/jobs.db")
             await db.init_db(url)
             log.info("API database initialised")
+
+        from gosha.cover_letter import prepare_cv_storage
+
+        prepare_cv_storage()
         yield
 
     app = FastAPI(
@@ -80,7 +87,9 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(ApiError)
     async def _api_error_handler(request: Request, exc: ApiError):
-        return _error_response(exc.status_code, exc.code, exc.message)
+        response = _error_response(exc.status_code, exc.code, exc.message)
+        response.headers.update(exc.headers)
+        return response
 
     @app.exception_handler(DomainError)
     async def _domain_error_handler(request: Request, exc: DomainError):
@@ -122,7 +131,7 @@ def create_app() -> FastAPI:
 
     @app.get(f"{API_PREFIX}/me", response_model=MeOut)
     async def me(user: User = Depends(current_user)) -> MeOut:
-        from gosha.cover_letter import load_cv
+        from gosha.cover_letter import has_cv
 
         return MeOut(
             id=user.id,
@@ -131,7 +140,7 @@ def create_app() -> FastAPI:
             avatar_url=user.avatar_url,
             tier=user.tier,
             in_guild=user.in_guild,
-            has_cv=load_cv(user.id) is not None,
+            has_cv=has_cv(user.id),
             is_admin=is_admin(user),
         )
 
