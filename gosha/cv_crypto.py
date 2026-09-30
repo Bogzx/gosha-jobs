@@ -10,9 +10,11 @@ Configuration:
 
     CV_ENCRYPTION_KEY=<key>[,<old key>...]
 
-The first key encrypts; every listed key is tried for decryption, so a key
-is rotated by prepending the new one and later dropping the old. Generate a
-key with:
+The first key encrypts; every listed key is tried for decryption. To rotate:
+prepend the new key (NEW,OLD) and restart both services. At startup they
+re-encrypt every CV still under OLD (cover_letter.reencrypt_old_key_cvs)
+and log how many. Drop OLD only after that, since a CV that is still under
+a key no longer listed is unreadable. Generate a key with:
 
     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
@@ -44,17 +46,26 @@ def plaintext_allowed() -> bool:
     return "PYTEST_CURRENT_TEST" in os.environ
 
 
+def _raw_keys() -> list[str]:
+    return [k.strip() for k in os.getenv(KEY_ENV, "").split(",") if k.strip()]
+
+
+def has_old_keys() -> bool:
+    """True while a rotation is in progress (more than one key listed)."""
+    return len(_raw_keys()) > 1
+
+
 def cipher() -> MultiFernet | None:
     """The configured cipher, or None when no key is set.
 
     Read on every call: it is cheap, and it keeps a key change (or a test's
     monkeypatch) effective without a process-level cache to invalidate.
     """
-    raw = os.getenv(KEY_ENV, "").strip()
-    if not raw:
+    keys = _raw_keys()
+    if not keys:
         return None
     try:
-        return MultiFernet([Fernet(k.strip()) for k in raw.split(",") if k.strip()])
+        return MultiFernet([Fernet(k) for k in keys])
     except (ValueError, TypeError) as exc:
         raise CvKeyError(
             f"{KEY_ENV} is not a valid Fernet key (32 url-safe base64 bytes). "
@@ -93,4 +104,23 @@ def decrypt(token: bytes) -> str:
         raise CvKeyError(
             f"A stored CV could not be decrypted with any key in {KEY_ENV} — "
             "wrong or rotated-out key?"
+        ) from exc
+
+
+def rotate(token: bytes) -> bytes | None:
+    """`token` re-encrypted under the first (current) key, or None when it
+    already is. Raises CvKeyError when no listed key can decrypt it."""
+    c = cipher()
+    if c is None:
+        raise CvKeyError(f"{KEY_ENV} is not set; cannot re-encrypt a CV.")
+    try:
+        Fernet(_raw_keys()[0]).decrypt(token)
+        return None
+    except InvalidToken:
+        pass
+    try:
+        return c.rotate(token)
+    except InvalidToken as exc:
+        raise CvKeyError(
+            f"A stored CV could not be decrypted with any key in {KEY_ENV}."
         ) from exc

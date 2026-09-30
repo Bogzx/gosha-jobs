@@ -339,7 +339,12 @@ async def get_feed(
                 # reasons need the text, loaded lazily to avoid IO when
                 # there is no CV.
                 from gosha.cover_letter import load_cv
-                cv_text = load_cv(user_id) or ""
+                from gosha.cv_crypto import CvKeyError
+                try:
+                    cv_text = load_cv(user_id) or ""
+                except CvKeyError as exc:
+                    # Rank without match reasons rather than fail the feed.
+                    log.error("Feed for user %d without CV reasons: %s", user_id, exc)
 
     # Standing exclusions: blacklisted companies / excluded words from any
     # of the user's searches never appear in the feed.
