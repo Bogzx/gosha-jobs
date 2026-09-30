@@ -254,3 +254,22 @@ async def test_cv_upload_is_rate_limited_per_user(client, web_user, monkeypatch)
     _user, cookies = web_user
     codes = [(await _upload(client, cookies)).status_code for _ in range(3)]
     assert codes == [200, 200, 429]
+
+
+@pytest.mark.asyncio
+async def test_wrong_cv_key_does_not_break_me(client, web_user, monkeypatch):
+    """/me is the first call the SPA makes; with a wrong CV_ENCRYPTION_KEY it
+    used to decrypt the CV just to say has_cv, and 500 for every CV holder."""
+    from cryptography.fernet import Fernet
+
+    from gosha import cv_crypto
+
+    user, cookies = web_user
+    monkeypatch.setenv(cv_crypto.KEY_ENV, Fernet.generate_key().decode())
+    cl_mod.save_cv(user.id, "Python and React skills")
+    monkeypatch.setenv(cv_crypto.KEY_ENV, Fernet.generate_key().decode())
+
+    resp = await client.get("/api/v1/me", cookies=cookies)
+
+    assert resp.status_code == 200
+    assert resp.json()["has_cv"] is True

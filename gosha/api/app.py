@@ -72,9 +72,9 @@ def create_app() -> FastAPI:
             await db.init_db(url)
             log.info("API database initialised")
 
-        from gosha.cover_letter import encrypt_plaintext_cvs
+        from gosha.cover_letter import prepare_cv_storage
 
-        encrypt_plaintext_cvs()
+        prepare_cv_storage()
         yield
 
     app = FastAPI(
@@ -131,7 +131,7 @@ def create_app() -> FastAPI:
 
     @app.get(f"{API_PREFIX}/me", response_model=MeOut)
     async def me(user: User = Depends(current_user)) -> MeOut:
-        from gosha.cover_letter import load_cv
+        from gosha.cover_letter import has_cv
 
         return MeOut(
             id=user.id,
@@ -140,7 +140,7 @@ def create_app() -> FastAPI:
             avatar_url=user.avatar_url,
             tier=user.tier,
             in_guild=user.in_guild,
-            has_cv=load_cv(user.id) is not None,
+            has_cv=has_cv(user.id),
             is_admin=is_admin(user),
         )
 

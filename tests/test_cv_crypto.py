@@ -103,6 +103,52 @@ def test_key_rotation_decrypts_with_old_key_and_writes_with_new(monkeypatch):
     assert storage.load_cv(9) == CV + " v2"
 
 
+def test_startup_reencrypts_old_key_cvs_so_the_old_key_can_go(monkeypatch, cv_dir):
+    """Rotation used to rely on every CV being re-saved before the old key
+    was dropped; nothing re-saves, so dropping it lost every untouched CV."""
+    old = Fernet.generate_key().decode()
+    new = Fernet.generate_key().decode()
+    monkeypatch.setenv(cv_crypto.KEY_ENV, old)
+    storage.save_cv(12, CV)
+    storage.save_cv(13, CV + " #13")
+    os.utime(cv_dir / "12.enc", (1_600_000_000, 1_600_000_000))
+
+    monkeypatch.setenv(cv_crypto.KEY_ENV, f"{new},{old}")
+    storage.save_cv(13, CV + " #13 v2")  # already under the new key
+    assert storage.reencrypt_old_key_cvs() == 1
+    assert storage.reencrypt_old_key_cvs() == 0  # idempotent
+
+    monkeypatch.setenv(cv_crypto.KEY_ENV, new)  # old key retired
+    assert storage.load_cv(12) == CV
+    assert storage.load_cv(13) == CV + " #13 v2"
+    assert (cv_dir / "12.enc").stat().st_mtime == 1_600_000_000  # upload time kept
+
+
+def test_reencrypt_is_a_noop_with_a_single_key(key, cv_dir):
+    storage.save_cv(14, CV)
+    before = (cv_dir / "14.enc").read_bytes()
+    assert storage.reencrypt_old_key_cvs() == 0
+    assert (cv_dir / "14.enc").read_bytes() == before
+
+
+def test_one_unreadable_legacy_file_does_not_stop_startup(monkeypatch, cv_dir):
+    cv_dir.mkdir(parents=True)
+    (cv_dir / "15.txt").write_text(CV, encoding="utf-8")
+    (cv_dir / "16.txt").write_bytes(b"\xff\xfe not utf-8 \xc3")
+    monkeypatch.setenv(cv_crypto.KEY_ENV, Fernet.generate_key().decode())
+
+    assert storage.encrypt_plaintext_cvs() == 1
+    assert (cv_dir / "15.enc").exists() and not (cv_dir / "15.txt").exists()
+    assert (cv_dir / "16.txt").exists()  # left for the owner, not lost
+
+
+def test_has_cv_does_not_need_the_key(monkeypatch, key):
+    storage.save_cv(17, CV)
+    monkeypatch.setenv(cv_crypto.KEY_ENV, Fernet.generate_key().decode())
+    assert storage.has_cv(17) is True
+    assert storage.has_cv(18) is False
+
+
 def test_wrong_key_fails_loudly(monkeypatch, key):
     storage.save_cv(10, CV)
     monkeypatch.setenv(cv_crypto.KEY_ENV, Fernet.generate_key().decode())

@@ -32,10 +32,10 @@ async def main() -> None:
 
     # ── CV storage: refuse plaintext outside dev, encrypt leftovers ──
     from gosha import cv_crypto
-    from gosha.cover_letter import encrypt_plaintext_cvs
+    from gosha.cover_letter import prepare_cv_storage
 
     cv_crypto.require_key_configured()
-    encrypt_plaintext_cvs()
+    prepare_cv_storage()
 
     # ── SSH Tunnels ─────────────────────────────────────────────
     tunnel_mgr = SSHTunnelManager(settings.vps_list)

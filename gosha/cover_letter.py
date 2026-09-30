@@ -138,13 +138,69 @@ def encrypt_plaintext_cvs() -> int:
             continue
         try:
             text = path.read_text(encoding="utf-8")
+            _migrate_plaintext(int(path.stem), text)
         except FileNotFoundError:
             continue
-        _migrate_plaintext(int(path.stem), text)
+        except (OSError, UnicodeDecodeError) as exc:
+            # One unreadable file must not keep both services from booting;
+            # it stays as it is (still readable by load_cv) and is retried
+            # at the next start.
+            log.error("Could not encrypt CV file %s, left as is: %s", path.name, exc)
+            continue
         migrated += 1
     if migrated:
         log.info("Encrypted %d plaintext CV file(s) at rest", migrated)
     return migrated
+
+
+def reencrypt_old_key_cvs() -> int:
+    """Re-encrypt CVs still under an older key in CV_ENCRYPTION_KEY.
+
+    Runs at startup while more than one key is listed (a rotation), so the
+    old key can then be dropped without losing anything. Keeps mtime (the
+    upload time). Returns the number re-encrypted.
+    """
+    if not cv_crypto.has_old_keys() or not CV_DIR.exists():
+        return 0
+    rotated = 0
+    for path in sorted(CV_DIR.glob("*.enc")):
+        if not path.stem.isdigit():
+            continue
+        try:
+            token = path.read_bytes()
+            fresh = cv_crypto.rotate(token)
+            if fresh is None:
+                continue
+            mtime = path.stat().st_mtime
+            if path.read_bytes() != token:
+                continue  # re-uploaded meanwhile: already under the new key
+            _write_atomic(path, fresh)
+            os.utime(path, (mtime, mtime))
+        except FileNotFoundError:
+            continue
+        except (OSError, cv_crypto.CvKeyError) as exc:
+            log.error("Could not re-encrypt CV file %s: %s", path.name, exc)
+            continue
+        rotated += 1
+    remaining = "" if rotated == 0 else " — the old key can be dropped once this reads 0"
+    log.info("CV key rotation: re-encrypted %d CV file(s)%s", rotated, remaining)
+    return rotated
+
+
+def prepare_cv_storage() -> None:
+    """Startup pass for both services: encrypt leftovers, finish rotations."""
+    encrypt_plaintext_cvs()
+    reencrypt_old_key_cvs()
+
+
+def has_cv(user_id: int) -> bool:
+    """Whether a CV is stored, without decrypting it.
+
+    For "does this user have a CV?" checks (/me, the bot's prompts): a
+    wrong or missing key should break reading the CV, not every page that
+    merely shows whether one exists.
+    """
+    return _encrypted_path(user_id).exists() or _plaintext_path(user_id).exists()
 
 
 def stored_cv_user_ids() -> list[int]:
