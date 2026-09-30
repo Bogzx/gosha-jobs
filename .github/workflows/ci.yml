@@ -139,6 +139,8 @@ jobs:
     environment: production
     steps:
       - name: Deploy to VPS over SSH
+        env:
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -151,13 +153,18 @@ jobs:
           #
           # Populate DEPLOY_KNOWN_HOSTS once, from the VPS itself:
           #   ssh-keyscan -H <host> | grep ssh-ed25519
-          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-          if [ ! -s ~/.ssh/known_hosts ]; then
-            echo "DEPLOY_KNOWN_HOSTS secret is empty — refusing to deploy" >&2
-            echo "Set it with: ssh-keyscan -H <DEPLOY_HOST>" >&2
+          #
+          # Check the secret itself, not the file: printf '%s\n' of an empty
+          # secret still writes a newline, so a file-size test always passed
+          # and an unset secret surfaced as "Host key verification failed"
+          # (which is how the 2026-08-17 deploy of 0124b30 died).
+          if [ -z "${KNOWN_HOSTS//[[:space:]]/}" ]; then
+            echo "::error::DEPLOY_KNOWN_HOSTS secret is empty — refusing to deploy." >&2
+            echo "Set it with: ssh-keyscan -H <DEPLOY_HOST> | grep ssh-ed25519" >&2
             exit 1
           fi
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
             -i ~/.ssh/deploy_key \
