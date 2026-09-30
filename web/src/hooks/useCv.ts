@@ -29,7 +29,10 @@ function useInvalidateCv() {
 export function useUploadCv() {
   const invalidate = useInvalidateCv()
   return useMutation({
-    mutationFn: (file: File) => api.putFile<CvInfo>('/cv', file),
+    // `consent` is the checkbox; the API refuses (consent_required) an
+    // upload without it unless consent is already on record.
+    mutationFn: ({ file, consent }: { file: File; consent: boolean }) =>
+      api.putFile<CvInfo>('/cv', file, { consent: String(consent) }),
     onSuccess: invalidate,
   })
 }

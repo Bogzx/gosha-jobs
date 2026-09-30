@@ -45,6 +45,7 @@ _DOMAIN_STATUS = {
     "invalid_request": 422,
     "invalid_status": 422,
     "no_cv": 422,
+    "consent_required": 422,
     "file_too_large": 413,
     "generation_failed": 502,
 }

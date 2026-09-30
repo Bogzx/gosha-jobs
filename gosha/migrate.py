@@ -45,6 +45,7 @@ async def run_migrations(conn: AsyncConnection) -> None:
             "last_login_at": dt_type,
             "in_guild": f"BOOLEAN NOT NULL DEFAULT {false_lit}",
             "cv_embedding": blob_type,
+            "cv_consent_at": dt_type,
         })
 
     if "jobs" in existing_tables:

@@ -134,6 +134,12 @@ class User(Base):
     in_guild: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # float32 bytes of the user's CV embedding (see gosha/embeddings.py)
     cv_embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # When the user agreed to CV storage/processing (web checkbox or the
+    # bot's consent option). Recorded server-side because consent has to be
+    # provable; cleared when the CV is deleted, which is how it is withdrawn.
+    cv_consent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     subscriptions: Mapped[list[Subscription]] = relationship(
         back_populates="user", cascade="all, delete-orphan", lazy="selectin"

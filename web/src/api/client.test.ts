@@ -31,6 +31,18 @@ describe('api client', () => {
     expect(JSON.parse(init.body)).toEqual({ path: '/feed' })
   })
 
+  it('sends the file and extra form fields on putFile', async () => {
+    const fn = mockFetch(200, { has_cv: true })
+    const file = new File(['Python'], 'cv.txt', { type: 'text/plain' })
+    await api.putFile('/cv', file, { consent: 'true' })
+    const [url, init] = fn.mock.calls[0]
+    expect(url).toBe('/api/v1/cv')
+    expect(init.method).toBe('PUT')
+    const form = init.body as FormData
+    expect((form.get('file') as File).name).toBe('cv.txt')
+    expect(form.get('consent')).toBe('true')
+  })
+
   it('parses the error envelope into ApiError', async () => {
     mockFetch(403, { error: { code: 'tier_limit', message: 'Plan limit hit.' } })
     const err = (await api.get('/subscriptions').catch((e: unknown) => e)) as ApiError

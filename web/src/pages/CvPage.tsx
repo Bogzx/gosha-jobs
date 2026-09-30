@@ -4,6 +4,7 @@ import { Copy, FileCheck2, Loader2, Trash2 } from 'lucide-react'
 import { CvDropzone } from '../components/CvDropzone'
 import { useToast } from '../components/Toast'
 import { useCoverLetters, useCv, useDeleteCv } from '../hooks/useCv'
+import { forgetConsent } from '../lib/cvConsent'
 import { timeAgo } from '../lib/format'
 
 export default function CvPage() {
@@ -60,7 +61,10 @@ export default function CvPage() {
                 onClick={() => {
                   if (window.confirm('Delete your CV? This also deletes every cover letter generated from it, and match scores stop working. This cannot be undone.')) {
                     deleteCv.mutate(undefined, {
-                      onSuccess: () => toast({ message: 'CV deleted' }),
+                      onSuccess: () => {
+                        forgetConsent()
+                        toast({ message: 'CV deleted' })
+                      },
                     })
                   }
                 }}

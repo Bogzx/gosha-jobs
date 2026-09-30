@@ -25,10 +25,14 @@ def fake_encoder(monkeypatch):
     )
 
 
-def _upload(client, cookies, filename="cv.txt", content=b"Python and React skills"):
+def _upload(
+    client, cookies, filename="cv.txt", content=b"Python and React skills",
+    consent: bool | None = True,
+):
     return client.put(
         "/api/v1/cv",
         files={"file": (filename, content, "text/plain")},
+        data={} if consent is None else {"consent": str(consent).lower()},
         cookies=cookies,
     )
 
@@ -169,3 +173,51 @@ async def test_cover_letter_quota(client, web_user, session, monkeypatch):
     resp = await client.post(f"/api/v1/jobs/{new_job.id}/cover-letter", cookies=cookies)
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "quota_exceeded"
+
+
+# ── consent ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_upload_without_consent_is_refused_and_stores_nothing(
+    client, web_user, session, cv_dir,
+):
+    user, cookies = web_user
+
+    resp = await _upload(client, cookies, consent=None)
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "consent_required"
+    assert not (cv_dir / f"{user.id}.txt").exists()
+    await session.refresh(user)
+    assert user.cv_consent_at is None
+    assert user.cv_embedding is None
+
+
+@pytest.mark.asyncio
+async def test_consent_is_recorded_server_side_once(client, web_user, session):
+    user, cookies = web_user
+
+    assert (await _upload(client, cookies)).status_code == 200
+    await session.refresh(user)
+    first = user.cv_consent_at
+    assert first is not None
+
+    # A re-upload does not need the flag again and keeps the original time.
+    assert (await _upload(client, cookies, consent=None)).status_code == 200
+    await session.refresh(user)
+    assert user.cv_consent_at == first
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_cv_withdraws_consent(client, web_user, session):
+    user, cookies = web_user
+    assert (await _upload(client, cookies)).status_code == 200
+
+    assert (await client.delete("/api/v1/cv", cookies=cookies)).status_code == 200
+    await session.refresh(user)
+    assert user.cv_consent_at is None
+
+    resp = await _upload(client, cookies, consent=None)
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "consent_required"

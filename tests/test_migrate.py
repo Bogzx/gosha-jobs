@@ -243,7 +243,7 @@ async def test_migration_adds_web_platform_columns(old_db):
             for table in ("users", "jobs", "subscriptions", "applications")
         }
 
-    for col in ("username", "avatar_url", "in_guild", "cv_embedding", "last_login_at"):
+    for col in ("username", "avatar_url", "in_guild", "cv_embedding", "cv_consent_at", "last_login_at"):
         assert col in cols["users"], f"users.{col} missing"
     for col in ("posted_at", "embedding"):
         assert col in cols["jobs"], f"jobs.{col} missing"

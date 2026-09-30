@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, UploadFile
+from fastapi import APIRouter, Depends, Form, UploadFile
 
 from gosha.api.deps import current_user
 from gosha.api.schemas import OkOut
@@ -43,9 +43,17 @@ async def get_cv(user: User = Depends(current_user)) -> dict:
 
 
 @router.put("")
-async def upload_cv(file: UploadFile, user: User = Depends(current_user)) -> dict:
+async def upload_cv(
+    file: UploadFile,
+    # The consent checkbox's state. Required (422 consent_required) unless
+    # consent is already on record for this user — see services/cv.py.
+    consent: bool = Form(False),
+    user: User = Depends(current_user),
+) -> dict:
     content = await read_capped(file, service.MAX_CV_BYTES)
-    return await service.upload_cv(user.id, file.filename or "cv", content)
+    return await service.upload_cv(
+        user.id, file.filename or "cv", content, consent=consent,
+    )
 
 
 @router.delete("", response_model=OkOut)
