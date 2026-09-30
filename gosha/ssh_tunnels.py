@@ -12,6 +12,24 @@ from gosha.config import VPSConfig
 log = logging.getLogger(__name__)
 
 
+def ssh_command(ssh_bin: str, vps: VPSConfig) -> list[str]:
+    """The ssh invocation that opens a SOCKS5 tunnel to one VPS."""
+    return [
+        ssh_bin,
+        "-i", vps.key_path,
+        "-p", str(vps.ssh_port),
+        "-D", str(vps.local_port),
+        "-N", "-q",
+        "-o", "StrictHostKeyChecking=accept-new",
+        # ~/.ssh is mounted read-only; don't try to rewrite known_hosts.
+        "-o", "UpdateHostKeys=no",
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=3",
+        "-o", "ExitOnForwardFailure=yes",
+        f"{vps.user}@{vps.host}",
+    ]
+
+
 @dataclass
 class _Tunnel:
     """Internal bookkeeping for a single tunnel."""
@@ -33,20 +51,10 @@ class SSHTunnelManager:
             raise RuntimeError("ssh binary not found — install openssh-client")
 
         for t in self._tunnels:
-            cmd = [
-                ssh_bin,
-                "-i", t.vps.key_path,
-                "-D", str(t.vps.local_port),
-                "-N", "-q",
-                "-o", "StrictHostKeyChecking=accept-new",
-                "-o", "ServerAliveInterval=30",
-                "-o", "ServerAliveCountMax=3",
-                "-o", "ExitOnForwardFailure=yes",
-                f"{t.vps.user}@{t.vps.host}",
-            ]
+            cmd = ssh_command(ssh_bin, t.vps)
             log.info(
-                "Opening tunnel %s@%s -> 127.0.0.1:%d",
-                t.vps.user, t.vps.host, t.vps.local_port,
+                "Opening tunnel %s@%s:%d -> 127.0.0.1:%d",
+                t.vps.user, t.vps.host, t.vps.ssh_port, t.vps.local_port,
             )
             t.process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -101,17 +109,7 @@ class SSHTunnelManager:
                     t.vps.host,
                     t.process.returncode,
                 )
-            cmd = [
-                ssh_bin,
-                "-i", t.vps.key_path,
-                "-D", str(t.vps.local_port),
-                "-N", "-q",
-                "-o", "StrictHostKeyChecking=accept-new",
-                "-o", "ServerAliveInterval=30",
-                "-o", "ServerAliveCountMax=3",
-                "-o", "ExitOnForwardFailure=yes",
-                f"{t.vps.user}@{t.vps.host}",
-            ]
+            cmd = ssh_command(ssh_bin, t.vps)
             t.process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.DEVNULL,

@@ -765,6 +765,10 @@ class SubscriptionCog(commands.Cog):
                 tunnel_str = f"{len(proxies)}/{total_tunnels} active"
             else:
                 tunnel_str = "No proxies configured"
+            from gosha.scraper import scrape_direct_enabled
+
+            if scrape_direct_enabled():
+                tunnel_str += " + direct (server IP)"
 
             # Last scrape
             if self.bot._last_scrape_at > 0:

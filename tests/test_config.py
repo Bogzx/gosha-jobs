@@ -104,3 +104,36 @@ def test_cookie_secure_can_be_set_explicitly(monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://gosha.example")
     monkeypatch.setenv("COOKIE_SECURE", "false")
     assert load_web_settings().cookie_secure is False
+
+
+def test_vps_ssh_port_parsed_and_validated(monkeypatch):
+    from gosha.config import _parse_vps_list
+
+    for i in range(1, 10):
+        monkeypatch.delenv(f"VPS_{i}_HOST", raising=False)
+    monkeypatch.setenv("VPS_1_HOST", "100.110.49.82")
+    monkeypatch.setenv("VPS_1_USER", "gosha-proxy")
+    monkeypatch.setenv("VPS_1_PORT", "1080")
+    monkeypatch.setenv("VPS_1_SSH_PORT", "2255")
+    monkeypatch.setenv("VPS_2_HOST", "10.0.0.2")
+    monkeypatch.setenv("VPS_2_SSH_PORT", "99999")  # invalid → skipped
+    monkeypatch.setenv("VPS_3_HOST", "10.0.0.3")   # default ssh port
+
+    vps = _parse_vps_list()
+    assert [(v.host, v.ssh_port) for v in vps] == [("100.110.49.82", 2255), ("10.0.0.3", 22)]
+    assert vps[0].user == "gosha-proxy" and vps[0].local_port == 1080
+
+
+def test_tunnel_command_uses_ssh_port_and_never_rewrites_known_hosts():
+    from gosha.config import VPSConfig
+    from gosha.ssh_tunnels import ssh_command
+
+    cmd = ssh_command(
+        "/usr/bin/ssh",
+        VPSConfig(host="100.110.49.82", user="gosha-proxy", local_port=1080,
+                  key_path="/home/app/.ssh/ap1.key", ssh_port=2255),
+    )
+    assert cmd[cmd.index("-p") + 1] == "2255"
+    assert cmd[cmd.index("-D") + 1] == "1080"
+    assert "UpdateHostKeys=no" in cmd
+    assert cmd[-1] == "gosha-proxy@100.110.49.82"

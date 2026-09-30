@@ -25,6 +25,7 @@ class VPSConfig:
     user: str
     local_port: int
     key_path: str = "/home/app/.ssh/id_rsa"
+    ssh_port: int = 22  # port of the remote sshd (VPS_n_SSH_PORT)
 
 
 @dataclass(frozen=True)
@@ -152,7 +153,9 @@ _IP_RE = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
 _USERNAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_.-]*$")
 
 
-def _validate_vps_config(index: int, host: str, user: str, port: int, key_path: str) -> bool:
+def _validate_vps_config(
+    index: int, host: str, user: str, port: int, key_path: str, ssh_port: int = 22
+) -> bool:
     """Validate VPS config values. Returns True if valid, logs warnings if not."""
     valid = True
 
@@ -172,6 +175,10 @@ def _validate_vps_config(index: int, host: str, user: str, port: int, key_path: 
         log.warning("VPS_%d_KEY=%r looks suspicious — skipping", index, key_path)
         valid = False
 
+    if not (1 <= ssh_port <= 65535):
+        log.warning("VPS_%d_SSH_PORT=%d is not a valid port — skipping", index, ssh_port)
+        valid = False
+
     return valid
 
 
@@ -186,12 +193,20 @@ def _parse_vps_list() -> list[VPSConfig]:
         user = os.getenv(f"VPS_{i}_USER", "ubuntu")
         local_port = int(os.getenv(f"VPS_{i}_PORT", str(1079 + i)))
         key_path = os.getenv(f"VPS_{i}_KEY", global_key)
+        try:
+            ssh_port = int(os.getenv(f"VPS_{i}_SSH_PORT", "22"))
+        except ValueError:
+            log.warning("VPS_%d_SSH_PORT is not a number — skipping", i)
+            continue
 
-        if not _validate_vps_config(i, host, user, local_port, key_path):
+        if not _validate_vps_config(i, host, user, local_port, key_path, ssh_port):
             continue
 
         configs.append(
-            VPSConfig(host=host, user=user, local_port=local_port, key_path=key_path)
+            VPSConfig(
+                host=host, user=user, local_port=local_port,
+                key_path=key_path, ssh_port=ssh_port,
+            )
         )
     return configs
 
