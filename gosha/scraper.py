@@ -25,6 +25,85 @@ RESULTS_PER_TERM = 30
 DELAY_BETWEEN_SEARCHES = 2  # seconds
 
 
+def _jobspy_country(name: str) -> object | None:
+    """JobSpy's Country enum member for a country name, or None."""
+    try:
+        from jobspy.model import Country
+    except ImportError:  # pragma: no cover - layout of an unpinned jobspy
+        return None
+    try:
+        country = Country.from_string(name)
+    except ValueError:
+        return None
+    return None if country.name == "WORLDWIDE" else country
+
+
+def indeed_country(location: str) -> str | None:
+    """`country_indeed` for a normalised 'City, Country' search location.
+
+    JobSpy picks the Indeed domain from `country_indeed`, which defaults to
+    "usa" — so without it "Cluj-Napoca, Romania" was searched on indeed.com
+    and returned nothing, while ro.indeed.com has the postings. None for
+    locations that name no country JobSpy knows ("Remote", "Europe"), which
+    keeps JobSpy's default.
+    """
+    parts = [p.strip() for p in location.split(",") if p.strip()]
+    for candidate in (parts[-1:] if parts else []) + [location.strip()]:
+        if _jobspy_country(candidate) is not None:
+            return candidate.lower()
+    return None
+
+
+def glassdoor_country(location: str) -> str | None:
+    """Like indeed_country, but only where JobSpy has a Glassdoor domain.
+
+    Glassdoor derives its domain from the same argument and raises for
+    countries it does not serve (Romania among them); those keep the
+    glassdoor.com default they have always used.
+    """
+    name = indeed_country(location)
+    country = _jobspy_country(name) if name else None
+    if country is None:
+        return None
+    try:
+        country.get_glassdoor_url()  # type: ignore[attr-defined]
+    except Exception:
+        return None
+    return name
+
+
+def jobspy_kwargs(
+    boards: list[str],
+    search_term: str,
+    location: str,
+    max_age_days: int,
+    proxy: str | None,
+    country: str | None,
+) -> dict:
+    """Keyword arguments for one jobspy.scrape_jobs call.
+
+    One builder for every call site (and the scraper smoke), because
+    scrape_jobs takes **kwargs: a misspelt or renamed argument is dropped
+    in silence. That is how `proxy=` — renamed `proxies=` upstream — sent
+    every JobSpy request direct instead of through the SSH tunnels.
+    tests/test_scraper_jobspy.py checks these names against the installed
+    signature.
+    """
+    kwargs: dict = {
+        "site_name": boards,
+        "search_term": search_term,
+        "location": location,
+        "results_wanted": RESULTS_PER_TERM,
+        "hours_old": max_age_days * 24,
+        "proxies": proxy,
+    }
+    if country:
+        kwargs["country_indeed"] = country
+    if "linkedin" in boards:
+        kwargs["linkedin_fetch_description"] = True
+    return kwargs
+
+
 async def _scrape_single(
     tunnel_manager: SSHTunnelManager,
     search_term: str,
@@ -63,13 +142,10 @@ async def _scrape_single(
                     None,
                     partial(
                         scrape_jobs,
-                        site_name=main_boards,
-                        search_term=search_term,
-                        location=location,
-                        results_wanted=RESULTS_PER_TERM,
-                        hours_old=max_age_days * 24,
-                        proxy=proxy,
-                        linkedin_fetch_description=True,
+                        **jobspy_kwargs(
+                            main_boards, search_term, location, max_age_days,
+                            proxy, indeed_country(location),
+                        ),
                     ),
                 )
                 frames.append(df_main)
@@ -80,12 +156,10 @@ async def _scrape_single(
                         None,
                         partial(
                             scrape_jobs,
-                            site_name=gd_boards,
-                            search_term=search_term,
-                            location=gd_location,
-                            results_wanted=RESULTS_PER_TERM,
-                            hours_old=max_age_days * 24,
-                            proxy=proxy,
+                            **jobspy_kwargs(
+                                gd_boards, search_term, gd_location,
+                                max_age_days, proxy, glassdoor_country(location),
+                            ),
                         ),
                     )
                     frames.append(df_gd)
