@@ -46,12 +46,14 @@ async def run_migrations(conn: AsyncConnection) -> None:
             "in_guild": f"BOOLEAN NOT NULL DEFAULT {false_lit}",
             "cv_embedding": blob_type,
             "cv_consent_at": dt_type,
+            "cv_embedding_model": "VARCHAR(128)",
         })
 
     if "jobs" in existing_tables:
         await _add_missing_columns(conn, "jobs", {
             "posted_at": dt_type,
             "embedding": blob_type,
+            "embedding_model": "VARCHAR(128)",
             "dedup_group_id": "INTEGER",
             "last_checked_at": dt_type,
             # Salary normalisation (gosha/salary.py). Backfilled by

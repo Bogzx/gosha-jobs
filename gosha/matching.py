@@ -21,7 +21,8 @@ log = logging.getLogger(__name__)
 # it made the match stage compare vectors from two different models —
 # silently, when the dimensions happen to agree (768 for both mpnet
 # variants). Changing it still means re-embedding every stored vector.
-DEFAULT_MODEL = os.getenv("SEMANTIC_MODEL", "all-mpnet-base-v2")
+LEGACY_MODEL = "all-mpnet-base-v2"
+DEFAULT_MODEL = os.getenv("SEMANTIC_MODEL", LEGACY_MODEL)
 
 # Lazy-loaded model singleton
 _model: Any = None

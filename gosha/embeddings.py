@@ -11,8 +11,9 @@ import asyncio
 import logging
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
+from gosha import matching
 from gosha.database import get_session
 from gosha.matching import build_job_text
 from gosha.matching import encode_texts as _encode_texts
@@ -46,6 +47,49 @@ def encode_texts(texts: list[str]) -> np.ndarray | None:
     return _encode_texts(texts)
 
 
+def encode_with_model(texts: list[str], model_name: str) -> np.ndarray | None:
+    """Encode with an explicit model (the re-embed CLI's target)."""
+    return _encode_texts(texts, model_name)
+
+
+# ── Which model made a stored vector ────────────────────────────────────
+#
+# Vectors from different models live in different spaces; a cosine between
+# them is a number with no meaning. Every stored vector therefore records
+# its model (jobs.embedding_model, users.cv_embedding_model; NULL = rows
+# written before the column existed, i.e. matching.LEGACY_MODEL), and
+# readers only use vectors from the model currently configured. After a
+# SEMANTIC_MODEL change, stale job vectors are re-encoded on the fly for
+# delivery, left out of the feed, and replaced by the hourly backfill or,
+# much faster, scripts/reembed.py.
+
+
+def current_model() -> str:
+    return matching.DEFAULT_MODEL
+
+
+def is_current(model: str | None) -> bool:
+    return (model or matching.LEGACY_MODEL) == current_model()
+
+
+def current_model_clause(column):
+    """SQL filter: `column` names the currently configured model."""
+    if current_model() == matching.LEGACY_MODEL:
+        return or_(column.is_(None), column == current_model())
+    return column == current_model()
+
+
+def stale_model_clause(column, model: str | None = None):
+    """SQL filter: `column` names some model other than `model` (default:
+    the configured one). Spelled out rather than ~current_model_clause():
+    in SQL, NOT (NULL = 'x') is NULL, not true, so negating would silently
+    skip every legacy (NULL) row."""
+    model = model or current_model()
+    if model == matching.LEGACY_MODEL:
+        return column.isnot(None) & (column != model)
+    return column.is_(None) | (column != model)
+
+
 def vec_to_bytes(vec: np.ndarray) -> bytes:
     return np.asarray(vec, dtype=np.float32).tobytes()
 
@@ -55,14 +99,22 @@ def bytes_to_vec(raw: bytes) -> np.ndarray:
 
 
 async def embed_new_jobs(limit: int = DEFAULT_BATCH) -> int:
-    """Embed up to `limit` active jobs that have no embedding yet.
+    """Embed up to `limit` active jobs with no current-model embedding.
 
-    Returns the number of jobs embedded (0 when the model is unavailable).
+    Covers new jobs and, after a SEMANTIC_MODEL change, jobs embedded by
+    the previous model. Returns the number of jobs embedded (0 when the
+    model is unavailable).
     """
     async with get_session() as session:
         result = await session.execute(
             select(Job)
-            .where(Job.embedding.is_(None), Job.is_active.is_(True))
+            .where(
+                Job.is_active.is_(True),
+                or_(
+                    Job.embedding.is_(None),
+                    stale_model_clause(Job.embedding_model),
+                ),
+            )
             .limit(limit)
         )
         jobs = list(result.scalars().all())
@@ -78,6 +130,7 @@ async def embed_new_jobs(limit: int = DEFAULT_BATCH) -> int:
 
         for job, vec in zip(jobs, vectors):
             job.embedding = vec_to_bytes(vec)
+            job.embedding_model = current_model()
         await session.commit()
 
     log.info("Embedded %d jobs", len(jobs))
@@ -95,7 +148,10 @@ def score_jobs_against_query(query_vec: np.ndarray, jobs: list[Job]) -> list[flo
         return []
 
     vectors: list[np.ndarray | None] = [
-        bytes_to_vec(job.embedding) if job.embedding else None for job in jobs
+        bytes_to_vec(job.embedding)
+        if job.embedding and is_current(job.embedding_model)
+        else None
+        for job in jobs
     ]
 
     missing = [i for i, vec in enumerate(vectors) if vec is None]
@@ -152,7 +208,7 @@ def chunk_cv_text(
     return chunks
 
 
-def embed_long_text(text: str) -> np.ndarray | None:
+def embed_long_text(text: str, encode=None) -> np.ndarray | None:
     """Embed a document longer than the model's window, as one vector.
 
     Every window is encoded, then mean-pooled and re-normalised. Mean
@@ -165,7 +221,7 @@ def embed_long_text(text: str) -> np.ndarray | None:
     if not chunks:
         return None
 
-    vectors = encode_texts(chunks)
+    vectors = (encode or encode_texts)(chunks)
     if vectors is None:
         return None
 
@@ -193,6 +249,7 @@ async def embed_user_cv(user_id: int, cv_text: str) -> bool:
         if user is None:
             return False
         user.cv_embedding = vec_to_bytes(pooled)
+        user.cv_embedding_model = current_model()
         await session.commit()
     return True
 
@@ -203,4 +260,5 @@ async def clear_user_cv_embedding(user_id: int) -> None:
         user = await session.get(User, user_id)
         if user is not None:
             user.cv_embedding = None
+            user.cv_embedding_model = None
             await session.commit()
