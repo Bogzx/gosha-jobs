@@ -3,18 +3,24 @@
 Endpoint (probed 2026-06-10):
 GET https://api.bestjobs.eu/v1/jobs?keyword=<kw>&location=<city-slug>
 Location slugs look like "cluj-napoca-romania". Salary strings are monthly
-EUR. The list payload carries no description.
+EUR. The list payload carries no description, so the detail page is
+fetched for each result (gosha/scrapers/details.py: capped, cached): it is
+a Next.js page whose __NEXT_DATA__ JSON holds props.pageProps.job with the
+HTML description and the employer name (probed 2026-09-30).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from typing import Any
 
 import httpx
 
 from gosha.filters import normalize_location
 from gosha.scrapers.base import DEFAULT_HEADERS, HTTP_TIMEOUT, RawJob, SearchQuery
+from gosha.scrapers.details import fetch_details, html_to_text
 from gosha.scrapers.salary import parse_salary_range
 
 log = logging.getLogger(__name__)
@@ -22,6 +28,43 @@ log = logging.getLogger(__name__)
 API_URL = "https://api.bestjobs.eu/v1/jobs"
 JOB_URL_TEMPLATE = "https://www.bestjobs.eu/ro/loc-de-munca/{slug}"
 MAX_RESULTS = 100
+# Network detail fetches per search (cached ones are free). The first
+# cycle after a restart fills the cache; later cycles fetch only new jobs.
+MAX_DETAIL_FETCHES = 20
+
+_NEXT_DATA_RE = re.compile(
+    r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL,
+)
+
+
+def _extract_detail(page: str) -> dict[str, Any]:
+    """{description, company} from a job page's __NEXT_DATA__."""
+    match = _NEXT_DATA_RE.search(page)
+    if not match:
+        return {}
+    job = (
+        json.loads(match.group(1)).get("props", {}).get("pageProps", {}).get("job")
+        or {}
+    )
+    detail: dict[str, Any] = {}
+    description = html_to_text(job.get("description"))
+    if description:
+        detail["description"] = description
+    employer = (job.get("employer") or {}).get("employerName")
+    if employer:
+        detail["company"] = str(employer).strip()
+    return detail
+
+
+def _apply_details(jobs: list[RawJob], details: dict[str, dict[str, Any]]) -> None:
+    for job in jobs:
+        detail = details.get(job.url) or {}
+        if detail.get("description"):
+            job.description = detail["description"]
+        # Recruiter-posted jobs have an empty companyName in the list
+        # payload; the page sometimes names the employer.
+        if job.company == "Unknown" and detail.get("company"):
+            job.company = detail["company"]
 
 
 def location_to_slug(location: str) -> str:
@@ -85,7 +128,12 @@ class BestJobsScraper:
             ) as client:
                 resp = await client.get(API_URL, params=params)
                 resp.raise_for_status()
-                return _parse(resp.json(), query)
+                jobs = _parse(resp.json(), query)
+                details = await fetch_details(
+                    client, [j.url for j in jobs], _extract_detail, MAX_DETAIL_FETCHES,
+                )
+                _apply_details(jobs, details)
+                return jobs
         except Exception as exc:
             log.warning("BestJobs scrape failed for %r: %s", query.keyword, exc)
             return []
