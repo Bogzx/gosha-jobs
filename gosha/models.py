@@ -63,6 +63,12 @@ class _JSONListMixin:
 
 # ---------------------------------------------------------------------------
 # Tier limits — used by the bot to gate features
+#
+# Enforced: max_subscriptions, max_keywords_per_sub, max_locations_per_sub,
+# cover_letters_per_month, scrape_now_cooldown. The remaining keys
+# (max_applications, semantic_matching, email_delivery, webhook_delivery,
+# priority_delivery) are read by nothing — there is no email digest and no
+# delivery ordering by tier — so plan_lines() never advertises them.
 # ---------------------------------------------------------------------------
 
 TIER_LIMITS: dict[str, dict[str, int | bool]] = {
@@ -108,6 +114,27 @@ TIER_LIMITS: dict[str, dict[str, int | bool]] = {
 def get_tier_limits(tier: str) -> dict[str, int | bool]:
     """Return limits for a given tier, defaulting to free."""
     return TIER_LIMITS.get(tier, TIER_LIMITS["free"])
+
+
+def plan_lines(limits: dict[str, int | bool]) -> list[str]:
+    """What a plan gives, as display lines — enforced limits only.
+
+    /upgrade used to promise Pro "AI semantic matching", "priority
+    delivery" and "email digests". The first is on for every tier, the
+    other two do not exist; this renders only what the code enforces.
+    """
+    def amount(value: int | bool, unit: str) -> str:
+        return f"Unlimited {unit}" if int(value) >= 999 else f"{int(value)} {unit}"
+
+    letters = int(limits["cover_letters_per_month"])
+    return [
+        amount(limits["max_subscriptions"], "saved searches"),
+        f"{int(limits['max_keywords_per_sub'])} keywords and "
+        f"{int(limits['max_locations_per_sub'])} locations per search",
+        "Unlimited AI cover letters" if letters >= 999
+        else f"{letters} AI cover letters a month",
+        f"`/scrape_now` every {max(1, int(limits['scrape_now_cooldown']) // 60)} min",
+    ]
 
 
 class User(Base):
