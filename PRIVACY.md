@@ -47,7 +47,10 @@ selected by `LLM_PROVIDER` / `OPENROUTER_API_KEY` (`gosha/llm.py`).
 This is the single largest disclosure in the product. It happens **only**
 on that explicit action — uploading a CV alone never sends it anywhere.
 The `/privacy` page states this in the user's own words, and the CV upload
-form requires a consent tick that names it.
+form requires a consent tick that names it. The bot's `/upload_cv` asks for
+the same agreement (`consent: True`) before reading the file. Either way the
+server records when consent was given (`users.cv_consent_at`, included in
+the data export) and refuses to store a CV without it.
 
 If you self-host, **this is your disclosure to make**: check the terms of
 whichever provider you configure, particularly whether they retain or train
@@ -55,7 +58,12 @@ on request content.
 
 ## Retention
 
-- **CV text and embedding** — until the user deletes the CV or the account.
+- **CV text and embedding** — until the user deletes the CV or the account,
+  or until they have been inactive for `CV_RETENTION_MONTHS` (default 12):
+  a daily job then deletes the CV, its embedding and the cover letters
+  generated from it (`gosha/services/retention.py`). Deliveries do not
+  count as activity; signing in, uploading, feedback, tracking and
+  searches do.
 - **Cover letters** — until the account is deleted. Deleting a CV now also
   deletes every letter generated from it (`gosha/services/cv.py`); it
   previously left them behind indefinitely.
@@ -71,7 +79,7 @@ delivery history. Rows accumulate. This is an open item.
 | Access / portability (Art. 15, 20) | `GET /api/v1/account/export` — everything we hold, as JSON. Button on the profile page. |
 | Erasure (Art. 17) | `DELETE /api/v1/account?confirm=DELETE` — account row, CV file, cover letters, saved searches, delivery history, tracked applications and the event log. Irreversible. Button on the profile page. |
 | Rectification | Discord profile fields refresh on each sign-in; the CV can be re-uploaded. |
-| Withdraw consent | Delete the CV, or the account. |
+| Withdraw consent | Delete the CV (web or `/delete_cv`), or the account. Deleting the CV also removes its embedding, the cover letters generated from it, and the consent record, so a new upload asks again. |
 
 Erasure is implemented as explicit statements rather than ORM cascades
 (`gosha/services/account.py`) because the `events` table has no foreign
@@ -83,9 +91,11 @@ both.
 These are real and currently unfixed. A privacy notice that omits them is
 worse than none.
 
-1. **CVs are stored unencrypted** as plain text under `data/cvs/`, on a
-   volume mounted read-write into both the `api` and `bot` containers.
-   Encryption at rest is not implemented.
+1. **CV encryption protects the disk, not a compromised container.** CVs
+   are Fernet-encrypted under `data/cvs/` with `CV_ENCRYPTION_KEY`, which
+   both the `api` and `bot` containers hold in their environment. A stolen
+   disk or backup is unreadable without the key; an attacker inside either
+   container can still read CVs.
 2. **No backups exist yet.** See [`docs/BACKUPS.md`](docs/BACKUPS.md). The
    backup service is written but unverified. Until a restore has been
    tested, a disk failure loses everyone's data — which is a privacy

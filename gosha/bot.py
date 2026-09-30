@@ -13,7 +13,7 @@ from discord.ext import commands
 from sqlalchemy import func, select
 
 from gosha.database import get_session
-from gosha.models import Subscription, User
+from gosha.models import Subscription, User, get_tier_limits, plan_lines
 
 if TYPE_CHECKING:
     from gosha.config import Settings
@@ -910,48 +910,34 @@ class SubscriptionCog(commands.Cog):
                 )).scalar_one_or_none()
 
             tier = user.tier if user else "free"
-            limits = user.limits if user else User().limits
+            limits = get_tier_limits(tier)
+
+            def bullets(lines: list[str]) -> str:
+                return "\n".join(f"- {line}" for line in lines)
 
             if tier == "free":
                 embed = discord.Embed(
                     title="GOSHA Free vs Pro",
-                    description="You're on the **Free** plan.",
+                    description=(
+                        "You're on the **Free** plan. Matching, sources and "
+                        "delivery are the same on every plan; Pro raises the "
+                        "limits below."
+                    ),
                     color=discord.Color.gold(),
                 )
                 embed.add_field(
-                    name="Free (current)",
-                    value=(
-                        f"- {limits['max_subscriptions']} subscriptions\n"
-                        f"- {limits['max_applications']} tracked applications\n"
-                        f"- Basic keyword matching\n"
-                        f"- Indeed + LinkedIn + Glassdoor"
-                    ),
+                    name="Free (current)", value=bullets(plan_lines(limits)),
                     inline=True,
                 )
                 embed.add_field(
-                    name="Pro",
-                    value=(
-                        "- **15** subscriptions\n"
-                        "- **Unlimited** application tracking\n"
-                        "- **AI semantic matching** (smarter results)\n"
-                        "- **Priority delivery** (get jobs first)\n"
-                        "- **Email digests**\n"
-                        "- **2 min** scrape cooldown"
-                    ),
+                    name="Pro", value=bullets(plan_lines(get_tier_limits("pro"))),
                     inline=True,
                 )
                 embed.set_footer(text="Contact the bot admin to upgrade.")
             else:
                 embed = discord.Embed(
                     title=f"Your Plan: {tier.capitalize()}",
-                    description=(
-                        f"**Subscriptions:** {limits['max_subscriptions']}\n"
-                        f"**Applications:** {'Unlimited' if int(limits['max_applications']) > 100 else limits['max_applications']}\n"
-                        f"**Semantic matching:** {'Yes' if limits['semantic_matching'] else 'No'}\n"
-                        f"**Priority delivery:** {'Yes' if limits['priority_delivery'] else 'No'}\n"
-                        f"**Email delivery:** {'Yes' if limits['email_delivery'] else 'No'}\n"
-                        f"**Scrape cooldown:** {int(limits['scrape_now_cooldown']) // 60} min"
-                    ),
+                    description=bullets(plan_lines(limits)),
                     color=discord.Color.green(),
                 )
 
@@ -1335,15 +1321,21 @@ class SubscriptionCog(commands.Cog):
 
     @app_commands.command(
         name="upload_cv",
-        description="Upload your CV (PDF, DOCX, or TXT) — used for AI cover letter generation",
+        description="Upload your CV (PDF, DOCX, or TXT) — ranks your job matches and powers cover letters",
     )
     @app_commands.describe(
         file="Your CV file (PDF, DOCX, or TXT — max 5 MB)",
+        consent="True = you agree GOSHA may store your CV (asked once; see /privacy on the website)",
     )
     async def upload_cv(
-        self, interaction: discord.Interaction, file: discord.Attachment,
+        self,
+        interaction: discord.Interaction,
+        file: discord.Attachment,
+        consent: bool | None = None,
     ) -> None:
-        from gosha.cover_letter import extract_text_from_attachment, save_cv
+        from gosha.cover_letter import extract_text_from_attachment
+        from gosha.domain.errors import ConsentRequiredError
+        from gosha.services import cv as cv_service
 
         try:
             # Validate file
@@ -1362,6 +1354,24 @@ class SubscriptionCog(commands.Cog):
                 )
                 return
 
+            async with get_session() as session:
+                user = await self._get_or_create_user(session, interaction.user.id)
+                await session.commit()
+
+            # Consent before the file is read, same rule as the website.
+            try:
+                await cv_service.require_consent(user.id, consent is True)
+            except ConsentRequiredError:
+                await interaction.response.send_message(
+                    "Before I store your CV I need your agreement:\n\n"
+                    f"> {cv_service.CONSENT_TEXT}\n\n"
+                    "Delete it any time with `/delete_cv`. To agree, run "
+                    "`/upload_cv` again with **consent: True**. You only "
+                    "need to do that once.",
+                    ephemeral=True,
+                )
+                return
+
             await interaction.response.defer(ephemeral=True)
 
             # Extract text
@@ -1374,17 +1384,15 @@ class SubscriptionCog(commands.Cog):
                 )
                 return
 
-            # Get or create user
-            async with get_session() as session:
-                user = await self._get_or_create_user(session, interaction.user.id)
-                await session.commit()
-
-            save_cv(user.id, text)
+            # Same write path as the website: stores the text AND refreshes
+            # the embedding that ranks this user's matches.
+            await cv_service.store_cv_text(user.id, text)
             word_count = len(text.split())
 
             await interaction.followup.send(
                 f"CV uploaded! ({word_count} words extracted from `{file.filename}`)\n\n"
-                f"You can now use `/cover_letter <job_id>` to generate tailored cover letters.\n"
+                f"Your job matches are now ranked against it, and you can use "
+                f"`/cover_letter <job_id>` to generate tailored cover letters.\n"
                 f"Use `/my_cv` to preview or delete your stored CV.",
                 ephemeral=True,
             )
@@ -1483,7 +1491,7 @@ class SubscriptionCog(commands.Cog):
         description="Delete your stored CV",
     )
     async def delete_cv_cmd(self, interaction: discord.Interaction) -> None:
-        from gosha.cover_letter import delete_cv
+        from gosha.services.cv import delete_cv
 
         try:
             async with get_session() as session:
@@ -1491,9 +1499,13 @@ class SubscriptionCog(commands.Cog):
                     select(User).where(User.discord_user_id == interaction.user.id)
                 )).scalar_one_or_none()
 
-            if user and delete_cv(user.id):
+            # The service also removes the CV embedding, every cover letter
+            # generated from it, and the recorded consent — the storage-level
+            # delete this used to call left all three behind.
+            if user and await delete_cv(user.id):
                 await interaction.response.send_message(
-                    "CV deleted.", ephemeral=True,
+                    "CV deleted, along with its match vector and any cover "
+                    "letters generated from it.", ephemeral=True,
                 )
             else:
                 await interaction.response.send_message(

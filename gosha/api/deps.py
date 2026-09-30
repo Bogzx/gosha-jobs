@@ -21,11 +21,36 @@ SESSION_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 class ApiError(Exception):
     """Error carrying the machine code + HTTP status for the JSON envelope."""
 
-    def __init__(self, status_code: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.headers = headers or {}
+
+
+def client_ip(request: Request) -> str:
+    """The caller's IP as uvicorn resolved it (trusted proxies only)."""
+    return request.client.host if request.client else "unknown"
+
+
+async def enforce_rate_limit(rule, client: str) -> None:
+    """Raise 429 (with Retry-After) when `client` is over `rule`."""
+    from gosha.ratelimit import hit
+
+    allowed, retry_after = await hit(rule, client)
+    if not allowed:
+        raise ApiError(
+            429, "rate_limited",
+            f"Too many requests — try again in {retry_after} s.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 def serializer() -> URLSafeTimedSerializer:

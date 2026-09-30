@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Loader2, SlidersHorizontal, Sparkles } from 'lucide-react'
 import type { Job, JobFilters } from '../api/types'
@@ -24,18 +24,16 @@ export default function Feed() {
   )
   const total = query.data?.pages[0]?.total
 
-  // Keep the detail pane in sync with fresh data (feedback/applied flags)
-  const selectedFresh = useMemo(
-    () => jobs.find((job) => job.id === selected?.id) ?? selected,
-    [jobs, selected],
-  )
+  // Desktop shows the first job until the user picks one, so the detail
+  // pane is never empty. Derived during render: setting state from an
+  // effect cost an extra render pass on every list change.
+  const [isDesktop] = useState(() => window.matchMedia('(min-width: 1024px)').matches)
 
-  // Auto-select the first job on desktop so the pane is never empty
-  useEffect(() => {
-    if (!selected && jobs.length > 0 && window.matchMedia('(min-width: 1024px)').matches) {
-      setSelected(jobs[0])
-    }
-  }, [jobs, selected])
+  // Keep the detail pane in sync with fresh data (feedback/applied flags)
+  const selectedFresh = useMemo(() => {
+    const current = selected ?? (isDesktop ? (jobs[0] ?? null) : null)
+    return jobs.find((job) => job.id === current?.id) ?? current
+  }, [jobs, selected, isDesktop])
 
   return (
     <div className="lg:grid lg:grid-cols-[230px_minmax(340px,_1fr)_1.2fr] lg:items-start lg:gap-5">

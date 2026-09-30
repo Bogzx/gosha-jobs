@@ -340,3 +340,28 @@ async def test_outbox_roundtrip(session: AsyncSession, sample_user: User):
     assert fetched.sent_at is None
     assert fetched.last_error is None
     assert fetched.created_at is not None
+
+
+def test_plan_lines_advertise_only_enforced_limits():
+    from gosha.models import get_tier_limits, plan_lines
+
+    free = " ".join(plan_lines(get_tier_limits("free")))
+    pro = " ".join(plan_lines(get_tier_limits("pro")))
+
+    assert "5 saved searches" in free
+    assert "5 AI cover letters a month" in free
+    assert "every 5 min" in free
+    assert "15 saved searches" in pro
+    assert "Unlimited AI cover letters" in pro
+    # Nothing implements these; /upgrade used to sell them.
+    for text in (free, pro):
+        lowered = text.lower()
+        assert "email" not in lowered
+        assert "priority" not in lowered
+        assert "semantic" not in lowered
+
+
+def test_plan_lines_unlimited_tier():
+    from gosha.models import get_tier_limits, plan_lines
+
+    assert plan_lines(get_tier_limits("unlimited"))[0] == "Unlimited saved searches"

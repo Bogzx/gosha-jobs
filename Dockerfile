@@ -10,9 +10,12 @@ RUN useradd --create-home --uid 1000 app
 
 WORKDIR /app
 
-COPY requirements.txt .
-# Generous timeout/retries: torch (sentence-transformers) is a large wheel
-RUN pip install --no-cache-dir --timeout 180 --retries 8 -r requirements.txt
+COPY requirements.txt constraints.txt ./
+# Generous timeout/retries: torch (sentence-transformers) is a large wheel.
+# constraints.txt pins every transitive version so a rebuild ships what CI
+# tested instead of whatever PyPI resolves to that day.
+RUN pip install --no-cache-dir --timeout 180 --retries 8 \
+      -r requirements.txt -c constraints.txt
 
 COPY . .
 

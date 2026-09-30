@@ -16,12 +16,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from pathlib import Path
 
 from sqlalchemy import func, insert, select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from gosha.events import Event
-from gosha.models import (
+# Runnable as `python scripts/<name>.py` from anywhere: that puts scripts/
+# on sys.path, not the repo root, so `import gosha` would fail.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from gosha.events import Event  # noqa: E402
+from gosha.models import (  # noqa: E402
     Application,
     Base,
     CoverLetter,

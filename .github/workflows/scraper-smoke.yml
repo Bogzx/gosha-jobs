@@ -19,21 +19,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
       - name: Install runtime deps
         run: |
           python -m pip install -U pip
-          pip install httpx "beautifulsoup4>=4.12" "pandas>=2.0" python-dotenv
+          # Same versions production ships (constraints.txt), so the probe
+          # exercises the JobSpy release the bot actually runs.
+          pip install -c constraints.txt httpx "beautifulsoup4>=4.12" pandas \
+            numpy python-dotenv python-jobspy
 
-      - name: Probe every adapter against the live endpoints
+      - name: Probe every source against the live endpoints
         id: smoke
         run: |
           set -o pipefail
-          python scripts/smoke_scrapers.py 2>&1 | tee smoke.log
+          python scripts/smoke_scrapers.py --result-file smoke-result.json \
+            2>&1 | tee smoke.log
 
       - name: Summarise
         if: always()
@@ -45,48 +49,77 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Open an issue when a source is down
-        if: failure()
-        uses: actions/github-script@v7
+      # One issue, labelled scraper-health, that tracks state instead of
+      # logging every run: opened on the first failure, commented on only
+      # when the SET of failing sources changes, closed on recovery. The
+      # previous version commented on every failing run — 42 identical
+      # comments on #2, all about an import error in this workflow's own
+      # script rather than any job board.
+      - name: Open, update or close the scraper-health issue
+        if: success() || failure()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          OUTCOME: ${{ steps.smoke.outcome }}
         with:
           script: |
             const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+
             let log = '(no log captured)';
             try { log = fs.readFileSync('smoke.log', 'utf8').slice(-6000); } catch (e) {}
+            // No result file means the script died before reporting — a bug
+            // in the harness, not a broken board. Say so.
+            let result = null;
+            try { result = JSON.parse(fs.readFileSync('smoke-result.json', 'utf8')); } catch (e) {}
 
-            const title = 'Scraper smoke failing — at least one source returns no jobs';
-            const existing = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'scraper-health',
-            });
+            const open = (await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'scraper-health',
+            })).data;
+            const issue = open[0];
 
-            const body = [
-              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              '',
-              'A live probe of the scraper adapters failed. Production is most',
-              'likely delivering fewer jobs than it should — check',
-              '`gosha/scrapers/` for the named source.',
-              '',
-              '```',
-              log,
-              '```',
-            ].join('\n');
-
-            if (existing.data.length > 0) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing.data[0].number,
-                body,
-              });
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
-                labels: ['scraper-health'],
-              });
+            if (process.env.OUTCOME === 'success') {
+              if (issue) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: issue.number,
+                  body: `Recovered — every gating source is healthy again (${runUrl}). Closing.`,
+                });
+                await github.rest.issues.update({
+                  owner, repo, issue_number: issue.number, state: 'closed',
+                });
+              }
+              return;
             }
+
+            const harness = result === null;
+            const failing = harness ? [] : result.failing;
+            const signature = harness ? 'harness-error' : failing.join(',');
+            const marker = `<!-- smoke-signature: ${signature} -->`;
+            const headline = harness
+              ? 'The smoke script crashed before reporting any source. This is a bug in `scripts/smoke_scrapers.py` or its dependencies, not a job board.'
+              : `Unhealthy: **${failing.join(', ')}**. Production is most likely delivering fewer jobs than it should — check \`gosha/scrapers/\` (or \`gosha/scraper.py\` for Indeed).`;
+            const body = [marker, `Run: ${runUrl}`, '', headline, '', '```', log, '```'].join('\n');
+
+            if (!issue) {
+              await github.rest.issues.create({
+                owner, repo, body, labels: ['scraper-health'],
+                title: harness
+                  ? 'Scraper smoke harness is broken'
+                  : `Scraper smoke failing — ${failing.join(', ')}`,
+              });
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: issue.number, per_page: 100,
+            });
+            const lastReport = [issue.body, ...comments.map((c) => c.body)]
+              .filter((text) => text && text.includes('<!-- smoke-signature:'))
+              .pop();
+            if (lastReport && lastReport.includes(marker)) {
+              core.info(`Still failing with the same signature (${signature}); not commenting.`);
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: issue.number, body,
+            });

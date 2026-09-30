@@ -5,22 +5,31 @@ on:
     branches: [main, web-platform]
   pull_request:
 
+# Third-party actions are pinned to full commit SHAs (tag in the comment):
+# a tag can be moved, a SHA cannot. Bump SHA and comment together.
+
 jobs:
   backend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
       - name: Install dependencies
         run: |
           python -m pip install -U pip
-          pip install "discord.py>=2.3,<3" "sqlalchemy>=2.0,<3" aiosqlite \
-            "apscheduler>=3.10,<4" "pandas>=2.0" pysocks python-dotenv numpy \
+          # Everything in requirements-dev.txt except sentence-transformers
+          # (torch is several GB and the tests stub the encoder), at the
+          # exact versions the image ships — see constraints.txt.
+          pip install -c constraints.txt "discord.py" "sqlalchemy[asyncio]" \
+            aiosqlite apscheduler pandas pysocks python-dotenv numpy \
             fastapi uvicorn jinja2 python-multipart httpx itsdangerous pymupdf \
-            asyncpg python-jobspy pytest pytest-asyncio respx
+            asyncpg python-jobspy cryptography pytest pytest-asyncio respx
+      - name: Lint
+        # Rules pinned in pyproject.toml [tool.ruff]; ruff pinned in constraints.txt.
+        run: pip install -c constraints.txt ruff && ruff check .
       - name: Run tests
         run: python -m pytest -q
 
@@ -30,13 +39,14 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - run: npx eslint .
       - run: npx vitest run
       - run: npm run build
 
@@ -50,7 +60,7 @@ jobs:
     # the slow job. It is still far cheaper than finding out on the VPS.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Reclaim runner disk
         run: |
@@ -59,10 +69,10 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           df -h /
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build the bot/api image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -75,7 +85,7 @@ jobs:
           cache-to: type=gha,scope=app
 
       - name: Build the web/Caddy image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.web
@@ -86,7 +96,7 @@ jobs:
           cache-to: type=gha,scope=web
 
       - name: Build the backup image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.backup
@@ -113,6 +123,8 @@ jobs:
           os.environ.setdefault('SESSION_SECRET', 'x' * 40)
           os.environ.setdefault('DISCORD_CLIENT_ID', '1')
           os.environ.setdefault('DISCORD_CLIENT_SECRET', '1')
+          from cryptography.fernet import Fernet
+          os.environ.setdefault('CV_ENCRYPTION_KEY', Fernet.generate_key().decode())
           app = create_app()
           # Ask FastAPI what it serves rather than introspecting app.routes.
           # requirements.txt pins no upper bound, so a fresh build resolves
@@ -136,6 +148,8 @@ jobs:
     environment: production
     steps:
       - name: Deploy to VPS over SSH
+        env:
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -148,13 +162,18 @@ jobs:
           #
           # Populate DEPLOY_KNOWN_HOSTS once, from the VPS itself:
           #   ssh-keyscan -H <host> | grep ssh-ed25519
-          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-          if [ ! -s ~/.ssh/known_hosts ]; then
-            echo "DEPLOY_KNOWN_HOSTS secret is empty — refusing to deploy" >&2
-            echo "Set it with: ssh-keyscan -H <DEPLOY_HOST>" >&2
+          #
+          # Check the secret itself, not the file: printf '%s\n' of an empty
+          # secret still writes a newline, so a file-size test always passed
+          # and an unset secret surfaced as "Host key verification failed"
+          # (which is how the 2026-08-17 deploy of 0124b30 died).
+          if [ -z "${KNOWN_HOSTS//[[:space:]]/}" ]; then
+            echo "::error::DEPLOY_KNOWN_HOSTS secret is empty — refusing to deploy." >&2
+            echo "Set it with: ssh-keyscan -H <DEPLOY_HOST> | grep ssh-ed25519" >&2
             exit 1
           fi
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
           ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
             -i ~/.ssh/deploy_key \

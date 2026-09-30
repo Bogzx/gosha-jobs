@@ -26,3 +26,15 @@ Issues = "https://github.com/Bogzx/gosha-jobs/issues"
 
 # pytest configuration deliberately stays in pytest.ini — one source of
 # truth, and pytest.ini wins over this file anyway.
+
+# Lint rules are pinned here so "ruff check ." means the same thing on
+# every machine: ruff 0.16 widened its defaults, and with no config the
+# same clean tree reported 117 findings. This is the classic default set
+# the code base is written against; CI runs it (.github/workflows/ci.yml).
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["web", "migration"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+

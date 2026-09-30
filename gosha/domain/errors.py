@@ -41,6 +41,10 @@ class NoCvError(DomainError):
     code = "no_cv"
 
 
+class ConsentRequiredError(DomainError):
+    code = "consent_required"
+
+
 class FileTooLargeError(DomainError):
     code = "file_too_large"
 

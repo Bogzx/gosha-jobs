@@ -25,10 +25,14 @@ def fake_encoder(monkeypatch):
     )
 
 
-def _upload(client, cookies, filename="cv.txt", content=b"Python and React skills"):
+def _upload(
+    client, cookies, filename="cv.txt", content=b"Python and React skills",
+    consent: bool | None = True,
+):
     return client.put(
         "/api/v1/cv",
         files={"file": (filename, content, "text/plain")},
+        data={} if consent is None else {"consent": str(consent).lower()},
         cookies=cookies,
     )
 
@@ -169,3 +173,103 @@ async def test_cover_letter_quota(client, web_user, session, monkeypatch):
     resp = await client.post(f"/api/v1/jobs/{new_job.id}/cover-letter", cookies=cookies)
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "quota_exceeded"
+
+
+# ── consent ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_upload_without_consent_is_refused_and_stores_nothing(
+    client, web_user, session, cv_dir,
+):
+    user, cookies = web_user
+
+    resp = await _upload(client, cookies, consent=None)
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "consent_required"
+    assert not (cv_dir / f"{user.id}.txt").exists()
+    await session.refresh(user)
+    assert user.cv_consent_at is None
+    assert user.cv_embedding is None
+
+
+@pytest.mark.asyncio
+async def test_consent_is_recorded_server_side_once(client, web_user, session):
+    user, cookies = web_user
+
+    assert (await _upload(client, cookies)).status_code == 200
+    await session.refresh(user)
+    first = user.cv_consent_at
+    assert first is not None
+
+    # A re-upload does not need the flag again and keeps the original time.
+    assert (await _upload(client, cookies, consent=None)).status_code == 200
+    await session.refresh(user)
+    assert user.cv_consent_at == first
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_cv_withdraws_consent(client, web_user, session):
+    user, cookies = web_user
+    assert (await _upload(client, cookies)).status_code == 200
+
+    assert (await client.delete("/api/v1/cv", cookies=cookies)).status_code == 200
+    await session.refresh(user)
+    assert user.cv_consent_at is None
+
+    resp = await _upload(client, cookies, consent=None)
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "consent_required"
+
+
+@pytest.mark.asyncio
+async def test_cv_round_trip_is_encrypted_at_rest(client, web_user, cv_dir, monkeypatch):
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("CV_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    user, cookies = web_user
+
+    assert (await _upload(client, cookies)).status_code == 200
+
+    stored = cv_dir / f"{user.id}.enc"
+    assert stored.exists() and not (cv_dir / f"{user.id}.txt").exists()
+    assert b"React" not in stored.read_bytes()
+    body = (await client.get("/api/v1/cv", cookies=cookies)).json()
+    assert "Python and React" in body["text"]
+    assert body["uploaded_at"]
+
+    export = (await client.get("/api/v1/account/export", cookies=cookies)).json()
+    assert "Python and React" in export["cv_text"]
+
+    assert (await client.delete("/api/v1/cv", cookies=cookies)).status_code == 200
+    assert not stored.exists()
+
+
+@pytest.mark.asyncio
+async def test_cv_upload_is_rate_limited_per_user(client, web_user, monkeypatch):
+    from gosha import ratelimit
+
+    monkeypatch.setattr(ratelimit, "CV_UPLOAD", ratelimit.Limit("cv-upload", 2, 3600))
+    _user, cookies = web_user
+    codes = [(await _upload(client, cookies)).status_code for _ in range(3)]
+    assert codes == [200, 200, 429]
+
+
+@pytest.mark.asyncio
+async def test_wrong_cv_key_does_not_break_me(client, web_user, monkeypatch):
+    """/me is the first call the SPA makes; with a wrong CV_ENCRYPTION_KEY it
+    used to decrypt the CV just to say has_cv, and 500 for every CV holder."""
+    from cryptography.fernet import Fernet
+
+    from gosha import cv_crypto
+
+    user, cookies = web_user
+    monkeypatch.setenv(cv_crypto.KEY_ENV, Fernet.generate_key().decode())
+    cl_mod.save_cv(user.id, "Python and React skills")
+    monkeypatch.setenv(cv_crypto.KEY_ENV, Fernet.generate_key().decode())
+
+    resp = await client.get("/api/v1/me", cookies=cookies)
+
+    assert resp.status_code == 200
+    assert resp.json()["has_cv"] is True

@@ -92,7 +92,12 @@ services:
         "--host", "0.0.0.0", "--port", "8000",
         # Only Caddy talks to this container, and it is the only hop that
         # sets X-Forwarded-For. Trusting "*" let any client forge the
-        # client IP the rate limiter keys on.
+        # client IP the rate limiter (gosha/ratelimit.py) keys on.
+        #
+        # OAuth single-use states, the cross-browser sign-in handoff and the
+        # rate-limit counters live in Postgres, not process memory, so
+        # adding "--workers", "N" here is safe. Mind API_MEM_LIMIT: each
+        # worker that embeds a CV loads its own copy of the model.
         "--proxy-headers", "--forwarded-allow-ips", "${TRUSTED_PROXY_IPS:-172.16.0.0/12}",
       ]
     healthcheck:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -19,6 +19,10 @@ log = logging.getLogger(__name__)
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+
+# pg_advisory_xact_lock key serialising startup schema work (any constant
+# int8 no other code uses; this one is "GOSHA" in ASCII).
+_MIGRATION_LOCK_KEY = 0x474F534841
 
 
 async def init_db(database_url: str) -> AsyncEngine:
@@ -47,6 +51,18 @@ async def init_db(database_url: str) -> AsyncEngine:
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
     async with _engine.begin() as conn:
+        if conn.dialect.name == "postgresql":
+            # The bot and the api both run this at boot, usually at the
+            # same moment. Without a lock the slower one inspects the old
+            # schema, blocks behind the other's ALTER TABLE, then fails with
+            # "column already exists" — which aborts its whole Postgres
+            # transaction, so create_all fails too and the process crashes.
+            # Held until this transaction ends; the second process then
+            # sees the finished schema and does nothing.
+            await conn.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": _MIGRATION_LOCK_KEY},
+            )
         # Run migrations BEFORE create_all so old columns are handled first
         try:
             from gosha.migrate import run_migrations

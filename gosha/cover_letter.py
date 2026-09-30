@@ -1,7 +1,8 @@
 ﻿"""AI cover letter generation + CV text storage.
 
 Flow:
-  1. User uploads CV once (web or /upload_cv) — stored as plain text.
+  1. User uploads CV once (web or /upload_cv) — stored encrypted at rest
+     (gosha/cv_crypto.py; plaintext only in local development).
   2. User requests a cover letter for a specific job.
   3. CV + job details go to the configured LLM provider (gosha/llm.py).
   4. The letter is stored in the DB so it can be retrieved later.
@@ -10,13 +11,15 @@ Flow:
 from __future__ import annotations
 
 import logging
+import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import func, select
 
-from gosha import llm
+from gosha import cv_crypto, llm
 from gosha.database import get_session
 from gosha.models import CoverLetter, Job
 
@@ -37,34 +40,188 @@ CV_CHARS_TO_LLM = 15000
 # ---------------------------------------------------------------------------
 
 
-def get_cv_path(user_id: int) -> Path:
-    """Return the path where a user's CV text is stored."""
+# Layout: <uid>.enc (Fernet token) when a key is configured, <uid>.txt
+# (plaintext) only in development. A .txt found while a key is configured
+# is a pre-encryption file: it is encrypted on first read, and in bulk at
+# startup by encrypt_plaintext_cvs().
+
+
+def _encrypted_path(user_id: int) -> Path:
+    return CV_DIR / f"{user_id}.enc"
+
+
+def _plaintext_path(user_id: int) -> Path:
     return CV_DIR / f"{user_id}.txt"
 
 
-def save_cv(user_id: int, text: str) -> Path:
-    """Save CV text to disk. Creates the directory if needed."""
+def get_cv_path(user_id: int) -> Path:
+    """The file holding a user's CV (its mtime is the upload time)."""
+    encrypted = _encrypted_path(user_id)
+    if encrypted.exists():
+        return encrypted
+    return _plaintext_path(user_id)
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Write via a temp file + rename, owner-readable only.
+
+    Two processes (bot and api) share this directory; a reader must never
+    see half a ciphertext, which would fail authentication.
+    """
     CV_DIR.mkdir(parents=True, exist_ok=True)
-    path = get_cv_path(user_id)
-    path.write_text(text, encoding="utf-8")
+    fd, tmp = tempfile.mkstemp(dir=CV_DIR, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def save_cv(user_id: int, text: str) -> Path:
+    """Store CV text, encrypted when a key is configured."""
+    if cv_crypto.cipher() is not None:
+        path = _encrypted_path(user_id)
+        _write_atomic(path, cv_crypto.encrypt(text))
+        _plaintext_path(user_id).unlink(missing_ok=True)
+        return path
+
+    cv_crypto.require_key_configured()  # raises outside development
+    path = _plaintext_path(user_id)
+    _write_atomic(path, text.encode("utf-8"))
+    _encrypted_path(user_id).unlink(missing_ok=True)
     return path
 
 
 def load_cv(user_id: int) -> str | None:
     """Load a user's CV text. Returns None if not uploaded."""
-    path = get_cv_path(user_id)
-    if not path.exists():
+    encrypted = _encrypted_path(user_id)
+    if encrypted.exists():
+        return cv_crypto.decrypt(encrypted.read_bytes())
+
+    plaintext = _plaintext_path(user_id)
+    if not plaintext.exists():
         return None
-    return path.read_text(encoding="utf-8")
+    text = plaintext.read_text(encoding="utf-8")
+    if cv_crypto.cipher() is not None:
+        _migrate_plaintext(user_id, text)
+    return text
+
+
+def _migrate_plaintext(user_id: int, text: str) -> None:
+    """Replace a pre-encryption .txt with its encrypted form, keeping mtime."""
+    plaintext = _plaintext_path(user_id)
+    try:
+        mtime = plaintext.stat().st_mtime
+    except FileNotFoundError:
+        return  # another process migrated it first
+    encrypted = _encrypted_path(user_id)
+    _write_atomic(encrypted, cv_crypto.encrypt(text))
+    # Keep the upload time: it drives "uploaded at" and CV retention.
+    os.utime(encrypted, (mtime, mtime))
+    plaintext.unlink(missing_ok=True)
+
+
+def encrypt_plaintext_cvs() -> int:
+    """Encrypt every plaintext CV left from before encryption; returns count.
+
+    Run at startup by both processes. Safe to run concurrently: writes are
+    atomic, and a file another process already migrated is skipped.
+    """
+    if cv_crypto.cipher() is None or not CV_DIR.exists():
+        return 0
+    migrated = 0
+    for path in sorted(CV_DIR.glob("*.txt")):
+        if not path.stem.isdigit():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+            _migrate_plaintext(int(path.stem), text)
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError) as exc:
+            # One unreadable file must not keep both services from booting;
+            # it stays as it is (still readable by load_cv) and is retried
+            # at the next start.
+            log.error("Could not encrypt CV file %s, left as is: %s", path.name, exc)
+            continue
+        migrated += 1
+    if migrated:
+        log.info("Encrypted %d plaintext CV file(s) at rest", migrated)
+    return migrated
+
+
+def reencrypt_old_key_cvs() -> int:
+    """Re-encrypt CVs still under an older key in CV_ENCRYPTION_KEY.
+
+    Runs at startup while more than one key is listed (a rotation), so the
+    old key can then be dropped without losing anything. Keeps mtime (the
+    upload time). Returns the number re-encrypted.
+    """
+    if not cv_crypto.has_old_keys() or not CV_DIR.exists():
+        return 0
+    rotated = 0
+    for path in sorted(CV_DIR.glob("*.enc")):
+        if not path.stem.isdigit():
+            continue
+        try:
+            token = path.read_bytes()
+            fresh = cv_crypto.rotate(token)
+            if fresh is None:
+                continue
+            mtime = path.stat().st_mtime
+            if path.read_bytes() != token:
+                continue  # re-uploaded meanwhile: already under the new key
+            _write_atomic(path, fresh)
+            os.utime(path, (mtime, mtime))
+        except FileNotFoundError:
+            continue
+        except (OSError, cv_crypto.CvKeyError) as exc:
+            log.error("Could not re-encrypt CV file %s: %s", path.name, exc)
+            continue
+        rotated += 1
+    remaining = "" if rotated == 0 else " — the old key can be dropped once this reads 0"
+    log.info("CV key rotation: re-encrypted %d CV file(s)%s", rotated, remaining)
+    return rotated
+
+
+def prepare_cv_storage() -> None:
+    """Startup pass for both services: encrypt leftovers, finish rotations."""
+    encrypt_plaintext_cvs()
+    reencrypt_old_key_cvs()
+
+
+def has_cv(user_id: int) -> bool:
+    """Whether a CV is stored, without decrypting it.
+
+    For "does this user have a CV?" checks (/me, the bot's prompts): a
+    wrong or missing key should break reading the CV, not every page that
+    merely shows whether one exists.
+    """
+    return _encrypted_path(user_id).exists() or _plaintext_path(user_id).exists()
+
+
+def stored_cv_user_ids() -> list[int]:
+    """User ids with a CV file on disk (either format)."""
+    if not CV_DIR.exists():
+        return []
+    ids = {
+        int(p.stem) for p in CV_DIR.iterdir()
+        if p.suffix in (".enc", ".txt") and p.stem.isdigit()
+    }
+    return sorted(ids)
 
 
 def delete_cv(user_id: int) -> bool:
-    """Delete a user's stored CV. Returns True if it existed."""
-    path = get_cv_path(user_id)
-    if path.exists():
-        path.unlink()
-        return True
-    return False
+    """Delete a user's stored CV (both formats). Returns True if it existed."""
+    existed = False
+    for path in (_encrypted_path(user_id), _plaintext_path(user_id)):
+        if path.exists():
+            path.unlink()
+            existed = True
+    return existed
 
 
 def _clean_pdf_text(text: str) -> str:
