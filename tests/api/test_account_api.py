@@ -238,6 +238,9 @@ async def test_privacy_retention_follows_the_settings(client, monkeypatch):
 async def test_privacy_notice_discloses_connection_data_and_rights(client):
     body = (await client.get("/api/v1/legal/privacy")).json()
     connection = [g for g in body["data_we_hold"] if g["category"] == "Connection data"]
-    assert connection and any("IP address" in item for item in connection[0]["items"])
+    ip_item = next(i for i in connection[0]["items"] if "IP address" in i)
+    # Every endpoint that keys a rate limit on the IP is named.
+    for use in ("sign in", "demo", "page view"):
+        assert use in ip_item
     assert "ANSPDCP" in body["your_rights"]["complaint"]
     assert "timestamp" in body["your_rights"]["consent"]

@@ -82,7 +82,9 @@ def percentile_ranks(scores: list[float]) -> list[int]:
 
 # Dots and pluses are inside the class on purpose: "node.js", ".net",
 # "c++" and "c#" are all skill names.
-_WORD_RE = re.compile(r"[a-zA-Z][a-zA-Z+#.]{2,}")
+# Unicode letters, not [a-zA-Z]: an ASCII class cut Romanian words at the
+# first diacritic, so "experiență" came out as "experien" in the reasons.
+_WORD_RE = re.compile(r"[^\W\d_](?:[^\W\d_]|[+#.]){2,}")
 
 
 def _tokens(text: str) -> list[str]:
@@ -109,6 +111,11 @@ _STOPWORDS = frozenset({
     "etc", "more", "most", "other", "also", "must", "should", "would",
     "si", "sau", "este", "sunt", "pentru", "care", "din", "intr", "una",
     "echipa", "companie", "rol", "munca", "experienta", "abilitati",
+    # The same words as written, with diacritics, plus frequent posting verbs.
+    "și", "într", "echipă", "echipei", "muncă", "experiență", "abilități",
+    "cunoștințe", "cerințe", "vei", "oferim", "căutăm", "cautam", "avem",
+    "unei", "unui", "unor", "acest", "această", "aceasta", "prin", "dar",
+    "mai", "fie", "lor", "ale", "cel", "cea", "cele", "după", "până", "despre",
 })
 
 
@@ -326,7 +333,6 @@ async def get_feed(
     Without any personalization signal, falls back to newest-first with
     None scores.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=FEED_WINDOW_DAYS)
     user_vector, liked_mean = await build_user_signal(user_id)
 
     async with get_session() as session:
@@ -341,36 +347,26 @@ async def get_feed(
         )
         excluded_ids.update(row[0] for row in applied_result.all())
 
-        stmt = select(Job).where(
-            Job.is_active.is_(True),
-            Job.first_seen_at >= cutoff,
-            # Hide non-canonical cross-board duplicates
-            or_(Job.dedup_group_id.is_(None), Job.dedup_group_id == Job.id),
-        )
-        if user_vector is not None:
-            stmt = stmt.where(
-                Job.embedding.isnot(None), current_model_clause(Job.embedding_model),
-            )
-        if excluded_ids:
-            stmt = stmt.where(Job.id.notin_(excluded_ids))
+    candidates = await load_candidates(
+        excluded_ids, embedded_only=user_vector is not None,
+    )
 
-        result = await session.execute(stmt)
-        candidates = list(result.scalars().all())
-
-        cv_text = ""
-        if user_vector is not None:
+    cv_text = ""
+    if user_vector is not None:
+        async with get_session() as session:
             user = await session.get(User, user_id)
-            if user is not None and user.cv_embedding:
-                # CV text lives on disk (gosha/cover_letter.py storage);
-                # reasons need the text, loaded lazily to avoid IO when
-                # there is no CV.
-                from gosha.cover_letter import load_cv
-                from gosha.cv_crypto import CvKeyError
-                try:
-                    cv_text = load_cv(user_id) or ""
-                except CvKeyError as exc:
-                    # Rank without match reasons rather than fail the feed.
-                    log.error("Feed for user %d without CV reasons: %s", user_id, exc)
+            has_cv = user is not None and user.cv_embedding
+        if has_cv:
+            # CV text lives on disk (gosha/cover_letter.py storage);
+            # reasons need the text, loaded lazily to avoid IO when
+            # there is no CV.
+            from gosha.cover_letter import load_cv
+            from gosha.cv_crypto import CvKeyError
+            try:
+                cv_text = load_cv(user_id) or ""
+            except CvKeyError as exc:
+                # Rank without match reasons rather than fail the feed.
+                log.error("Feed for user %d without CV reasons: %s", user_id, exc)
 
     # Standing exclusions: blacklisted companies / excluded words from any
     # of the user's searches never appear in the feed.
@@ -397,11 +393,58 @@ async def get_feed(
             total,
         )
 
+    return rank_candidates(
+        candidates, user_vector, cv_text=cv_text, liked_mean=liked_mean,
+        page=page, per_page=per_page,
+    )
+
+
+async def load_candidates(
+    excluded_ids: set[int] | frozenset[int] = frozenset(),
+    embedded_only: bool = True,
+) -> list[Job]:
+    """Active, canonical jobs first seen within FEED_WINDOW_DAYS.
+
+    `embedded_only` keeps only jobs with a vector from the configured
+    model — what a ranking needs.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=FEED_WINDOW_DAYS)
+    async with get_session() as session:
+        stmt = select(Job).where(
+            Job.is_active.is_(True),
+            Job.first_seen_at >= cutoff,
+            # Hide non-canonical cross-board duplicates
+            or_(Job.dedup_group_id.is_(None), Job.dedup_group_id == Job.id),
+        )
+        if embedded_only:
+            stmt = stmt.where(
+                Job.embedding.isnot(None), current_model_clause(Job.embedding_model),
+            )
+        if excluded_ids:
+            stmt = stmt.where(Job.id.notin_(excluded_ids))
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+
+def rank_candidates(
+    candidates: list[Job],
+    vector: np.ndarray,
+    *,
+    cv_text: str = "",
+    liked_mean: np.ndarray | None = None,
+    page: int = 1,
+    per_page: int = 50,
+) -> tuple[list[FeedItem], int]:
+    """One page of `candidates` ranked by cosine to `vector`, explained.
+
+    Shared by the signed-in feed and the public demo (gosha/api/demo.py),
+    so the demo shows exactly the ranking users get.
+    """
     if not candidates:
         return [], 0
 
     matrix = np.stack([bytes_to_vec(j.embedding) for j in candidates])
-    scores = matrix @ user_vector
+    scores = matrix @ vector
     order = np.argsort(-scores)
 
     ranked_jobs = [candidates[int(i)] for i in order]

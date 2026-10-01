@@ -45,6 +45,8 @@ AUTH_HANDOFF = Limit("auth-handoff", 90, 60)
 CV_UPLOAD = Limit("cv-upload", 10, 3600)
 # Unauthenticated analytics writes (over-limit events are dropped silently).
 PAGEVIEW = Limit("pageview", 30, 60)
+# The public demo feed (gosha/api/demo.py): cheap per request, but anonymous.
+DEMO = Limit("demo", 60, 60)
 
 
 def _insert_for(dialect: str):

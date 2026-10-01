@@ -71,10 +71,13 @@ export default function Landing() {
               Sign in with Discord
               <ArrowRight size={18} aria-hidden />
             </button>
-            <span className="font-mono text-xs text-ink-faint">
-              free / no card / 30 seconds
-            </span>
+            <Link to="/demo" className="btn-quiet px-5 py-3 text-base">
+              See a live demo
+            </Link>
           </div>
+          <p className="mt-3 font-mono text-xs text-ink-faint">
+            free / no card / 30 seconds · the demo needs no sign-in
+          </p>
         </div>
 
         {/* Pasted-photo collage */}
