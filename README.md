@@ -118,19 +118,19 @@ In the Discord developer portal, add the OAuth2 redirect URI:
 <details>
 <summary><b>Running behind an existing reverse proxy</b></summary>
 
-If something else already owns ports 80/443 on your server, bind GOSHA to localhost and point your proxy at it:
+If something else already owns ports 80/443 on your server, bind GOSHA to localhost, tell its Caddy to trust that proxy for the client IP, and point your proxy at it:
 
 ```env
 CADDY_SITE=:80
 CADDY_HTTP_BIND=127.0.0.1:8090
 CADDY_HTTPS_BIND=127.0.0.1:8443
+CADDY_EXTRA_TRUSTED_PROXIES=private_ranges
+CADDY_CLIENT_IP_HEADER=X-Forwarded-For
 ```
 
-```caddyfile
-your-domain.com {
-    reverse_proxy localhost:8090
-}
-```
+The front proxy must then name the client in `X-Forwarded-For` itself, overwriting whatever the request carried. Rate limits key on that address, so a proxy that passes a client-supplied header through lets anyone pick their own bucket. For a Caddy behind Cloudflare, use [`deploy/host-caddy.snippet`](deploy/host-caddy.snippet): it believes `CF-Connecting-IP` only when the TCP peer is in Cloudflare's published ranges, and names everyone else by their own address. Without Cloudflare, a plain `reverse_proxy localhost:8090 { header_up X-Forwarded-For {remote_host} }` does the same. [`scripts/check_client_ip.sh`](scripts/check_client_ip.sh) proves both setups against forged headers, and CI runs it.
+
+Facing Cloudflare directly (no host proxy), leave both variables unset: GOSHA's Caddy trusts Cloudflare's ranges and `CF-Connecting-IP` out of the box.
 </details>
 
 <details>
