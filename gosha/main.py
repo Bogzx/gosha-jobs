@@ -74,6 +74,7 @@ async def main() -> None:
             "use_semantic": settings.use_semantic_matching,
             "semantic_model": settings.semantic_model,
             "semantic_threshold": settings.semantic_threshold,
+            "semantic_threshold_cv": settings.semantic_threshold_cv,
         },
         id="scrape_cycle",
         name="Periodic job scrape",

@@ -24,6 +24,20 @@ log = logging.getLogger(__name__)
 LEGACY_MODEL = "all-mpnet-base-v2"
 DEFAULT_MODEL = os.getenv("SEMANTIC_MODEL", LEGACY_MODEL)
 
+# Discord delivery thresholds and the DM score label, tuned for
+# all-mpnet-base-v2 on the offline eval (docs/EVAL.md, scripts/eval_ranking.py).
+# A search blended with the user's CV scores on a different scale from the
+# search alone (it averages two cosines), so each path has its own cut.
+# Rule used: give up at most 5 points of recall against the old 0.40 for the
+# largest cut in off-target deliveries. Measured: with a CV, recall
+# 0.926 -> 0.894 and off-target pass rate 30.5% -> 18.6%; search only,
+# 0.915 -> 0.883 and 41.7% -> 33.8%. At >= 0.60, 89% of CV-path pairs are
+# relevant or adjacent, hence the "Strong match" cut.
+# Re-tune all three after a SEMANTIC_MODEL change.
+DEFAULT_THRESHOLD = 0.42
+DEFAULT_CV_THRESHOLD = 0.43
+STRONG_MATCH_AT = 0.60
+
 # Lazy-loaded model singleton
 _model: Any = None
 _model_name: str = ""
@@ -147,10 +161,13 @@ class SemanticMatcher:
     def __init__(
         self,
         model_name: str = DEFAULT_MODEL,
-        threshold: float = 0.40,
+        threshold: float = DEFAULT_THRESHOLD,
+        cv_threshold: float | None = None,
     ) -> None:
         self.model_name = model_name
         self.threshold = threshold
+        # For queries blended with the user's CV (gosha/pipeline.py).
+        self.cv_threshold = DEFAULT_CV_THRESHOLD if cv_threshold is None else cv_threshold
         self._available: bool | None = None
 
     @property
@@ -199,6 +216,19 @@ class SemanticMatcher:
             return 0.0
         return cosine_similarity(query_embedding, job_emb)
 
-    def is_match(self, score: float) -> bool:
-        """Check if a score exceeds the match threshold."""
-        return score >= self.threshold
+    def is_match(self, score: float, with_cv: bool = False) -> bool:
+        """Check a score against the threshold for its query type."""
+        return score >= (self.cv_threshold if with_cv else self.threshold)
+
+
+def match_label(score: float | None) -> str | None:
+    """Words for a Discord delivery score.
+
+    The score is a cosine (or the mean of two), not a probability: shown
+    as "Score: 47%" it read as a coin flip for what is a good match. Every
+    delivered job already cleared the threshold, so the label only
+    separates the ones well above it.
+    """
+    if score is None:
+        return None
+    return "Strong match" if score >= STRONG_MATCH_AT else "Good match"
