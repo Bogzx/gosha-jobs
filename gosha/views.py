@@ -274,8 +274,10 @@ def build_job_embed_with_buttons(
         )
         embed.add_field(name="Description", value=desc, inline=False)
 
-    score_str = f"{relevance_score:.0%}" if relevance_score is not None else "N/A"
-    footer = f"Source: {job.source} | Score: {score_str} | Job #{job.id}"
+    from gosha.matching import match_label
+
+    label = match_label(relevance_score)
+    footer = f"Source: {job.source}" + (f" | {label}" if label else "") + f" | Job #{job.id}"
     if match_info:
         footer += f" | Matched: {match_info}"
     embed.set_footer(text=footer[:2048])
