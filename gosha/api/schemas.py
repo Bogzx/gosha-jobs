@@ -73,6 +73,23 @@ class JobListOut(BaseModel):
     per_page: int
 
 
+class DemoPersonaOut(BaseModel):
+    """A synthetic sample CV the public demo ranks jobs for."""
+
+    id: str
+    label: str
+    summary: str
+    cv: str
+
+
+class DemoFeedOut(BaseModel):
+    persona: DemoPersonaOut
+    items: list[JobOut]
+    total: int
+    page: int
+    per_page: int
+
+
 class FeedbackIn(BaseModel):
     feedback: str = Field(pattern="^(interested|not_relevant)$")
 
