@@ -128,6 +128,11 @@ services:
     logging: *default-logging
     environment:
       CADDY_SITE: ${CADDY_SITE:-gosha.bogdantruta.com}
+      # Real client IPs (Caddyfile, top): empty / CF-Connecting-IP when this
+      # Caddy faces Cloudflare; private_ranges / X-Forwarded-For behind a
+      # host reverse proxy.
+      CADDY_EXTRA_TRUSTED_PROXIES: ${CADDY_EXTRA_TRUSTED_PROXIES:-}
+      CADDY_CLIENT_IP_HEADER: ${CADDY_CLIENT_IP_HEADER:-CF-Connecting-IP}
     ports:
       - "${CADDY_HTTP_BIND:-80}:80"
       - "${CADDY_HTTPS_BIND:-443}:443"

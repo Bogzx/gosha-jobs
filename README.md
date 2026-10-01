@@ -4,7 +4,7 @@
 
 ### The job feed that reads your CV.
 
-**[gosha.bogdantruta.com](https://gosha.bogdantruta.com)** · built for CS students in Romania & beyond
+**[gosha.bogdantruta.com](https://gosha.bogdantruta.com)** · **[live demo, no sign-in](https://gosha.bogdantruta.com/demo)** · built for CS students in Romania & beyond
 
 [![CI](https://github.com/Bogzx/gosha-jobs/actions/workflows/ci.yml/badge.svg)](https://github.com/Bogzx/gosha-jobs/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11+-0e9f5b)](https://www.python.org/)
@@ -25,12 +25,15 @@ The best roles get 200 applicants in the first 48 hours. GOSHA makes sure you're
 
 <div align="center">
 <img src="docs/screenshots/feed-desktop.png" alt="Personalized feed with match scores" width="800" />
+<br/><sub>The signed-in feed. No account? <a href="https://gosha.bogdantruta.com/demo"><code>/demo</code></a> runs the same ranking for a sample CV:</sub><br/>
+<img src="docs/screenshots/demo.png" alt="Public demo: real postings ranked for a sample CV, with match reasons" width="800" />
 </div>
 
 ## Features
 
 |  |  |
 |---|---|
+| 🧪 **Try it without an account** | [`/demo`](https://gosha.bogdantruta.com/demo) ranks today's postings for one of four sample CVs (one written in Romanian) with the same code as the signed-in feed, "why this matched" included. Only a persona id goes to the server; nothing is stored ([`gosha/api/demo.py`](gosha/api/demo.py)). |
 | 🎯 **CV-matched feed** | Every posting gets a match score from sentence-embedding similarity against *your* CV — no keyword setup needed. "Matches your python, react, docker" tells you why. |
 | 🔭 **7 job boards, one feed** | Indeed, LinkedIn, Glassdoor (via [JobSpy](https://github.com/speedyapply/JobSpy)) plus native adapters for **eJobs.ro**, **BestJobs.ro**, **Hipo.ro**, and **RemoteOK**. Cross-board duplicates collapse into one card. |
 | 📬 **Discord alerts** | The bot scrapes around the clock and DMs you fresh matches. Saved searches are managed on the web — zero slash-command setup (slash commands still work too). |
@@ -115,19 +118,19 @@ In the Discord developer portal, add the OAuth2 redirect URI:
 <details>
 <summary><b>Running behind an existing reverse proxy</b></summary>
 
-If something else already owns ports 80/443 on your server, bind GOSHA to localhost and point your proxy at it:
+If something else already owns ports 80/443 on your server, bind GOSHA to localhost, tell its Caddy to trust that proxy for the client IP, and point your proxy at it:
 
 ```env
 CADDY_SITE=:80
 CADDY_HTTP_BIND=127.0.0.1:8090
 CADDY_HTTPS_BIND=127.0.0.1:8443
+CADDY_EXTRA_TRUSTED_PROXIES=private_ranges
+CADDY_CLIENT_IP_HEADER=X-Forwarded-For
 ```
 
-```caddyfile
-your-domain.com {
-    reverse_proxy localhost:8090
-}
-```
+The front proxy must then name the client in `X-Forwarded-For` itself, overwriting whatever the request carried. Rate limits key on that address, so a proxy that passes a client-supplied header through lets anyone pick their own bucket. For a Caddy behind Cloudflare, use [`deploy/host-caddy.snippet`](deploy/host-caddy.snippet): it believes `CF-Connecting-IP` only when the TCP peer is in Cloudflare's published ranges, and names everyone else by their own address. Without Cloudflare, a plain `reverse_proxy localhost:8090 { header_up X-Forwarded-For {remote_host} }` does the same. [`scripts/check_client_ip.sh`](scripts/check_client_ip.sh) proves both setups against forged headers, and CI runs it.
+
+Facing Cloudflare directly (no host proxy), leave both variables unset: GOSHA's Caddy trusts Cloudflare's ranges and `CF-Connecting-IP` out of the box.
 </details>
 
 <details>

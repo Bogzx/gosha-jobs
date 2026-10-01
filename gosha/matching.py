@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from typing import Any
 
 import numpy as np
@@ -41,20 +42,33 @@ STRONG_MATCH_AT = 0.60
 # Lazy-loaded model singleton
 _model: Any = None
 _model_name: str = ""
+# Loading takes seconds and ~2 GB. Callers run in worker threads (CV
+# uploads, the public demo), so without this lock a burst of first
+# requests after a restart loads one copy each and blows the container's
+# memory limit.
+_model_lock = threading.Lock()
 
 
 def _get_model(model_name: str = DEFAULT_MODEL) -> Any:
-    """Load the sentence-transformer model (lazy singleton)."""
+    """Load the sentence-transformer model (lazy singleton, loaded once)."""
     global _model, _model_name
     if _model is not None and _model_name == model_name:
         return _model
+    with _model_lock:
+        if _model is not None and _model_name == model_name:
+            return _model  # loaded by the thread we waited for
+        return _load_model(model_name)
+
+
+def _load_model(model_name: str) -> Any:
+    global _model, _model_name
     try:
         from sentence_transformers import SentenceTransformer
 
         log.info("Loading semantic model: %s", model_name)
-        _model = SentenceTransformer(model_name)
-        _model_name = model_name
-        return _model
+        model = SentenceTransformer(model_name)
+        _model, _model_name = model, model_name
+        return model
     except ImportError:
         log.warning(
             "sentence-transformers not installed — semantic matching disabled. "

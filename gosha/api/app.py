@@ -161,6 +161,7 @@ def _mount_routers(app: FastAPI) -> None:
         "legal",
         "jobs",
         "feed",
+        "demo",
         "applications",
         "subscriptions",
         "cv",

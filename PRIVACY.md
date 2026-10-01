@@ -26,7 +26,7 @@ Self-hosted instances have their own controller — you.
 | Tracked applications and notes | The user enters them | The application tracker | Contract |
 | Generated cover letters | The user requests them | Retrieval later | Consent |
 | Pageviews (path only) | Product use | Basic usage counts | Legitimate interest |
-| IP address of sign-in requests, with a counter | The request | Rate-limiting sign-in (`gosha/ratelimit.py`) | Legitimate interest |
+| IP address with a request counter: sign-in, the public demo, and page views while signed out | The request | Rate-limiting the endpoints anyone can call (`gosha/ratelimit.py`) | Legitimate interest |
 | Request log lines incl. IP address | The request (uvicorn access log) | Operating and debugging the service | Legitimate interest |
 
 No email address is collected. No advertising identifiers. No cross-site
@@ -82,8 +82,9 @@ IP addresses. gosha.bogdantruta.com runs behind Cloudflare.
   it deletes analytics history; never shorter than `CV_RETENTION_MONTHS`,
   because CV retention reads activity from events). Page views by
   signed-out visitors carry no account id.
-- **Sign-in rate-limit counters** (keyed by IP address) — deleted once
-  their window has passed (60 s for sign-in).
+- **Rate-limit counters** keyed by IP address (sign-in, the demo,
+  signed-out page views) — deleted once their window has passed (60 s
+  each).
 - **Container logs** (incl. IP addresses) — rotated by size, 5 × 20 MB
   per service (`docker-compose.prod.yml`).
 - **Everything else** — until the account is deleted.
