@@ -438,12 +438,14 @@ async def match_jobs_for_subscription(
         if query_emb is not None:
             from gosha.embeddings import score_jobs_against_query
 
+            # Blended only when the vectors share a space (same shape).
+            with_cv = user_vector is not None and np.shape(user_vector) == np.shape(query_emb)
             query_emb = blend_with_user_vector(query_emb, user_vector)
             scores = score_jobs_against_query(query_emb, candidates)
             matches = [
                 (job, score)
                 for job, score in zip(candidates, scores)
-                if semantic_matcher.is_match(score)
+                if semantic_matcher.is_match(score, with_cv=with_cv)
             ]
             # Sort by score descending
             matches.sort(key=lambda x: x[1], reverse=True)
@@ -483,7 +485,10 @@ async def run_match_stage(
 ) -> int:
     """Stage 2: match jobs against all active subscriptions and enqueue deliveries.
 
-    Applies user feedback profiles to adjust scores when available.
+    Feedback reaches this stage through the user's vector (CV refined by
+    👍/👎, gosha/recommend.py), which is blended into each search's query.
+    The stored score is that blended cosine, the number the delivery
+    threshold was compared with.
 
     Returns total number of new deliveries enqueued.
     """
@@ -498,10 +503,6 @@ async def run_match_stage(
     if not sub_user_pairs:
         return 0
 
-    # Build per-user feedback profiles for score adjustment
-    from gosha.feedback import build_user_profile
-
-    user_profiles: dict[int, object] = {}  # user_id -> UserPreferenceProfile
     # user_id -> CV vector refined by feedback (the one the web feed ranks
     # by); None without a CV. Only needed on the semantic path.
     user_vectors: dict[int, np.ndarray | None] = {}
@@ -516,27 +517,12 @@ async def run_match_stage(
         matches = await match_jobs_for_subscription(
             sub, jobs, semantic_matcher, user_vectors.get(user.id),
         )
-
-        # Build user profile lazily (once per user)
-        if user.id not in user_profiles:
-            try:
-                user_profiles[user.id] = await build_user_profile(user.id)
-            except Exception:
-                user_profiles[user.id] = None
-
-        profile = user_profiles.get(user.id)
-
         for job, score in matches:
-            # Apply feedback-based score adjustment
-            adjusted_score = score
-            if profile and profile.has_data:
-                adjusted_score = max(0.0, min(1.0, score + profile.score_adjustment(job)))
-
             delivery_items.append({
                 "user_id": user.id,
                 "job_id": job.id,
                 "subscription_id": sub.id,
-                "score": adjusted_score,
+                "score": score,
             })
 
     if not delivery_items:
@@ -564,7 +550,8 @@ async def run_scrape_cycle(
     alert_channel_id: int,
     use_semantic: bool = False,
     semantic_model: str = "all-mpnet-base-v2",
-    semantic_threshold: float = 0.40,
+    semantic_threshold: float = 0.42,
+    semantic_threshold_cv: float | None = None,
 ) -> int:
     """Execute one full scrape -> match -> deliver cycle.
 
@@ -605,10 +592,14 @@ async def run_scrape_cycle(
     matcher = None
     if use_semantic:
         matcher = SemanticMatcher(
-            model_name=semantic_model, threshold=semantic_threshold
+            model_name=semantic_model, threshold=semantic_threshold,
+            cv_threshold=semantic_threshold_cv,
         )
         if matcher.available:
-            log.info("Using semantic matching (model=%s, threshold=%.2f)", semantic_model, semantic_threshold)
+            log.info(
+                "Using semantic matching (model=%s, threshold=%.2f, with CV %.2f)",
+                semantic_model, matcher.threshold, matcher.cv_threshold,
+            )
         else:
             log.warning("Semantic matching requested but not available — falling back to regex")
             matcher = None

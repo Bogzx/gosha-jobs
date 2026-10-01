@@ -17,12 +17,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gosha.embeddings import EMBEDDING_DIM, vec_to_bytes
+from gosha.matching import SemanticMatcher, match_label
 from gosha.models import Job, Subscription, User, UserJob
 from gosha.pipeline import (
     blend_with_user_vector,
     match_jobs_for_subscription,
     run_match_stage,
 )
+from gosha.recommend import apply_feedback
 
 
 def unit(*weights: tuple[int, float]) -> np.ndarray:
@@ -43,14 +45,18 @@ VECTORS = {
 
 
 class FakeMatcher:
+    """SemanticMatcher without the model: fixed query, real thresholds."""
+
     available = True
-    threshold = 0.40
+
+    def __init__(self, threshold: float = 0.40, cv_threshold: float = 0.40) -> None:
+        self.threshold = threshold
+        self.cv_threshold = cv_threshold
 
     def encode_subscription(self, keywords, locations, experience_levels=None):
         return SUB
 
-    def is_match(self, score: float) -> bool:
-        return score >= self.threshold
+    is_match = SemanticMatcher.is_match
 
 
 def make_job(name: str) -> Job:
@@ -163,3 +169,81 @@ async def test_match_stage_without_cv_matches_on_subscription(
     await run_match_stage(jobs, FakeMatcher())
 
     assert await _delivered(session, user) == {"on_query", "query_only"}
+
+
+# ── thresholds per query type, and what a DM says about the score ─────
+
+
+async def test_cv_blended_queries_use_their_own_threshold():
+    jobs = [make_job(n) for n in VECTORS]
+    # Blended scores: on_cv 0.62, on_query 0.50, query_only 0.21.
+    strict = FakeMatcher(threshold=0.40, cv_threshold=0.55)
+    with_cv = await match_jobs_for_subscription(make_sub(), jobs, strict, user_vector=CV)
+    assert names(with_cv) == {"on_cv"}
+    # The search-only path keeps the search threshold.
+    search_only = await match_jobs_for_subscription(make_sub(), jobs, strict)
+    assert names(search_only) == {"on_query", "query_only"}
+
+
+async def test_a_cv_from_another_model_uses_the_search_threshold():
+    jobs = [make_job(n) for n in VECTORS]
+    other_model = np.ones(384, dtype=np.float32) / np.sqrt(384)
+    matcher = FakeMatcher(threshold=0.40, cv_threshold=0.99)
+    matches = await match_jobs_for_subscription(
+        make_sub(), jobs, matcher, user_vector=other_model,
+    )
+    assert names(matches) == {"on_query", "query_only"}
+
+
+def test_semantic_matcher_thresholds_default_to_the_tuned_values():
+    from gosha import matching
+
+    matcher = SemanticMatcher(model_name="unused")
+    assert matcher.threshold == matching.DEFAULT_THRESHOLD
+    assert matcher.cv_threshold == matching.DEFAULT_CV_THRESHOLD
+    assert SemanticMatcher(model_name="unused", cv_threshold=0.3).is_match(0.31, with_cv=True)
+
+
+def test_match_label_never_shows_a_percentage():
+    from gosha.matching import STRONG_MATCH_AT
+
+    assert match_label(None) is None
+    assert match_label(STRONG_MATCH_AT) == "Strong match"
+    assert match_label(STRONG_MATCH_AT - 0.01) == "Good match"
+
+
+async def test_dm_footer_shows_the_label_not_a_raw_score():
+    from gosha.views import build_job_embed_with_buttons
+
+    job = make_job("on_cv")
+    job.id = 7
+    embed, _view = build_job_embed_with_buttons(job, user_job_id=1, relevance_score=0.47)
+    assert "%" not in embed.footer.text
+    assert "Good match" in embed.footer.text and "Job #7" in embed.footer.text
+
+
+async def test_stored_score_is_the_blended_cosine_feedback_included(
+    patched_db, session: AsyncSession,
+):
+    """Feedback reaches DMs once, through the Rocchio vector. The stored
+    score is exactly what the threshold saw, with no second term-count
+    adjustment on top (there used to be one, worth up to +-0.3)."""
+    user, jobs = await _seed(session, with_cv=True)
+    liked = [unit((3, 1.0)), unit((3, 1.0), (4, 0.5)), unit((3, 1.0), (5, 0.5))]
+    for i, vec in enumerate(liked):
+        rated = Job(url=f"https://example.test/liked{i}", title="Software Engineer",
+                    company="Acme", source="ejobs", embedding=vec_to_bytes(vec))
+        session.add(rated)
+        await session.flush()
+        session.add(UserJob(user_id=user.id, job_id=rated.id, feedback="interested"))
+    await session.commit()
+
+    await run_match_stage(jobs, FakeMatcher())
+
+    user_vector = apply_feedback(CV, liked, [])
+    expected = float(VECTORS["on_cv"] @ blend_with_user_vector(SUB, user_vector))
+    stored = (await session.execute(
+        select(UserJob.relevance_score).join(Job, UserJob.job_id == Job.id)
+        .where(UserJob.user_id == user.id, Job.url.endswith("/on_cv"))
+    )).scalar_one()
+    assert stored == pytest.approx(expected, abs=1e-5)
