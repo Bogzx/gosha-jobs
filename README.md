@@ -25,6 +25,8 @@ The best roles get 200 applicants in the first 48 hours. GOSHA makes sure you're
 
 <div align="center">
 <img src="docs/screenshots/feed-desktop.png" alt="Personalized feed with match scores" width="800" />
+<br/><sub>The signed-in feed. No account? <a href="https://gosha.bogdantruta.com/demo"><code>/demo</code></a> runs the same ranking for a sample CV:</sub><br/>
+<img src="docs/screenshots/demo.png" alt="Public demo: real postings ranked for a sample CV, with match reasons" width="800" />
 </div>
 
 ## Features

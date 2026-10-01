@@ -57,8 +57,14 @@ export default function Demo() {
         <Link to="/">
           <Logo size="lg" />
         </Link>
-        <button type="button" onClick={signInWithDiscord} className="btn-go text-sm">
-          Get your own feed <ArrowRight size={15} aria-hidden />
+        <button
+          type="button"
+          onClick={signInWithDiscord}
+          className="btn-go text-sm whitespace-nowrap"
+        >
+          <span className="sm:hidden">Sign in</span>
+          <span className="hidden sm:inline">Get your own feed</span>
+          <ArrowRight size={15} aria-hidden />
         </button>
       </header>
 
