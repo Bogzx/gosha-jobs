@@ -12,7 +12,7 @@ import os
 
 from fastapi import APIRouter
 
-from gosha.ratelimit import AUTH
+from gosha.ratelimit import AUTH, DEMO, PAGEVIEW
 from gosha.services.cv import MAX_CV_BYTES
 from gosha.services.retention import event_retention_months, retention_months
 
@@ -112,8 +112,10 @@ def _retention() -> dict[str, str]:
             "visitors carry no account id and are kept indefinitely."
         ),
         "rate_limit_counters": (
-            f"Deleted once their window has passed ({AUTH.window_seconds} "
-            "seconds for sign-in)."
+            "Deleted once their window has passed ("
+            f"{AUTH.window_seconds} seconds for sign-in, "
+            f"{PAGEVIEW.window_seconds} for page views, "
+            f"{DEMO.window_seconds} for the demo)."
         ),
         "server_logs": f"Rotated out by size ({LOG_ROTATION}).",
     }
@@ -170,12 +172,17 @@ async def privacy() -> dict:
             {
                 "category": "Connection data",
                 "items": [
-                    "the IP address of sign-in requests, stored with a "
-                    "request counter",
+                    "your IP address, stored with a request counter, when "
+                    "you sign in, when you use the public demo, and when a "
+                    "page view is counted while you are signed out (signed "
+                    "in, page views are counted per account instead)",
                     "request lines (time, path, status, IP address) in the "
                     "server's logs",
                 ],
-                "why": "To stop scripted abuse of sign-in, and to debug the service.",
+                "why": (
+                    "To stop scripted abuse of sign-in and of the endpoints "
+                    "anyone can call, and to debug the service."
+                ),
                 "source": "Your browser's requests.",
             },
         ],
