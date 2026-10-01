@@ -178,7 +178,7 @@ Then open `http://localhost:5173/api/v1/auth/debug-login?uid=1`.
 
 LinkedIn and Glassdoor rate-limit aggressively. Configure up to 9 VPSs in `.env` (`VPS_1_HOST`, `VPS_1_USER`, `VPS_1_KEY`, ...) and the bot opens SOCKS5 tunnels, rotating per scrape with automatic health checks.
 
-**Without proxies you get 4 of the 7 sources.** The JobSpy path (Indeed, LinkedIn, Glassdoor) requires at least one healthy tunnel — with none configured it logs a warning and returns nothing rather than connecting directly ([`gosha/scraper.py`](gosha/scraper.py)), because a direct connection from a single IP gets that IP blocked within a day or two. The four native adapters (eJobs, BestJobs, Hipo, RemoteOK) call the boards' own endpoints directly and work with no proxies at all, so a proxy-less install still produces a useful Romanian feed.
+**Without proxies, JobSpy is off unless you allow direct scraping.** By default the JobSpy path (Indeed, LinkedIn, Glassdoor) needs at least one healthy tunnel; with none it logs a warning and skips the search ([`gosha/scraper.py`](gosha/scraper.py)), because a single IP scraping LinkedIn gets blocked within a day or two. `SCRAPE_DIRECT=true` lets JobSpy also use the server's own IP: it is shuffled together with the live tunnels, and with no tunnel alive scraping continues directly. The four native adapters (eJobs, BestJobs, Hipo, RemoteOK) call the boards' own endpoints and need no proxies at all, so a proxy-less install still produces a useful Romanian feed. Glassdoor blocks datacenter IPs outright and is not covered by the daily smoke test, so expect it to yield little from a VPS.
 </details>
 
 ## Discord commands
