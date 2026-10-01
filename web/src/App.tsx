@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { trackPageview } from './api/client'
+import { ChunkErrorBoundary } from './components/ChunkErrorBoundary'
 import { Layout } from './components/Layout'
 import { useMe } from './hooks/useMe'
 import Landing from './pages/Landing'
@@ -47,6 +48,7 @@ export default function App() {
   const { me, isLoading } = useMe()
 
   return (
+    <ChunkErrorBoundary>
     <Suspense fallback={<Loading />}>
     <Routes>
       <Route
@@ -68,5 +70,6 @@ export default function App() {
       <Route path="*" element={<NotFound />} />
     </Routes>
     </Suspense>
+    </ChunkErrorBoundary>
   )
 }
