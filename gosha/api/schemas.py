@@ -83,11 +83,11 @@ class DemoPersonaOut(BaseModel):
 
 
 class DemoFeedOut(BaseModel):
+    """The top postings for one demo persona; `total` is how many were ranked."""
+
     persona: DemoPersonaOut
     items: list[JobOut]
     total: int
-    page: int
-    per_page: int
 
 
 class FeedbackIn(BaseModel):
