@@ -85,14 +85,16 @@ flowchart LR
 
 Three processes share one database — the bot (Discord + scheduler), the API (FastAPI for the SPA), and Caddy (static SPA + TLS). The web app never talks to the bot directly: the database, including an `outbox` table for DM requests, is the only contract. Full layering details in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-**The matching engine:** jobs and CVs are embedded with `all-mpnet-base-v2` (sentence-transformers). Your feed is a cosine ranking of recent jobs against your CV vector, nudged by your 👍/👎 history. At this scale numpy brute force beats a vector database — embeddings live as `float32` bytes in regular columns. Discord DMs use the same CV vector: each saved search's query is blended with it, so the search decides what is relevant and your CV decides between postings that fit it equally well (users without a CV are matched on the search alone).
+**The matching engine:** jobs and CVs are embedded with `all-mpnet-base-v2` (sentence-transformers). Your feed is a cosine ranking of recent jobs against your CV vector, nudged by your 👍/👎 history (a Rocchio update). At this scale numpy brute force beats a vector database — embeddings live as `float32` bytes in regular columns. Discord DMs use the same CV vector: each saved search's query is blended with it, so the search decides what is relevant and your CV decides between postings that fit it equally well (users without a CV are matched on the search alone).
+
+**How well it ranks — measured, not assumed:** [docs/EVAL.md](docs/EVAL.md) scores the ranking on 202 real postings against 14 sample CVs. The honest summary: on that set the embeddings do *not* beat a TF-IDF keyword baseline (nDCG@10 0.546 vs 0.626), they cannot see seniority, and the multilingual model once planned as an upgrade is worse still; the 👍/👎 update does help (+0.10 nDCG@10 after one round). The eval set the current Discord thresholds and is re-run in CI on every ranking change.
 
 ## Tech stack
 
 **Backend** · Python 3.11, FastAPI, SQLAlchemy 2 (async), discord.py, APScheduler, sentence-transformers, httpx
 **Frontend** · React 18, TypeScript, Vite, Tailwind CSS v4, TanStack Query, Recharts
 **Infra** · PostgreSQL 16, Caddy, Docker Compose, GitHub Actions (CI + auto-deploy on push to `main`)
-**Tests** · ~420 backend (pytest) + frontend (vitest), scraper adapters tested on live-recorded fixtures, plus a daily live smoke of the boards (`.github/workflows/scraper-smoke.yml`; Glassdoor excluded)
+**Tests** · 500+ backend (pytest) + frontend (vitest), scraper adapters tested on live-recorded fixtures, a daily live smoke of the boards (`.github/workflows/scraper-smoke.yml`; Glassdoor excluded), and an offline ranking-quality eval that CI re-runs when ranking code changes ([docs/EVAL.md](docs/EVAL.md))
 
 ## Self-hosting
 
@@ -198,7 +200,8 @@ gosha/
 ├── recommend.py   # CV-similarity feed ranking
 └── llm.py         # DeepSeek / OpenRouter / Gemini provider port
 web/               # React SPA (Vite + Tailwind)
-tests/             # pytest suite (~420 tests)
+tests/             # pytest suite (500+ tests)
+eval/              # labelled postings + sample CVs for the ranking eval
 ```
 
 ## License
