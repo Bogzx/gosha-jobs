@@ -1,4 +1,5 @@
-"""Delete the CV data of users inactive longer than the retention window.
+"""Delete the CV data of users inactive longer than the retention window,
+and (when EVENT_RETENTION_MONTHS is set) events older than that window.
 
 The bot runs this daily (gosha/services/retention.py). Use this script to
 see what it would do, or to run it by hand:
@@ -25,7 +26,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gosha import database  # noqa: E402
-from gosha.services.retention import purge_stale_cvs, retention_months  # noqa: E402
+from gosha.services.retention import (  # noqa: E402
+    purge_old_events,
+    purge_stale_cvs,
+    retention_months,
+)
 
 
 async def main(months: int | None, dry_run: bool) -> int:
@@ -37,6 +42,7 @@ async def main(months: int | None, dry_run: bool) -> int:
         seen = f"{last_seen:%Y-%m-%d}" if last_seen else "never"
         print(f"  user {uid:>6}  last active {seen}")
     print(report.summary())
+    print((await purge_old_events(dry_run=dry_run)).summary())
     return 0
 
 

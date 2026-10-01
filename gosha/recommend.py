@@ -23,7 +23,12 @@ from gosha.models import Application, Job, User, UserJob
 log = logging.getLogger(__name__)
 
 FEED_WINDOW_DAYS = 30
-FEEDBACK_WEIGHT = 0.3
+# Rocchio weights for thumbs-up / thumbs-down (see apply_feedback). Kept at
+# 0.3 / 0.3 on the offline eval (docs/EVAL.md): one round of feedback lifts
+# nDCG@10 on the not-yet-rated postings by +0.10 (95% CI +0.002..+0.21);
+# likes alone (0.3 / 0) gain less, and 0.5 / 0.5 is no better within noise.
+LIKE_WEIGHT = 0.3
+DISLIKE_WEIGHT = 0.3
 
 
 class FeedItem(NamedTuple):
@@ -284,18 +289,39 @@ async def build_user_signal(user_id: int) -> UserSignal:
         if liked_norm > 0:
             liked_mean = (raw_mean / liked_norm).astype(np.float32)
 
-    vector = base.astype(np.float64) if base is not None else np.zeros(
-        len(liked[0]) if liked else len(disliked[0]), dtype=np.float64
+    return UserSignal(apply_feedback(base, liked, disliked), liked_mean)
+
+
+def apply_feedback(
+    base: np.ndarray | None,
+    liked: list[np.ndarray],
+    disliked: list[np.ndarray],
+    like_weight: float = LIKE_WEIGHT,
+    dislike_weight: float = DISLIKE_WEIGHT,
+) -> np.ndarray | None:
+    """Rocchio relevance feedback, as a unit vector.
+
+    base + like_weight * mean(liked) - dislike_weight * mean(disliked),
+    where `base` is the CV vector (absent: start from zero, so feedback
+    alone still ranks). None when there is no signal or it cancels out.
+    Pure, so the offline eval (gosha/evaluation.py) runs exactly this.
+    """
+    if base is None and not liked and not disliked:
+        return None
+    dim = len(base) if base is not None else len(liked[0] if liked else disliked[0])
+    vector = (
+        np.asarray(base, dtype=np.float64) if base is not None
+        else np.zeros(dim, dtype=np.float64)
     )
     if liked:
-        vector = vector + FEEDBACK_WEIGHT * np.mean(liked, axis=0)
+        vector = vector + like_weight * np.mean(liked, axis=0)
     if disliked:
-        vector = vector - FEEDBACK_WEIGHT * np.mean(disliked, axis=0)
+        vector = vector - dislike_weight * np.mean(disliked, axis=0)
 
     norm = np.linalg.norm(vector)
     if norm == 0:
-        return UserSignal(None, liked_mean)
-    return UserSignal((vector / norm).astype(np.float32), liked_mean)
+        return None
+    return (vector / norm).astype(np.float32)
 
 
 async def get_feed(

@@ -651,6 +651,7 @@ class SubscriptionCog(commands.Cog):
                 kwargs["use_semantic"] = self.bot.settings.use_semantic_matching
                 kwargs["semantic_model"] = self.bot.settings.semantic_model
                 kwargs["semantic_threshold"] = self.bot.settings.semantic_threshold
+                kwargs["semantic_threshold_cv"] = self.bot.settings.semantic_threshold_cv
 
             async def _run_and_notify() -> None:
                 try:

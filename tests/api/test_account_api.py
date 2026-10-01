@@ -192,3 +192,52 @@ async def test_privacy_notice_names_deepseek_when_it_is_the_provider(client, mon
     deepseek = [p for p in body["third_party_processors"] if p["name"] == "DeepSeek API"]
     assert deepseek, body["third_party_processors"]
     assert "China" in deepseek[0]["operator"]
+
+
+@pytest.mark.asyncio
+async def test_privacy_notice_names_the_edge_proxy_only_when_configured(client, monkeypatch):
+    monkeypatch.delenv("PRIVACY_EDGE_PROXY", raising=False)
+    body = (await client.get("/api/v1/legal/privacy")).json()
+    assert "Cloudflare" not in {p["name"] for p in body["third_party_processors"]}
+    assert "Cloudflare" not in body["limits"]["third_party_assets"]
+
+    monkeypatch.setenv("PRIVACY_EDGE_PROXY", "Cloudflare")
+    body = (await client.get("/api/v1/legal/privacy")).json()
+    cloudflare = [p for p in body["third_party_processors"] if p["name"] == "Cloudflare"]
+    assert cloudflare and "CV upload" in cloudflare[0]["receives"]
+    assert "blocks it" in body["limits"]["third_party_assets"]
+
+
+@pytest.mark.asyncio
+async def test_privacy_contact_accepts_an_email(client, monkeypatch):
+    monkeypatch.delenv("PRIVACY_CONTACT", raising=False)
+    assert (await client.get("/api/v1/legal/privacy")).json()["contact"].startswith("https://")
+    monkeypatch.setenv("PRIVACY_CONTACT", "privacy@example.org")
+    body = (await client.get("/api/v1/legal/privacy")).json()
+    assert body["contact"] == "mailto:privacy@example.org"
+
+
+@pytest.mark.asyncio
+async def test_privacy_retention_follows_the_settings(client, monkeypatch):
+    monkeypatch.setenv("CV_RETENTION_MONTHS", "0")
+    monkeypatch.delenv("EVENT_RETENTION_MONTHS", raising=False)
+    body = (await client.get("/api/v1/legal/privacy")).json()
+    assert body["retention"]["cv_text"] == "Until you delete it or delete your account."
+    assert "indefinitely" in body["retention"]["events"]
+    assert "turned off" in body["limits"]["cv_storage"]
+
+    monkeypatch.setenv("CV_RETENTION_MONTHS", "12")
+    monkeypatch.setenv("EVENT_RETENTION_MONTHS", "18")
+    body = (await client.get("/api/v1/legal/privacy")).json()
+    assert "12 months after your last activity" in body["retention"]["cv_text"]
+    assert body["retention"]["events"].startswith("18 months")
+    assert "60 seconds" in body["retention"]["rate_limit_counters"]
+
+
+@pytest.mark.asyncio
+async def test_privacy_notice_discloses_connection_data_and_rights(client):
+    body = (await client.get("/api/v1/legal/privacy")).json()
+    connection = [g for g in body["data_we_hold"] if g["category"] == "Connection data"]
+    assert connection and any("IP address" in item for item in connection[0]["items"])
+    assert "ANSPDCP" in body["your_rights"]["complaint"]
+    assert "timestamp" in body["your_rights"]["consent"]

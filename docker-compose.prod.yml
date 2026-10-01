@@ -10,8 +10,9 @@
 #     postgresql+asyncpg://gosha:${POSTGRES_PASSWORD}@postgres:5432/gosha
 #
 # Backups: see the `backup` service at the bottom and docs/BACKUPS.md.
-# It is OFF by default (profile: backup) and UNVERIFIED — read the doc
-# before enabling, and test a restore before trusting it.
+# It is OFF by default (profile: backup). The scripts are verified by
+# scripts/backup/drill.sh; read the doc before enabling, and run its
+# restore drill against your own repository before trusting it.
 
 # Shared log settings. json-file logs grow until the disk fills, which on
 # a single-VPS deployment takes the database down with it.
@@ -147,9 +148,10 @@ services:
 
   # ── Off-box encrypted backups ─────────────────────────────────────────
   #
-  # UNVERIFIED. This service has never been run: it needs a restic
-  # repository and credentials that only the VPS operator can provision.
-  # Read docs/BACKUPS.md and TEST A RESTORE before relying on it.
+  # Verified end to end on throwaway containers (scripts/backup/drill.sh,
+  # CI: backup-drill.yml), but it needs a restic repository and credentials
+  # that only the VPS operator can provision. Read docs/BACKUPS.md and run
+  # its Step 6 restore drill before relying on it.
   #
   # Enable with:  docker compose -f docker-compose.prod.yml --profile backup up -d
   backup:
