@@ -1,0 +1,50 @@
+name: Backup drill
+
+# Backups that nobody restores are a hope. This builds the backup image,
+# backs up a seeded scratch database plus encrypted CV files, restores the
+# snapshot into a fresh Postgres, requires identical row counts and
+# decryptable CVs, and checks that a broken backup fails loudly
+# (scripts/backup/drill.sh). It runs whenever the backup code or the schema
+# it has to carry changes, and weekly so a base-image or restic update
+# cannot break restores unnoticed.
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile.backup
+      - scripts/backup/**
+      - scripts/seed_dev.py
+      - gosha/models.py
+      - gosha/migrate.py
+      - gosha/cv_crypto.py
+      - docker-compose.prod.yml
+      - .github/workflows/backup-drill.yml
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile.backup
+      - scripts/backup/**
+  schedule:
+    - cron: "41 5 * * 1"   # Mondays 05:41 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install what the seeding needs
+        run: |
+          python -m pip install -U pip
+          pip install -c constraints.txt "sqlalchemy[asyncio]" asyncpg numpy \
+            cryptography httpx python-dotenv
+      - name: Backup, restore, compare, decrypt
+        run: sh scripts/backup/drill.sh

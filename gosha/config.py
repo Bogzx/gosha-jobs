@@ -45,7 +45,10 @@ class Settings:
     # Matching
     use_semantic_matching: bool = False
     semantic_model: str = "all-mpnet-base-v2"
-    semantic_threshold: float = 0.40
+    semantic_threshold: float = 0.42
+    # Threshold for searches blended with the user's CV; None = the
+    # tuned default in gosha/matching.py.
+    semantic_threshold_cv: float | None = None
 
     # Admin user IDs (can run /scrape_now, /status)
     admin_user_ids: set[int] = field(default_factory=set)
@@ -235,7 +238,11 @@ def load_settings() -> Settings:
     interval = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "60"))
     use_semantic = os.getenv("USE_SEMANTIC_MATCHING", "false").lower() == "true"
     semantic_model = os.getenv("SEMANTIC_MODEL", "all-mpnet-base-v2")
-    semantic_threshold = float(os.getenv("SEMANTIC_THRESHOLD", "0.40"))
+    from gosha.matching import DEFAULT_THRESHOLD
+
+    semantic_threshold = float(os.getenv("SEMANTIC_THRESHOLD", str(DEFAULT_THRESHOLD)))
+    raw_cv_threshold = os.getenv("SEMANTIC_THRESHOLD_CV", "").strip()
+    semantic_threshold_cv = float(raw_cv_threshold) if raw_cv_threshold else None
 
     return Settings(
         discord_token=token,
@@ -246,5 +253,6 @@ def load_settings() -> Settings:
         use_semantic_matching=use_semantic,
         semantic_model=semantic_model,
         semantic_threshold=semantic_threshold,
+        semantic_threshold_cv=semantic_threshold_cv,
         admin_user_ids=_parse_admin_ids(),
     )
