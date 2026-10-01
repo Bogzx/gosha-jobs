@@ -77,7 +77,9 @@ def percentile_ranks(scores: list[float]) -> list[int]:
 
 # Dots and pluses are inside the class on purpose: "node.js", ".net",
 # "c++" and "c#" are all skill names.
-_WORD_RE = re.compile(r"[a-zA-Z][a-zA-Z+#.]{2,}")
+# Unicode letters, not [a-zA-Z]: an ASCII class cut Romanian words at the
+# first diacritic, so "experiență" came out as "experien" in the reasons.
+_WORD_RE = re.compile(r"[^\W\d_](?:[^\W\d_]|[+#.]){2,}")
 
 
 def _tokens(text: str) -> list[str]:
@@ -104,6 +106,11 @@ _STOPWORDS = frozenset({
     "etc", "more", "most", "other", "also", "must", "should", "would",
     "si", "sau", "este", "sunt", "pentru", "care", "din", "intr", "una",
     "echipa", "companie", "rol", "munca", "experienta", "abilitati",
+    # The same words as written, with diacritics, plus frequent posting verbs.
+    "și", "într", "echipă", "echipei", "muncă", "experiență", "abilități",
+    "cunoștințe", "cerințe", "vei", "oferim", "căutăm", "cautam", "avem",
+    "unei", "unui", "unor", "acest", "această", "aceasta", "prin", "dar",
+    "mai", "fie", "lor", "ale", "cel", "cea", "cele", "după", "până", "despre",
 })
 
 

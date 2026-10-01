@@ -325,3 +325,19 @@ def test_match_reasons_ignores_stopwords():
     assert "and" not in reasons
     assert "the" not in reasons
     assert "with" not in reasons
+
+
+def test_match_reasons_keep_romanian_words_whole():
+    cv = "Experiență cu aplicații React și TypeScript; cunoștințe de accesibilitate."
+    jd = "Dezvoltăm aplicații React. Cerințe: aplicații web, TypeScript, accesibilitate."
+    reasons = recommend.match_reasons(cv, jd)
+    assert reasons[0] == "aplicații"  # three times in the posting, whole word
+    assert {"react", "typescript", "accesibilitate"} <= set(recommend.match_reasons(cv, jd, top_k=5))
+    assert not any(r.startswith("aplica") and r != "aplicații" for r in reasons)
+    assert "cunoștințe" not in reasons and "și" not in reasons
+
+
+def test_tokens_keep_skill_punctuation():
+    # Unchanged by the Unicode fix: "+", "#" and inner dots stay part of a
+    # term; terms are three characters or longer, as before.
+    assert recommend._tokens("C++, Node.js and .NET.") == ["c++", "node.js", "and", "net"]
