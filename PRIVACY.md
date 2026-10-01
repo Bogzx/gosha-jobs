@@ -26,10 +26,14 @@ Self-hosted instances have their own controller — you.
 | Tracked applications and notes | The user enters them | The application tracker | Contract |
 | Generated cover letters | The user requests them | Retrieval later | Consent |
 | Pageviews (path only) | Product use | Basic usage counts | Legitimate interest |
+| IP address of sign-in requests, with a counter | The request | Rate-limiting sign-in (`gosha/ratelimit.py`) | Legitimate interest |
+| Request log lines incl. IP address | The request (uvicorn access log) | Operating and debugging the service | Legitimate interest |
 
 No email address is collected. No advertising identifiers. No cross-site
 tracking, and no third-party JavaScript (`script-src 'self'` in the
-`Caddyfile`).
+`Caddyfile`). If a CDN in front of the site injects its own script
+(Cloudflare can add an analytics beacon), the CSP blocks it and the
+`/privacy` page says so when `PRIVACY_EDGE_PROXY` is set.
 
 ## Third parties that receive personal data
 
@@ -58,6 +62,11 @@ If you self-host, **this is your disclosure to make**: check the terms of
 whichever provider you configure, particularly whether they retain or train
 on request content.
 
+**A reverse proxy / CDN in front of the site** — set `PRIVACY_EDGE_PROXY`
+(today: `cloudflare`) and `/privacy` lists it. Cloudflare terminates HTTPS,
+so it sees every request in plaintext, including CV uploads, plus visitor
+IP addresses. gosha.bogdantruta.com runs behind Cloudflare.
+
 ## Retention
 
 - **CV text and embedding** — until the user deletes the CV or the account,
@@ -66,13 +75,20 @@ on request content.
   generated from it (`gosha/services/retention.py`). Deliveries do not
   count as activity; signing in, uploading, feedback, tracking and
   searches do.
-- **Cover letters** — until the account is deleted. Deleting a CV now also
-  deletes every letter generated from it (`gosha/services/cv.py`); it
-  previously left them behind indefinitely.
+- **Cover letters** — deleted with the CV (by the user or by the rule
+  above) and with the account (`gosha/services/cv.py`).
+- **Events** (page views, deliveries, sign-ins) — until the account is
+  deleted, or for `EVENT_RETENTION_MONTHS` when set (off by default, since
+  it deletes analytics history; never shorter than `CV_RETENTION_MONTHS`,
+  because CV retention reads activity from events). Page views by
+  signed-out visitors carry no account id.
+- **Sign-in rate-limit counters** (keyed by IP address) — deleted once
+  their window has passed (60 s for sign-in).
+- **Container logs** (incl. IP addresses) — rotated by size, 5 × 20 MB
+  per service (`docker-compose.prod.yml`).
 - **Everything else** — until the account is deleted.
 
-There is currently **no automatic retention limit** on jobs, events or
-delivery history. Rows accumulate. This is an open item.
+There is no automatic retention limit on delivery history or scraped jobs.
 
 ## User rights
 
@@ -82,6 +98,7 @@ delivery history. Rows accumulate. This is an open item.
 | Erasure (Art. 17) | `DELETE /api/v1/account?confirm=DELETE` — account row, CV file, cover letters, saved searches, delivery history, tracked applications and the event log. Irreversible. Button on the profile page. |
 | Rectification | Discord profile fields refresh on each sign-in; the CV can be re-uploaded. |
 | Withdraw consent | Delete the CV (web or `/delete_cv`), or the account. Deleting the CV also removes its embedding, the cover letters generated from it, and the consent record, so a new upload asks again. |
+| Complain | To a data protection authority; in Romania, ANSPDCP (<https://www.dataprotection.ro>). `/privacy` says so. |
 
 Erasure is implemented as explicit statements rather than ORM cascades
 (`gosha/services/account.py`) because the `events` table has no foreign
@@ -98,10 +115,13 @@ worse than none.
    both the `api` and `bot` containers hold in their environment. A stolen
    disk or backup is unreadable without the key; an attacker inside either
    container can still read CVs.
-2. **No backups exist yet.** See [`docs/BACKUPS.md`](docs/BACKUPS.md). The
-   backup service is written but unverified. Until a restore has been
-   tested, a disk failure loses everyone's data — which is a privacy
-   failure (availability) as much as an operational one.
+2. **Backups are not switched on in production yet.** The backup service
+   and its restore drill are tested end to end on throwaway containers
+   (`scripts/backup/drill.sh`, CI), but until an operator enables them
+   against an off-site repository and restores from it
+   ([`docs/BACKUPS.md`](docs/BACKUPS.md) Step 6), a disk failure loses
+   everyone's data — a privacy failure (availability) as much as an
+   operational one.
 3. **Third-party assets on the landing page.** `web/index.html` loads
    Google Fonts and `web/src/pages/Landing.tsx` loads Unsplash imagery,
    which exposes visitor IP addresses to Google and Unsplash. They should
@@ -109,13 +129,18 @@ worse than none.
    nothing else, and the `/privacy` page says so.
 4. **No session revocation.** Signing out clears the cookie; a cookie
    already stolen stays valid for its 30-day lifetime.
-5. **No retention limits** on the event log or delivery history.
+5. **No retention limit on delivery history**, and event retention is
+   opt-in (`EVENT_RETENTION_MONTHS`).
+6. **The controller is a person, not a company,** and the contact is a
+   website unless `PRIVACY_CONTACT` names an address. The legal-basis
+   column above is the operator's own assessment, not legal advice.
 
 ## Self-hosting checklist
 
 If you run your own instance, you are the controller. At minimum:
 
-- Replace the controller name and contact in `gosha/api/legal.py`.
+- Replace the controller name in `gosha/api/legal.py` and set
+  `PRIVACY_CONTACT`; set `PRIVACY_EDGE_PROXY` if a CDN fronts the site.
 - Check the terms of the LLM provider you configure and update the
   disclosure if they differ.
 - Set up backups (`docs/BACKUPS.md`) and test a restore.

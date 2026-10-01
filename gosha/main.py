@@ -156,14 +156,19 @@ async def main() -> None:
         replace_existing=True,
     )
 
-    # CV retention: delete CV data of users inactive > CV_RETENTION_MONTHS
+    # CV retention: delete CV data of users inactive > CV_RETENTION_MONTHS;
+    # event retention (opt-in): events older than EVENT_RETENTION_MONTHS
     # (gosha/services/retention.py). Daily, first run an hour after boot.
     async def _cv_retention_tick() -> None:
-        from gosha.services.retention import purge_stale_cvs
+        from gosha.services.retention import purge_old_events, purge_stale_cvs
         try:
             await purge_stale_cvs()
         except Exception as exc:
             log.warning("CV retention run failed: %s", exc)
+        try:
+            await purge_old_events()
+        except Exception as exc:
+            log.warning("Event retention run failed: %s", exc)
 
     scheduler.add_job(
         _cv_retention_tick,

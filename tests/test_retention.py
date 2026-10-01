@@ -129,3 +129,62 @@ def test_retention_months_from_env(monkeypatch, raw, expected):
     else:
         monkeypatch.setenv(retention.RETENTION_ENV, raw)
     assert retention_months() == expected
+
+
+# ── event retention (opt-in) ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("events", "cv", "expected"),
+    [
+        (None, "12", 0),     # default: keep everything, as before
+        ("24", "12", 24),
+        ("6", "12", 12),     # never shorter than CV retention
+        ("6", "0", 6),       # CV retention off: nothing to protect
+        ("nope", "12", 0),
+    ],
+)
+def test_event_retention_months(monkeypatch, events, cv, expected):
+    if events is None:
+        monkeypatch.delenv(retention.EVENT_RETENTION_ENV, raising=False)
+    else:
+        monkeypatch.setenv(retention.EVENT_RETENTION_ENV, events)
+    monkeypatch.setenv(retention.RETENTION_ENV, cv)
+    assert retention.event_retention_months() == expected
+
+
+async def add_events(session: AsyncSession) -> None:
+    for days in (10, 200, 500):
+        session.add(Event(
+            event_type="web.pageview", actor_id=None,
+            timestamp=NOW - timedelta(days=days),
+        ))
+    await session.commit()
+
+
+async def remaining_event_ages(session: AsyncSession) -> list[int]:
+    rows = (await session.execute(select(Event.timestamp))).scalars().all()
+    stamps = [t if t.tzinfo else t.replace(tzinfo=timezone.utc) for t in rows]
+    return sorted((NOW - t).days for t in stamps)
+
+
+async def test_event_retention_off_by_default(patched_db, session, monkeypatch):
+    monkeypatch.delenv(retention.EVENT_RETENTION_ENV, raising=False)
+    await add_events(session)
+    report = await retention.purge_old_events(now=NOW)
+    assert report.cutoff is None and "disabled" in report.summary()
+    assert await remaining_event_ages(session) == [10, 200, 500]
+
+
+async def test_event_retention_deletes_only_older_events(patched_db, session, monkeypatch):
+    monkeypatch.setenv(retention.EVENT_RETENTION_ENV, "12")
+    monkeypatch.setenv(retention.RETENTION_ENV, "12")
+    await add_events(session)
+
+    dry = await retention.purge_old_events(dry_run=True, now=NOW)
+    assert dry.expired == 1 and dry.deleted == 0
+    assert await remaining_event_ages(session) == [10, 200, 500]
+
+    report = await retention.purge_old_events(now=NOW)
+    assert report.deleted == 1
+    assert await remaining_event_ages(session) == [10, 200]
