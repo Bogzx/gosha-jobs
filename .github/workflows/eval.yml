@@ -1,0 +1,54 @@
+name: Ranking eval
+
+# The unit tests check that ranking code runs; this checks that it still
+# ranks well. On any change to the ranking path it re-runs the offline eval
+# (docs/EVAL.md) with the production model and fails if feed nDCG@10, or
+# Discord recall / off-target rate at the delivery threshold, moved more
+# than the tolerance against the committed baseline. Torch is CPU-only
+# here, so this job stays a few minutes long.
+
+on:
+  pull_request:
+    paths:
+      - gosha/matching.py
+      - gosha/embeddings.py
+      - gosha/recommend.py
+      - gosha/pipeline.py
+      - gosha/evaluation.py
+      - scripts/eval_ranking.py
+      - eval/**
+      - constraints.txt
+      - .github/workflows/eval.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (CPU torch, pinned versions)
+        run: |
+          python -m pip install -U pip
+          # The CPU build of the torch pinned in constraints.txt (keep the two
+          # in step); its dependencies come from PyPI at the pinned versions.
+          pip install -c constraints.txt \
+            --extra-index-url https://download.pytorch.org/whl/cpu "torch==2.14.0+cpu"
+          pip install -c constraints.txt sentence-transformers "sqlalchemy[asyncio]" \
+            aiosqlite numpy pandas python-dotenv httpx cryptography
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ hashFiles('gosha/matching.py') }}
+      - name: Eval the production model against the committed baseline
+        run: |
+          python scripts/eval_ranking.py --cache-dir "" \
+            --check eval/results/all-mpnet-base-v2.json | tee eval-summary.md
+          cat eval-summary.md >> "$GITHUB_STEP_SUMMARY"

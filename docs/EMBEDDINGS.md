@@ -6,10 +6,13 @@ the user's CV (chunked and mean-pooled, `gosha/embeddings.py`) and, for
 Discord delivery, the saved search blended with the CV
 (`gosha/pipeline.py:blend_with_user_vector`).
 
-The production default is still **`all-mpnet-base-v2`** — English-only,
-while eJobs, BestJobs and Hipo postings are largely Romanian. The code is
-ready for a multilingual model; the switch itself is an operator decision
-because it needs a re-embed and a threshold re-tune.
+The production default is **`all-mpnet-base-v2`** — English-only, while
+eJobs, BestJobs and Hipo postings are partly Romanian. The code is ready
+for a multilingual model, but **the ranking eval ([docs/EVAL.md](EVAL.md))
+does not support switching to `paraphrase-multilingual-mpnet-base-v2`**:
+it ranks worse overall (nDCG@10 0.485 vs 0.546) and worse on Romanian
+postings too (0.528 vs 0.637). Any candidate model should beat the
+current one on that eval first.
 
 ## What makes a switch safe
 
@@ -46,15 +49,33 @@ threshold. `scripts/reembed.py` with the multilingual model re-embedded 117
 live-scraped eJobs/BestJobs postings on Postgres in ~5 s on CPU (model
 load included); a production corpus of a few thousand takes minutes.
 
+## Before switching: read docs/EVAL.md
+
+The table above measures translation pairs, not the job the model does
+here. [`docs/EVAL.md`](EVAL.md) measures the ranking itself on ~200 real
+labelled postings, and it changes the picture:
+
+- **Window size.** `paraphrase-multilingual-mpnet-base-v2` reads **128
+  tokens**; `all-mpnet-base-v2` reads 384. The job text
+  (`build_job_text`: title twice + up to 1,500 description characters)
+  and the 1,400-character CV chunks (`gosha/embeddings.py`) are sized for
+  384, so after a switch both would be silently cut to roughly their
+  first 500-600 characters — mostly company boilerplate on many postings.
+  The chunk size would have to follow the model's window first.
+- **Ranking quality.** On the same labels the multilingual model scores
+  nDCG@10 0.485 against 0.546 for the current one, and raising its window
+  to 512 makes it worse (0.414). Romanian IT postings carry enough English
+  terms for the English model to place them.
+
 ## Procedure
 
-Recommended target: **`paraphrase-multilingual-mpnet-base-v2`** — 768
-dimensions like the current model (no schema change), 50+ languages
-including Romanian, same sentence-transformers API, ~1.1 GB download.
-Alternative: `intfloat/multilingual-e5-base` (also 768-d, often stronger on
-retrieval) — but E5 expects `"query: "` / `"passage: "` prefixes on its
-inputs, which `gosha/matching.py` does not add yet; do that first if you
-choose it.
+For whichever model wins on `scripts/eval_ranking.py` (none of the tested
+ones does yet). `paraphrase-multilingual-mpnet-base-v2` is used as the
+example below because it is 768-d like the current model (no schema
+change). `intfloat/multilingual-e5-base` (also 768-d) is the other obvious
+candidate, but E5 expects `"query: "` / `"passage: "` prefixes, which
+`gosha/matching.py` does not add yet, and a 512-token window the CV
+chunking would have to follow.
 
 1. **Dry run** (bot container, so it sees the same DB, CV key and files):
 
@@ -79,7 +100,9 @@ choose it.
    and rerun freely.
 
 5. **Re-tune `SEMANTIC_THRESHOLD`.** Cosine distributions differ between
-   models; 0.40 was chosen for `all-mpnet-base-v2`. Before changing it,
+   models; 0.42 / 0.43 (search alone / blended with the CV) were tuned for
+   `all-mpnet-base-v2` on the offline eval — rerun `scripts/eval_ranking.py`
+   with the new model and re-tune the same way. Before changing it,
    look at a day of deliveries (`user_jobs.relevance_score`) and feedback:
    pick the threshold that keeps roughly the old delivery volume, then
    adjust on 👍/👎 rates.
