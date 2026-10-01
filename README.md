@@ -213,7 +213,7 @@ GOSHA holds real CVs. [`PRIVACY.md`](PRIVACY.md) is the operator-facing version 
 
 ## Backups
 
-**There is no backup system running yet.** [`docs/BACKUPS.md`](docs/BACKUPS.md) contains a ready-to-use `backup` service for `docker-compose.prod.yml` plus the setup steps — it is written but **unverified**, and nobody should consider the data safe until a restore has actually been tested. This is the single highest-value thing an operator of this repo can do.
+**Backups are built and tested, but not switched on in production yet.** [`docs/BACKUPS.md`](docs/BACKUPS.md) describes an opt-in `backup` service (`pg_dump` + encrypted restic snapshots of the database and the CV files) and a restore drill that loads the newest snapshot into a scratch Postgres and compares row counts with the live database. [`scripts/backup/drill.sh`](scripts/backup/drill.sh) runs backup → restore → CV decryption end to end on throwaway containers, and CI repeats it on every change to the backup code. An operator still has to point it at an off-site repository and run the restore drill there; until then, treat the data as unbacked-up.
 
 ## Credits
 

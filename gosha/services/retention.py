@@ -15,8 +15,14 @@ cover letter, creating a search, and user-attributed events (`user.*`,
 the system acting on the user and do not count — otherwise every DM would
 keep a CV alive indefinitely.
 
-Runs daily from the bot's scheduler; `scripts/cv_retention.py --dry-run`
-shows what it would delete.
+Event retention (EVENT_RETENTION_MONTHS, default 0 = keep) is the same
+idea for the event log — page views, deliveries, sign-ins — which is
+otherwise kept until the account is deleted. It is opt-in because it
+deletes analytics history, and it never undercuts CV retention, which
+reads user activity from those events.
+
+Both run daily from the bot's scheduler; `scripts/cv_retention.py
+--dry-run` shows what they would delete.
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 
 import gosha.cover_letter as cv_storage
 from gosha.database import get_session
@@ -37,25 +43,43 @@ log = logging.getLogger(__name__)
 
 RETENTION_ENV = "CV_RETENTION_MONTHS"
 DEFAULT_RETENTION_MONTHS = 12
+EVENT_RETENTION_ENV = "EVENT_RETENTION_MONTHS"
 DAYS_PER_MONTH = 30  # a retention window, not a calendar computation
 
 USER_EVENT_PREFIXES = ("user.", "subscription.", "web.")
 
 
-def retention_months() -> int:
-    """Configured window in months; 0 means retention is disabled."""
-    raw = os.getenv(RETENTION_ENV, "").strip()
+def _months_from_env(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
     if not raw:
-        return DEFAULT_RETENTION_MONTHS
+        return default
     try:
         months = int(raw)
     except ValueError:
         log.error(
             "%s=%r is not an integer; using the default of %d months",
-            RETENTION_ENV, raw, DEFAULT_RETENTION_MONTHS,
+            name, raw, default,
         )
-        return DEFAULT_RETENTION_MONTHS
+        return default
     return max(0, months)
+
+
+def retention_months() -> int:
+    """Configured CV window in months; 0 means CV retention is disabled."""
+    return _months_from_env(RETENTION_ENV, DEFAULT_RETENTION_MONTHS)
+
+
+def event_retention_months() -> int:
+    """Event-log window in months, as enforced; 0 means keep everything.
+
+    Never shorter than the CV window: last_activity() reads sign-ins and
+    other user events from this table, so pruning them first would make
+    active users look inactive and delete their CVs early.
+    """
+    months = _months_from_env(EVENT_RETENTION_ENV, 0)
+    if months and retention_months():
+        return max(months, retention_months())
+    return months
 
 
 def _utc(value: datetime | None) -> datetime | None:
@@ -204,6 +228,50 @@ async def purge_stale_cvs(
                 "CV retention: deleted CV data of user %d (last active %s)",
                 uid, f"{last_seen:%Y-%m-%d}" if last_seen else "never",
             )
+
+    log.info(report.summary())
+    return report
+
+
+@dataclass
+class EventRetentionReport:
+    months: int
+    cutoff: datetime | None
+    dry_run: bool
+    expired: int = 0
+    deleted: int = 0
+
+    def summary(self) -> str:
+        if self.cutoff is None:
+            return "Event retention disabled (EVENT_RETENTION_MONTHS=0)."
+        verb = "would delete" if self.dry_run else "deleted"
+        count = self.expired if self.dry_run else self.deleted
+        return (
+            f"Event retention ({self.months} months, cutoff "
+            f"{self.cutoff:%Y-%m-%d}): {verb} {count} event(s)."
+        )
+
+
+async def purge_old_events(
+    dry_run: bool = False,
+    now: datetime | None = None,
+) -> EventRetentionReport:
+    """Delete events older than event_retention_months() (0: do nothing)."""
+    months = event_retention_months()
+    if months == 0:
+        return EventRetentionReport(months=0, cutoff=None, dry_run=dry_run)
+
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=months * DAYS_PER_MONTH)
+    report = EventRetentionReport(months=months, cutoff=cutoff, dry_run=dry_run)
+    async with get_session() as session:
+        report.expired = (await session.execute(
+            select(func.count()).select_from(Event).where(Event.timestamp < cutoff)
+        )).scalar_one()
+        if not dry_run and report.expired:
+            result = await session.execute(delete(Event).where(Event.timestamp < cutoff))
+            await session.commit()
+            report.deleted = result.rowcount or 0
 
     log.info(report.summary())
     return report
