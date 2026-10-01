@@ -2,12 +2,11 @@
 # Nightly encrypted off-box backup of everything that cannot be rebuilt:
 # the Postgres database and the CV files on the data mount.
 #
-# ─────────────────────────────────────────────────────────────────────────
-# UNVERIFIED. This script has never been executed against a real restic
-# repository. It was written from the documented behaviour of pg_dump and
-# restic; the operator must provision the remote, run it once by hand, and
-# TEST A RESTORE before treating the data as safe. See docs/BACKUPS.md.
-# ─────────────────────────────────────────────────────────────────────────
+# Verified end to end on throwaway containers by scripts/backup/drill.sh
+# (dump -> restic -> restore -> row counts and CV decryption; CI runs it
+# in .github/workflows/backup-drill.yml). Not yet proven against the
+# production remote: an operator still has to run docs/BACKUPS.md Step 6
+# there, because a backup nobody has restored is a hope, not a backup.
 #
 # Environment (set in .env, consumed via docker-compose.prod.yml):
 #   RESTIC_REPOSITORY        where snapshots go (s3:/b2:/sftp:/rest:)
@@ -16,6 +15,8 @@
 #   BACKUP_INTERVAL_SECONDS  default 86400
 #   BACKUP_KEEP_DAILY        default 30
 #   BACKUP_HEALTHCHECK_URL   optional: pinged on success (dead-man switch)
+#   BACKUP_ONCE              1 = run a single cycle and exit with its status
+#                            (first run by hand, the drill)
 
 set -eu
 
@@ -45,6 +46,9 @@ fail() {
   # A backup that fails quietly is worse than no backup, because it looks
   # like one. Surface it, then keep the loop alive so a transient network
   # problem does not disable backups until someone notices the container.
+  # Callers must `return 1` after this: run_once runs as an `if` condition,
+  # where `set -e` is off, so a bare `cmd || fail` would carry on, log
+  # "Backup complete" and ping the healthcheck URL as if it had worked.
   return 1
 }
 
@@ -57,6 +61,13 @@ init_repo_if_needed() {
 }
 
 run_once() {
+  # restic skips a missing path with a warning and exit 0, so without this
+  # an unmounted data volume yields "successful" snapshots with no CVs.
+  if [ ! -d "$DATA_DIR" ]; then
+    fail "$DATA_DIR is not mounted — refusing to snapshot without the CV files"
+    return 1
+  fi
+
   rm -rf "$DUMP_DIR"
   mkdir -p "$DUMP_DIR"
 
@@ -65,7 +76,7 @@ run_once() {
   # container with a differently-named role still works.
   log "Dumping database ${PGDATABASE} from ${PGHOST}"
   pg_dump -Fc --no-owner --no-privileges -f "$DUMP_DIR/gosha.dump" \
-    || fail "pg_dump failed"
+    || { fail "pg_dump failed"; return 1; }
 
   # Sanity-check the dump before it is snapshotted. An empty or truncated
   # dump is the classic "we had backups" outcome.
@@ -74,7 +85,7 @@ run_once() {
     return 1
   fi
   pg_restore --list "$DUMP_DIR/gosha.dump" >/dev/null \
-    || fail "dump is unreadable by pg_restore — refusing to snapshot"
+    || { fail "dump is unreadable by pg_restore — refusing to snapshot"; return 1; }
 
   size=$(wc -c < "$DUMP_DIR/gosha.dump")
   log "Dump OK (${size} bytes)"
@@ -87,7 +98,7 @@ run_once() {
     "$DATA_DIR" \
     --exclude "$DATA_DIR/*.heartbeat" \
     --exclude "$DATA_DIR/**/__pycache__" \
-    || fail "restic backup failed"
+    || { fail "restic backup failed"; return 1; }
 
   log "Pruning to the last ${KEEP_DAILY} daily snapshots"
   restic forget --tag gosha --keep-daily "$KEEP_DAILY" --prune \
@@ -107,6 +118,13 @@ run_once() {
 
   log "Backup complete"
 }
+
+if [ "${BACKUP_ONCE:-0}" = "1" ]; then
+  log "gosha backup: single cycle (BACKUP_ONCE=1)"
+  init_repo_if_needed || { log "FATAL: could not open or initialise the repository"; exit 1; }
+  run_once || { log "Backup cycle FAILED"; exit 1; }
+  exit 0
+fi
 
 log "gosha backup loop starting (interval ${INTERVAL}s, keep ${KEEP_DAILY} daily)"
 init_repo_if_needed || log "WARNING: repo init failed; will retry next cycle"

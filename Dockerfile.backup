@@ -6,12 +6,13 @@
 # (dump into a shared volume, then back the volume up) and its window
 # where a half-written dump gets snapshotted.
 #
-# UNVERIFIED: this image has never been built or run. See docs/BACKUPS.md.
+# Built and exercised end to end by scripts/backup/drill.sh (CI:
+# .github/workflows/backup-drill.yml). See docs/BACKUPS.md.
 FROM postgres:16-alpine
 
 RUN apk add --no-cache restic ca-certificates tzdata
 
-COPY scripts/backup/run-backup.sh /usr/local/bin/run-backup.sh
-RUN chmod +x /usr/local/bin/run-backup.sh
+COPY scripts/backup/run-backup.sh scripts/backup/restore-drill.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/run-backup.sh /usr/local/bin/restore-drill.sh
 
 ENTRYPOINT ["/bin/sh", "/usr/local/bin/run-backup.sh"]

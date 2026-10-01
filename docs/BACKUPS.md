@@ -1,15 +1,18 @@
 # Backups
 
-> ## ⚠️ THIS IS UNVERIFIED
+> ## ⚠️ Not running in production yet
 >
-> Everything in this document was written without access to the VPS. The
-> `backup` service has **never been built, never been run, and never
-> restored from**. Nobody has confirmed that a single byte of GOSHA data
-> exists anywhere except on one server.
+> The mechanism is **verified, the deployment is not.** `scripts/backup/drill.sh`
+> runs the whole loop on throwaway containers: the app's real schema, a
+> `pg_dump`, a restic snapshot, a restore into a fresh Postgres with
+> identical row counts, and decryption of the restored CVs. It also checks that a
+> broken backup fails instead of reporting success. CI repeats it on every
+> change to the backup code (`.github/workflows/backup-drill.yml`).
 >
-> Until you have completed [Step 6 — test a restore](#step-6--test-a-restore),
-> assume there are **no backups**. That is currently the true state of the
-> production deployment.
+> What no drill can do is prove *your* remote, *your* credentials and
+> *your* data. Until an operator has completed
+> [Step 6 — test a restore](#step-6--test-a-restore) against the
+> production repository, assume there are **no backups**.
 
 ## Why this is the most important item in the repo
 
@@ -98,18 +101,20 @@ BACKUP_HEALTHCHECK_URL=
 ### Step 4 — initialise and run once by hand
 
 Do **not** start the loop first. Run one cycle in the foreground and read
-the output:
+the output (`BACKUP_ONCE=1` runs a single cycle and exits with its status):
 
 ```bash
 cd ~/gosha
 docker compose -f docker-compose.prod.yml --profile backup build backup
 docker compose -f docker-compose.prod.yml --profile backup run --rm \
-  -e BACKUP_INTERVAL_SECONDS=0 backup
+  -e BACKUP_ONCE=1 backup
+echo "exit status: $?"
 ```
 
-Expect to see `Dump OK (… bytes)` with a plausible size, then restic
-reporting added files, then `Backup complete`. Ctrl-C after the first
-cycle.
+Expect `Dump OK (… bytes)` with a plausible size, restic reporting added
+files, `Backup complete`, and exit status 0. Anything else is a failure:
+the script exits non-zero and does not log `Backup complete` or ping the
+healthcheck URL.
 
 Common failures at this point:
 
@@ -136,49 +141,39 @@ the stack is unaffected if you are not ready.
 
 **This step is the backup.** Everything before it is a hopeful ritual.
 
-List what you have:
+`restore-drill.sh` (shipped in the backup image) restores the newest
+snapshot inside a throwaway container, loads the dump into a scratch
+Postgres *inside that same container*, and prints every table's row count
+next to the live database's. Nothing outside the container is written:
 
 ```bash
 docker compose -f docker-compose.prod.yml --profile backup run --rm \
-  --entrypoint restic backup snapshots
+  --entrypoint /bin/sh backup /usr/local/bin/restore-drill.sh
 ```
 
-Restore the newest snapshot into a scratch directory:
+It ends with `RESTORE DRILL PASSED` (exit 0) when the snapshot loads, no
+table that has rows live came back empty, no live table is missing and
+the CV files came back. Restored counts slightly below live are normal:
+production kept writing after the snapshot.
+
+Then prove the restored CVs open with the key in `.env`. The backup holds
+ciphertext, and the key is not in it:
 
 ```bash
+mkdir -p /tmp/gosha-restore && chmod 700 /tmp/gosha-restore
 docker compose -f docker-compose.prod.yml --profile backup run --rm \
-  --entrypoint restic backup restore latest --target /tmp/restore-test
+  -v /tmp/gosha-restore:/restore-out \
+  --entrypoint /bin/sh backup /usr/local/bin/restore-drill.sh
+# -u 0: the scratch directory is private to your host user, and the
+# restored files keep their original owner and mode.
+docker compose -f docker-compose.prod.yml run --rm --no-deps -u 0 \
+  -v /tmp/gosha-restore:/restore-out:ro \
+  bot python scripts/backup/verify_cvs.py /restore-out/data/cvs
+sudo rm -rf /tmp/gosha-restore     # restored files are root-owned
 ```
 
-Then prove the dump is real by loading it into a throwaway database:
-
-```bash
-docker run --rm -d --name pg-restore-test \
-  -e POSTGRES_PASSWORD=test -e POSTGRES_USER=gosha -e POSTGRES_DB=gosha \
-  postgres:16-alpine
-
-docker cp /tmp/restore-test/tmp/gosha-backup/gosha.dump pg-restore-test:/tmp/
-
-docker exec pg-restore-test pg_restore -U gosha -d gosha --no-owner /tmp/gosha.dump
-
-docker exec pg-restore-test psql -U gosha -d gosha -c \
-  "select count(*) from users; select count(*) from jobs; select count(*) from applications;"
-
-docker rm -f pg-restore-test
-```
-
-The counts must be close to production. Also confirm the CV files came
-back:
-
-```bash
-ls /tmp/restore-test/data/cvs | head
-```
-
-Then delete the scratch copy — it contains real CVs:
-
-```bash
-rm -rf /tmp/restore-test
-```
+`verify_cvs.py` prints counts only (`N CV file(s) decrypt, 0 do not`),
+never CV text.
 
 ### Step 7 — put a reminder in the calendar
 
@@ -199,5 +194,6 @@ Even with this running, these are open:
 - **No off-site copy of `.env`.** The backups are useless without
   `RESTIC_PASSWORD`, and the stack will not boot without the Discord and
   database secrets. Store them separately and deliberately.
-- **Nobody has verified any of the above.** Including the person who
-  wrote it.
+- **The drill does not prove the production remote.** It proves the
+  scripts and the image. Step 6 against the real repository is still the
+  only proof that the data on that remote can be restored.
