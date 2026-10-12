@@ -5,12 +5,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from gosha.config import load_web_settings
 from gosha.database import get_session
 from gosha.domain.errors import NotFoundError, TierLimitError, ValidationError
-from gosha.models import Subscription, User
+from gosha.models import Subscription, User, UserJob
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +63,13 @@ async def create_subscription(user: User, data: SubscriptionInput) -> Subscripti
     _check_tier_lists(user, keywords, locations)
 
     async with get_session() as session:
+        # Count under a lock on the user row, or two concurrent creates both
+        # see room and the plan's limit is exceeded. SQLite has no row locks
+        # (and no concurrent writers to lock against).
+        if session.bind.dialect.name == "postgresql":
+            await session.execute(
+                select(User.id).where(User.id == user.id).with_for_update()
+            )
         count = (
             await session.execute(
                 select(func.count(Subscription.id)).where(
@@ -132,7 +139,12 @@ async def get_own_subscription(user_id: int, subscription_id: int) -> Subscripti
 async def update_subscription(
     user: User, subscription_id: int, patch: dict,
 ) -> Subscription:
-    """Apply a partial update; `patch` keys mirror SubscriptionInput fields."""
+    """Apply a partial update; `patch` keys mirror SubscriptionInput fields.
+
+    A key that is absent leaves the field alone. For the nullable fields
+    (name, salary_min) a None value clears them — the SPA sends null when
+    the user empties the box. For the others None also means "unchanged".
+    """
     sub = await get_own_subscription(user.id, subscription_id)
 
     keywords = (
@@ -151,7 +163,7 @@ async def update_subscription(
         sub = await session.merge(sub)
         sub.keywords = keywords
         sub.locations = locations
-        if patch.get("name") is not None:
+        if "name" in patch:
             sub.name = patch["name"]
         if patch.get("excluded_keywords") is not None:
             sub.excluded_keywords = _clean_list(patch["excluded_keywords"])
@@ -161,7 +173,7 @@ async def update_subscription(
             sub.experience_levels = _clean_list(patch["experience_levels"]) or ["any"]
         if patch.get("remote_ok") is not None:
             sub.remote_ok = patch["remote_ok"]
-        if patch.get("salary_min") is not None:
+        if "salary_min" in patch:
             sub.salary_min = patch["salary_min"]
         if patch.get("max_age_days") is not None:
             sub.max_age_days = patch["max_age_days"]
@@ -185,6 +197,14 @@ async def set_subscription_active(
 async def delete_subscription(user_id: int, subscription_id: int) -> None:
     sub = await get_own_subscription(user_id, subscription_id)
     async with get_session() as session:
+        # Delivery history outlives the search: user_jobs.subscription_id
+        # references it (no ON DELETE action), so Postgres refused the
+        # delete for any search that ever sent a DM.
+        await session.execute(
+            update(UserJob)
+            .where(UserJob.subscription_id == subscription_id)
+            .values(subscription_id=None)
+        )
         sub = await session.merge(sub)
         await session.delete(sub)
         await session.commit()

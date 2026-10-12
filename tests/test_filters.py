@@ -8,6 +8,8 @@ from gosha.filters import (
     city_only,
     expand_keyword,
     filter_dataframe,
+    fold,
+    is_romanian_location,
     keyword_wants_entry_level,
     keyword_wants_tech,
     location_matches,
@@ -290,3 +292,88 @@ class TestFilterDataframe:
         df = pd.DataFrame({"company": ["Acme"]})
         result = filter_dataframe(df, "anything")
         assert len(result) == 1  # returned as-is
+
+    def test_board_entry_level_keeps_a_plain_title(self):
+        """Romanian boards file "QA Engineer" as entry-level without saying
+        so in the title; the board's label is honoured."""
+        df = pd.DataFrame({
+            "title": ["QA Engineer", "QA Engineer", "Senior QA Engineer", "Java Developer"],
+            "experience_level": ["entry", "mid", "entry", None],
+        })
+        result = filter_dataframe(df, "computer science internship")
+        assert list(result["title"]) == ["QA Engineer"]
+        assert list(result["experience_level"]) == ["entry"]
+
+
+# ── word boundaries and Romanian vocabulary ───────────────────────────
+
+
+class TestWordBoundaries:
+    def test_international_and_internal_are_not_internships(self):
+        for title in ("International Sales Manager", "Internal Auditor"):
+            assert matches_experience_level(title, ["intern"]) is False
+        assert title_is_relevant(
+            "Internal Tools Engineer", "computer science internship",
+        ) is False
+
+    def test_plural_and_suffixed_forms_still_match(self):
+        assert matches_experience_level("Summer Internships 2027", ["intern"]) is True
+        assert matches_experience_level(
+            "Year in Industry Placements - Technology", ["intern"],
+        ) is True
+        assert title_is_relevant(
+            "Year in Industry Placements - Technology", "computer science internship",
+        ) is True
+        assert matches_experience_level("Engineering Apprenticeship", ["intern"]) is True
+        assert title_is_relevant("Software Developers (Graduates)", "cs entry level") is True
+
+    def test_romanian_entry_level_terms(self):
+        for title in (
+            "Programator Java Stagiar", "Practică de vară IT", "Absolvent IT - Tester",
+            "Dezvoltator software fără experiență", "Programator începător",
+        ):
+            assert title_is_relevant(title, "computer science internship"), title
+
+    def test_tech_terms_that_used_to_miss(self):
+        for title in (
+            "IT Support Intern", "Information Technology Intern", "Computing Intern",
+            "Programator Junior", "Dezvoltator Junior", "Tester Junior",
+            "Junior Software Developers",
+        ):
+            assert title_is_relevant(title, "computer science internship"), title
+
+    def test_it_is_case_sensitive(self):
+        assert title_is_relevant("Make it happen - Junior", "computer science internship") is False
+
+    def test_romanian_trades_need_a_strong_cs_signal(self):
+        for title in (
+            "Tehnician Infrastructura IT & CCTV", "Inginer Mentenanta",
+            "Inginer Calitate & BIM (Revit)", "Data Center Technician",
+        ):
+            assert title_is_relevant(title, "software engineering") is False, title
+        assert title_is_relevant("Tehnician IT - Python developer", "software engineering")
+
+
+# ── location folding ──────────────────────────────────────────────────
+
+
+class TestLocationFolding:
+    def test_fold_strips_both_romanian_comma_styles(self):
+        assert fold("Timişoara") == fold("Timișoara") == "timisoara"
+        assert fold("România") == "romania"
+
+    def test_romania_matches_board_spellings(self):
+        _search, subs = normalize_location("romania")
+        assert location_matches("Cluj-Napoca, România", subs)
+        assert location_matches("București, IF, RO", subs)  # Indeed's format
+        assert not location_matches("Berlin, Germany", subs)
+
+    def test_diacritic_aliases_resolve(self):
+        assert normalize_location("Timișoara")[0] == "Timisoara, Romania"
+        assert normalize_location("Iași")[0] == "Iasi, Romania"
+
+    def test_is_romanian_location(self):
+        for loc in ("cluj", "Bucharest", "romania", "europe", "Arad", "Cluj-Napoca"):
+            assert is_romanian_location(loc), loc
+        for loc in ("remote", "london", "berlin"):
+            assert not is_romanian_location(loc), loc

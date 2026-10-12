@@ -115,6 +115,40 @@ async def test_feed_fallback_recency_without_signal(patched_db, session: AsyncSe
 
 
 @pytest.mark.asyncio
+async def test_feed_dislikes_alone_fall_back_to_recency(patched_db, session: AsyncSession):
+    """No CV and only a 👎: the vector was -disliked, so the feed ranked
+    "least like what you turned down" first (accounting on top for a
+    Python student). Dislikes give no direction; newest-first instead."""
+    user = User(discord_user_id=12)
+    session.add(user)
+    now = datetime.now(timezone.utc)
+    disliked = make_job("https://r.com/dis", 0, title="Python Dev")
+    python_job = make_job("https://r.com/py", 0, title="Python Backend")
+    python_job.first_seen_at = now
+    accounting = make_job("https://r.com/acc", 1, title="Accountant")
+    accounting.first_seen_at = now - timedelta(days=1)
+    session.add_all([disliked, python_job, accounting])
+    await session.flush()
+    session.add(UserJob(user_id=user.id, job_id=disliked.id, feedback="not_relevant"))
+    await session.commit()
+
+    assert await recommend.build_user_vector(user.id) is None
+    items, total = await recommend.get_feed(user.id, page=1, per_page=10)
+
+    assert [item.job.id for item in items] == [python_job.id, accounting.id]
+    assert total == 2  # the disliked job itself stays out
+    assert all(item.score is None for item in items)
+
+
+def test_apply_feedback_needs_a_cv_or_a_like():
+    v = unit_vec(0)
+    assert recommend.apply_feedback(None, [], [v]) is None
+    # With a CV, dislikes still push away from what was disliked.
+    out = recommend.apply_feedback(unit_vec(1), [], [v])
+    assert out is not None and out[0] < 0 < out[1]
+
+
+@pytest.mark.asyncio
 async def test_feed_skips_stale_jobs(patched_db, session: AsyncSession):
     user = User(discord_user_id=5, cv_embedding=vec_to_bytes(unit_vec(0)))
     session.add(user)
@@ -198,6 +232,48 @@ async def test_percentiles_are_relative_to_all_candidates_not_the_page(
     # The best job on page 2 is still a mid-pack match overall.
     assert page2[0].percentile < 60
     assert page2[-1].percentile == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_cv", [True, False])
+async def test_feed_reads_descriptions_only_for_the_page(
+    patched_db, session: AsyncSession, monkeypatch, with_cv,
+):
+    """Ranking needs the vectors, not the text: every /feed request loaded
+    the description of every posting from the last 30 days."""
+    user = User(
+        discord_user_id=21 + with_cv,
+        cv_embedding=vec_to_bytes(unit_vec(0)) if with_cv else None,
+    )
+    session.add(user)
+    now = datetime.now(timezone.utc)
+    for i in range(5):
+        weight = 0.9 - i * 0.1
+        vec = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+        vec[0] = weight
+        vec[1] = float(np.sqrt(1 - weight**2))
+        job = make_job(f"https://r.com/d{i}", None, description=f"Posting {i}: Python")
+        job.embedding = vec_to_bytes(vec)
+        job.first_seen_at = now - timedelta(hours=i)  # same order either way
+        session.add(job)
+    await session.commit()
+
+    loaded: list[Job] = []
+    real = recommend.load_candidates
+
+    async def spy(*args, **kwargs):
+        jobs = await real(*args, **kwargs)
+        loaded.extend(jobs)
+        return jobs
+
+    monkeypatch.setattr(recommend, "load_candidates", spy)
+    items, total = await recommend.get_feed(user.id, page=1, per_page=2)
+
+    assert total == 5
+    assert [item.job.description for item in items] == ["Posting 0: Python", "Posting 1: Python"]
+    page_ids = {item.job.id for item in items}
+    without_text = {job.id for job in loaded if "description" not in job.__dict__}
+    assert without_text == {job.id for job in loaded} - page_ids
 
 
 def test_percentile_ranks_handles_ties_and_edges():

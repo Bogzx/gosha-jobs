@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gosha.models import Base, Job, Subscription, User
@@ -26,6 +27,16 @@ def event_loop():
 async def engine():
     """Create a fresh in-memory database engine per test."""
     eng = create_async_engine(TEST_DB_URL, echo=False)
+
+    # Enforce foreign keys as Postgres does. SQLite ignores them by
+    # default, which is how deleting a saved search with deliveries passed
+    # every test here and failed in production.
+    @event.listens_for(eng.sync_engine, "connect")
+    def _foreign_keys(dbapi_conn, _record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield eng

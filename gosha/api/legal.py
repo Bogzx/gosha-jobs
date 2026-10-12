@@ -100,8 +100,11 @@ def _retention() -> dict[str, str]:
     return {
         "cv_text": cv_rule,
         "cover_letters": (
-            "Deleted together with your CV (by you, or by the inactivity "
-            "rule above), and with your account."
+            "The text is deleted together with your CV (by you, or by the "
+            "inactivity rule above). A record without text (which posting, "
+            "when) stays so the letter still counts toward that month's "
+            "cover-letter limit; it is deleted after that month ends, or "
+            "with your account."
         ),
         "delivery_history": "Until you delete your account.",
         "events": (
@@ -226,8 +229,8 @@ async def privacy() -> dict:
             "consent": (
                 "Storing a CV needs your explicit consent, recorded with a "
                 "timestamp when you give it. Withdraw it by deleting your CV: "
-                "that removes the text, its embedding, the cover letters made "
-                "from it and the recorded consent."
+                "that removes the text, its embedding, the text of the cover "
+                "letters made from it and the recorded consent."
             ),
             "complaint": (
                 "You can complain to a data protection authority; in Romania "

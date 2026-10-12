@@ -30,6 +30,17 @@ def test_raw_job_to_record_matches_upsert_columns():
     assert record["currency"] == "RON"
     assert record["date_posted"] == job.posted_at
     assert record["title"] == "Dev"
+    assert record["experience_level"] is None
+
+
+def test_search_query_relevance_defaults_to_everything():
+    assert SearchQuery("python", "cluj").is_relevant("Agent Vanzari")
+    picky = SearchQuery(
+        "python", "cluj", relevant=lambda title, level=None: level == "entry",
+    )
+    assert picky.is_relevant("QA", "entry") and not picky.is_relevant("QA")
+    # The predicate is not part of the query's identity.
+    assert picky == SearchQuery("python", "cluj")
 
 
 def test_parse_salary_range_variants():
@@ -45,7 +56,10 @@ def test_parse_salary_range_variants():
 def test_registry_returns_all_extra_sources():
     scrapers = get_extra_scrapers()
     names = {s.name for s in scrapers}
-    assert names == {"remoteok", "ejobs", "bestjobs", "hipo"}
+    assert names == {"remoteok", "ejobs", "bestjobs", "hipo", "jobicy"}
+    # Every adapter declares where it applies, so health only judges
+    # sources that were actually asked.
+    assert all(callable(getattr(s, "applies_to", None)) for s in scrapers)
 
 
 def test_search_query_normalized():

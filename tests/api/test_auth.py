@@ -141,13 +141,15 @@ async def test_callback_bad_state_rejected(client):
     assert resp.json()["error"]["code"] == "invalid_state"
 
 
+REBOUND_LOGIN = "/api/v1/auth/discord/login?rebound=1"
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_callback_state_cookie_mismatch_issues_no_session(client, monkeypatch):
     """A cookie that doesn't name this state is not a binding.
 
-    The browser gets no session — the sign-in is parked for whichever
-    browser actually minted the state (see the handoff tests below).
+    The browser gets no session; it is sent to start a sign-in of its own.
     """
     monkeypatch.setenv("DISCORD_TOKEN", "bot-token")
     _mock_discord()
@@ -159,7 +161,7 @@ async def test_callback_state_cookie_mismatch_issues_no_session(client, monkeypa
         cookies={"gosha_oauth_state": other_state},
         follow_redirects=False,
     )
-    assert resp.headers["location"] == "/signed-in"
+    assert resp.headers["location"] == REBOUND_LOGIN
     assert "gosha_session=" not in " ".join(resp.headers.get_list("set-cookie"))
 
 
@@ -185,107 +187,107 @@ async def test_callback_without_cookie_never_issues_a_session(client, monkeypatc
     )
 
     assert resp.status_code == 307
-    assert resp.headers["location"] == "/signed-in"
+    assert resp.headers["location"] == REBOUND_LOGIN
     set_cookies = " ".join(resp.headers.get_list("set-cookie"))
     assert "gosha_session=" not in set_cookies
+    # The attacker's code is never even exchanged.
+    assert not respx.calls
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_cross_browser_handoff_signs_in_the_originating_browser(
+async def test_approval_in_another_browser_never_signs_in_the_starter(
     client, session, monkeypatch,
 ):
-    """Desktop app flow, preserved safely.
+    """Account takeover through the old cross-browser handoff.
 
-    Browser A clicks sign-in (gets the state cookie). The desktop Discord
-    app opens the callback in Browser B, which has no cookie and therefore
-    gets no session. Browser A collects the completed sign-in from
-    /auth/discord/handoff, because only A holds the cookie naming the state.
+    Attacker A starts a sign-in (holds the state cookie) and sends the
+    authorize link to victim B. With prompt=none and B's earlier consent,
+    opening it is enough: the callback runs in B's browser. That used to
+    park B's account under A's state, and A's handoff poll collected a
+    session for B. Now nothing is parked and A's poll gets nothing.
     """
+    monkeypatch.setenv("DISCORD_TOKEN", "bot-token")
+    _mock_discord(discord_id="31337", username="victim")
+
+    login = await client.get("/api/v1/auth/discord/login", follow_redirects=False)
+    state = login.headers["location"].split("state=")[1].split("&")[0]
+    attacker_cookies = dict(client.cookies)
+    client.cookies.clear()
+
+    callback = await client.get(
+        "/api/v1/auth/discord/callback",
+        params={"code": "victims-code", "state": state},
+        follow_redirects=False,
+    )
+    assert callback.headers["location"] == REBOUND_LOGIN
+    assert "gosha_session=" not in " ".join(callback.headers.get_list("set-cookie"))
+
+    for _ in range(2):
+        poll = await client.get(
+            "/api/v1/auth/discord/handoff", cookies=attacker_cookies,
+        )
+        assert poll.json() == {"signed_in": False}
+        assert "gosha_session=" not in " ".join(poll.headers.get_list("set-cookie"))
+    assert (
+        await session.execute(select(User).where(User.discord_user_id == 31337))
+    ).scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_callback_browser_signs_itself_in_after_the_restart(
+    client, session, monkeypatch,
+):
+    """The desktop-app case still ends signed in: in the browser Discord
+    opened, through a sign-in that browser started itself."""
     monkeypatch.setenv("DISCORD_TOKEN", "bot-token")
     _mock_discord()
 
-    # Browser A starts the flow
+    # Browser A starts; the desktop app hands the callback to browser B.
     login = await client.get("/api/v1/auth/discord/login", follow_redirects=False)
     state = login.headers["location"].split("state=")[1].split("&")[0]
-
-    # Browser B completes the OAuth exchange — no cookie, no session.
-    # (The shared test client keeps A's cookie jar; clear it to be B.)
     client.cookies.clear()
     callback = await client.get(
         "/api/v1/auth/discord/callback",
         params={"code": "c", "state": state},
         follow_redirects=False,
     )
-    assert "gosha_session=" not in " ".join(callback.headers.get_list("set-cookie"))
 
-    # Browser A collects it
-    from gosha.api.auth import OAUTH_STATE_COOKIE
-
-    handoff = await client.get(
-        "/api/v1/auth/discord/handoff",
-        cookies={OAUTH_STATE_COOKIE: state},
+    # B follows the restart: its own state cookie, its own authorize round.
+    restart = await client.get(callback.headers["location"], follow_redirects=False)
+    assert restart.headers["location"].startswith("https://discord.com/oauth2/authorize")
+    b_state = restart.headers["location"].split("state=")[1].split("&")[0]
+    final = await client.get(
+        "/api/v1/auth/discord/callback",
+        params={"code": "c2", "state": b_state},
+        follow_redirects=False,
     )
-    assert handoff.json() == {"signed_in": True, "new_user": True}
-    assert "gosha_session=" in " ".join(handoff.headers.get_list("set-cookie"))
 
-    user = (
+    assert final.headers["location"] == "/welcome"
+    assert "gosha_session=" in " ".join(final.headers.get_list("set-cookie"))
+    assert (
         await session.execute(select(User).where(User.discord_user_id == 424242))
     ).scalar_one()
-    assert user.username == "gosha"
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_handoff_not_claimable_without_the_matching_state_cookie(
+async def test_restarted_sign_in_without_cookie_stops_instead_of_looping(
     client, monkeypatch,
 ):
-    """A parked sign-in belongs to the browser that minted the state.
-
-    An attacker who knows their own state cannot make the victim's browser
-    claim it, and a browser holding an unrelated state gets nothing.
-    """
     monkeypatch.setenv("DISCORD_TOKEN", "bot-token")
     _mock_discord()
-    state, _ = _state_for(client)
-    unrelated, _ = _state_for(client)
+    from gosha.api.auth import make_state
 
-    await client.get(
+    resp = await client.get(
         "/api/v1/auth/discord/callback",
-        params={"code": "c", "state": state},
+        params={"code": "c", "state": make_state(rebound=True)},
         follow_redirects=False,
     )
-
-    from gosha.api.auth import OAUTH_STATE_COOKIE
-
-    empty = await client.get("/api/v1/auth/discord/handoff")
-    assert empty.json() == {"signed_in": False}
-    assert "gosha_session=" not in " ".join(empty.headers.get_list("set-cookie"))
-
-    wrong = await client.get(
-        "/api/v1/auth/discord/handoff",
-        cookies={OAUTH_STATE_COOKIE: unrelated},
-    )
-    assert wrong.json() == {"signed_in": False}
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_handoff_is_single_use(client, monkeypatch):
-    monkeypatch.setenv("DISCORD_TOKEN", "bot-token")
-    _mock_discord()
-    state, cookies = _state_for(client)
-
-    await client.get(
-        "/api/v1/auth/discord/callback",
-        params={"code": "c", "state": state},
-        follow_redirects=False,
-    )
-    first = await client.get("/api/v1/auth/discord/handoff", cookies=cookies)
-    assert first.json()["signed_in"] is True
-
-    second = await client.get("/api/v1/auth/discord/handoff", cookies=cookies)
-    assert second.json() == {"signed_in": False}
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "cookies_required"
+    assert "gosha_session=" not in " ".join(resp.headers.get_list("set-cookie"))
 
 
 @pytest.mark.asyncio
@@ -381,35 +383,17 @@ async def test_logout_clears_cookie(client, web_user):
 
 
 @pytest.mark.asyncio
-async def test_consumed_state_and_handoff_live_in_the_database(client, session):
+async def test_consumed_state_lives_in_the_database(client, session):
     """Survives --workers N: nothing about a sign-in is in process memory."""
     from sqlalchemy import select
 
     from gosha.api import auth
-    from gosha.models import OAuthConsumedState, OAuthHandoff
+    from gosha.models import OAuthConsumedState
 
     state = auth.make_state()
     assert await auth._state_is_valid(state)
     assert not await auth._state_is_valid(state)  # replay
     assert (await session.execute(select(OAuthConsumedState))).scalars().one().state == state
-
-    await auth._park_handoff(state, user_id=42, is_new=True)
-    assert (await session.execute(select(OAuthHandoff))).scalars().one().user_id == 42
-    assert await auth._claim_handoff(f"other|{state}") == (42, True)
-    assert await auth._claim_handoff(state) is None  # single use
-
-
-@pytest.mark.asyncio
-async def test_expired_handoff_cannot_be_claimed(client, monkeypatch):
-    from datetime import timedelta
-
-    from gosha.api import auth
-
-    state = auth.make_state()
-    await auth._park_handoff(state, user_id=7, is_new=False)
-    later = auth._now() + timedelta(seconds=auth.HANDOFF_MAX_AGE + 1)
-    monkeypatch.setattr(auth, "_now", lambda: later)
-    assert await auth._claim_handoff(state) is None
 
 
 @pytest.mark.asyncio
@@ -426,3 +410,53 @@ async def test_login_is_rate_limited_per_ip(client, monkeypatch):
     resp = await client.get("/api/v1/auth/discord/login", follow_redirects=False)
     assert resp.json()["error"]["code"] == "rate_limited"
     assert int(resp.headers["retry-after"]) >= 1
+
+
+# ── session cookies ───────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_deleted_accounts_cookie_does_not_open_the_next_account(
+    client, session, monkeypatch,
+):
+    """SQLite hands a deleted user's id to the next new account. The cookie
+    names the Discord account too, so a leftover one opens nothing."""
+    from gosha.api.deps import COOKIE_NAME, serializer
+
+    monkeypatch.setenv("DISCORD_TOKEN", "bot-token")
+    _mock_discord(discord_id="1001")
+    state, cookies = _state_for(client)
+    signin = await client.get(
+        "/api/v1/auth/discord/callback",
+        params={"code": "c", "state": state},
+        cookies=cookies,
+        follow_redirects=False,
+    )
+    session_cookie = {COOKIE_NAME: signin.cookies[COOKIE_NAME]}
+    old_id = serializer().loads(session_cookie[COOKIE_NAME])["uid"]
+    assert serializer().loads(session_cookie[COOKIE_NAME])["did"] == 1001
+    assert (await client.get("/api/v1/me", cookies=session_cookie)).status_code == 200
+
+    deleted = await client.delete(
+        "/api/v1/account", params={"confirm": "DELETE"}, cookies=session_cookie,
+    )
+    assert deleted.status_code == 200
+    newcomer = User(discord_user_id=2002, username="newcomer")
+    session.add(newcomer)
+    await session.commit()
+    assert newcomer.id == old_id  # the reuse this guards against
+
+    resp = await client.get("/api/v1/me", cookies=session_cookie)
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_cookies_from_before_the_discord_binding_still_work(client, web_user):
+    from gosha.api.deps import COOKIE_NAME, serializer
+
+    user, _cookies = web_user
+    legacy = {COOKIE_NAME: serializer().dumps({"uid": user.id})}
+    resp = await client.get("/api/v1/me", cookies=legacy)
+    assert resp.status_code == 200
+    assert resp.json()["id"] == user.id

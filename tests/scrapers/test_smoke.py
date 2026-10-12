@@ -127,6 +127,50 @@ async def test_jobspy_probe_uses_production_arguments(monkeypatch):
     assert kwargs["proxies"] is None
 
 
+async def test_glassdoor_probe_uses_the_city_only_location(monkeypatch):
+    jobspy = pytest.importorskip("jobspy")
+    calls: list[dict] = []
+
+    def fake_scrape_jobs(**kwargs):
+        calls.append(kwargs)
+        return _jobspy_frame(kwargs["site_name"][0])
+
+    monkeypatch.setattr(jobspy, "scrape_jobs", fake_scrape_jobs)
+
+    result = await smoke.probe_jobspy("glassdoor", advisory=True)
+
+    assert result.healthy, result.problems
+    (kwargs,) = calls
+    # As production sends it: Glassdoor has no Romanian domain, so no
+    # country argument, and the location without ", Romania".
+    assert kwargs["location"] == "Cluj-Napoca"
+    assert "country_indeed" not in kwargs
+    assert kwargs["fetch_description"] is False
+
+
+def test_company_presence_is_judged_over_all_results():
+    """A few anonymous postings ranked first must not fail a source."""
+    from gosha.scrapers.base import RawJob
+
+    result = smoke.SourceResult(name="bestjobs")
+    jobs = [
+        RawJob(url=f"https://b.test/{i}", title="Dev", company="Unknown", source="bestjobs")
+        for i in range(5)
+    ] + [
+        RawJob(url=f"https://b.test/n{i}", title="Dev", company="Acme", source="bestjobs")
+        for i in range(95)
+    ]
+    smoke._record_jobs(result, jobs)
+    assert smoke._company_problem(result) is None
+
+    broken = smoke.SourceResult(name="bestjobs")
+    smoke._record_jobs(broken, [
+        RawJob(url=f"https://b.test/{i}", title="Dev", source="bestjobs")
+        for i in range(10)
+    ])
+    assert smoke._company_problem(broken) is not None
+
+
 async def test_advisory_jobspy_failure_does_not_fail_the_run(
     tmp_path, monkeypatch,
 ):
@@ -135,7 +179,7 @@ async def test_advisory_jobspy_failure_does_not_fail_the_run(
     def fake_scrape_jobs(**kwargs):
         if kwargs["site_name"] == ["linkedin"]:
             return pd.DataFrame()  # throttled datacenter IP
-        return _jobspy_frame("indeed")
+        return _jobspy_frame(kwargs["site_name"][0])
 
     monkeypatch.setattr(jobspy, "scrape_jobs", fake_scrape_jobs)
     monkeypatch.setattr(smoke, "get_extra_scrapers", lambda: [])

@@ -90,6 +90,11 @@ def jobspy_kwargs(
     every JobSpy request direct instead of through the SSH tunnels.
     tests/test_scraper_jobspy.py checks these names against the installed
     signature.
+
+    `fetch_description` (python-jobspy >= 1.2; it replaced the LinkedIn-only
+    `linkedin_fetch_description`) fetches each posting's description where
+    the list view has none: LinkedIn and, since 1.3, Glassdoor. The
+    embeddings and cover letters need the description, not just a title.
     """
     kwargs: dict = {
         "site_name": boards,
@@ -98,11 +103,10 @@ def jobspy_kwargs(
         "results_wanted": RESULTS_PER_TERM,
         "hours_old": max_age_days * 24,
         "proxies": proxy,
+        "fetch_description": True,
     }
     if country:
         kwargs["country_indeed"] = country
-    if "linkedin" in boards:
-        kwargs["linkedin_fetch_description"] = True
     return kwargs
 
 
@@ -183,6 +187,7 @@ async def _scrape_single(
                         "Glassdoor failed for '%s': %s", search_term, gd_exc,
                     )
 
+            frames = [f for f in frames if not f.empty]
             if not frames:
                 return pd.DataFrame()
 

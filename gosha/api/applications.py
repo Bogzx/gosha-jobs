@@ -11,6 +11,7 @@ from gosha.api.schemas import (
     ApplicationOut,
     ApplicationPatchIn,
     OkOut,
+    RowId,
 )
 from gosha.models import User
 from gosha.services import applications as service
@@ -38,19 +39,20 @@ async def create_application(
 
 @router.patch("/{application_id}", response_model=ApplicationOut)
 async def update_application(
-    application_id: int,
+    application_id: RowId,
     body: ApplicationPatchIn,
     user: User = Depends(current_user),
 ) -> ApplicationOut:
+    # Only the fields the client sent: "notes": null clears, absent keeps.
     app, job = await service.update_application(
-        user.id, application_id, status=body.status, notes=body.notes,
+        user.id, application_id, **body.model_dump(exclude_unset=True),
     )
     return application_to_out(app, job)
 
 
 @router.delete("/{application_id}", response_model=OkOut)
 async def delete_application(
-    application_id: int, user: User = Depends(current_user),
+    application_id: RowId, user: User = Depends(current_user),
 ) -> OkOut:
     await service.delete_application(user.id, application_id)
     return OkOut()

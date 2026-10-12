@@ -14,6 +14,13 @@ page for the postings a query returns, politely:
   changed is not hammered until the TTL passes; network errors are not
   cached, so they are retried next cycle.
 
+- an hourly budget of network fetches per host (HOST_BUDGET_PER_HOUR).
+  Every keyword term is its own search with its own `limit`, and a
+  restart (every deploy) empties the cache, so without it one cycle could
+  fetch several hundred pages from one board in a few minutes. With it the
+  cache fills over a couple of cycles instead; a posting whose page was
+  not fetched is kept, just without the details.
+
 Failures never raise: a posting without a description is still a posting.
 """
 
@@ -27,6 +34,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -36,8 +44,11 @@ DETAIL_TTL_SECONDS = 24 * 3600
 DETAIL_CONCURRENCY = 3
 MAX_CACHE_ENTRIES = 5000
 MAX_DESCRIPTION_CHARS = 20000
+HOST_BUDGET_PER_HOUR = 250
 
 _cache: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+# host -> (start of the current hour window, fetches made in it)
+_budget: dict[str, tuple[float, int]] = {}
 
 _BREAK_RE = re.compile(r"</p>|</div>|</li>|</h\d>|<br\s*/?>", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -80,6 +91,19 @@ def repair_mojibake(text: str) -> str:
 
 def clear_cache() -> None:
     _cache.clear()
+    _budget.clear()
+
+
+def _take_budget(url: str, now: float) -> bool:
+    """Spend one network fetch of `url`'s host budget; False when spent."""
+    host = urlsplit(url).netloc
+    start, used = _budget.get(host, (now, 0))
+    if now - start >= 3600:
+        start, used = now, 0
+    if used >= HOST_BUDGET_PER_HOUR:
+        return False
+    _budget[host] = (start, used + 1)
+    return True
 
 
 def _cached(url: str, now: float) -> dict[str, Any] | None:
@@ -115,7 +139,7 @@ async def fetch_details(
         cached = _cached(url, now)
         if cached is not None:
             results[url] = cached
-        elif len(to_fetch) < limit:
+        elif len(to_fetch) < limit and _take_budget(url, now):
             to_fetch.append(url)
 
     semaphore = asyncio.Semaphore(DETAIL_CONCURRENCY)

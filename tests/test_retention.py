@@ -188,3 +188,45 @@ async def test_event_retention_deletes_only_older_events(patched_db, session, mo
     report = await retention.purge_old_events(now=NOW)
     assert report.deleted == 1
     assert await remaining_event_ages(session) == [10, 200]
+
+
+async def test_erased_letters_from_past_months_are_purged(patched_db, session):
+    """Erased rows are this month's quota; afterwards they are just rows."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from gosha.models import CoverLetter, Job, User
+    from gosha.services.retention import _users_holding_cv_data, purge_erased_letters
+
+    now = datetime(2026, 10, 12, tzinfo=timezone.utc)
+    user = User(discord_user_id=8080)
+    job = Job(url="https://ret.test/1", title="Dev", source="ejobs")
+    session.add_all([user, job])
+    await session.flush()
+    user_id = user.id
+    session.add_all([
+        CoverLetter(user_id=user.id, job_id=job.id, content="",
+                    created_at=datetime(2026, 9, 20, tzinfo=timezone.utc)),   # erased, last month
+        CoverLetter(user_id=user.id, job_id=job.id, content="",
+                    created_at=datetime(2026, 10, 2, tzinfo=timezone.utc)),   # erased, this month
+        CoverLetter(user_id=user.id, job_id=job.id, content="Dear X",
+                    created_at=datetime(2026, 8, 1, tzinfo=timezone.utc)),    # a real letter
+    ])
+    await session.commit()
+
+    assert await purge_erased_letters(now) == 1
+    session.expire_all()
+    left = sorted(
+        (c.content, c.created_at.month)
+        for c in (await session.execute(select(CoverLetter))).scalars().all()
+    )
+    assert left == [("", 10), ("Dear X", 8)]
+
+    # Only the real letter makes the user a holder of CV data.
+    ids, _orphans = await _users_holding_cv_data()
+    assert user_id in ids
+    await session.execute(CoverLetter.__table__.delete().where(CoverLetter.content != ""))
+    await session.commit()
+    ids, _orphans = await _users_holding_cv_data()
+    assert user_id not in ids

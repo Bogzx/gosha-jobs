@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 import discord
 from discord import app_commands
 from discord.ext import commands
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from gosha.database import get_session
 from gosha.models import Subscription, User, get_tier_limits, plan_lines
@@ -20,6 +20,11 @@ if TYPE_CHECKING:
     from gosha.ssh_tunnels import SSHTunnelManager
 
 log = logging.getLogger(__name__)
+
+# Application notes typed into a slash command. The confirmation repeats
+# them next to the job title (up to 512) and company (256), and a message
+# over Discord's 2000 characters failed after the change was committed.
+NOTES_MAX = 1000
 
 
 def _chunk_text(text: str, max_chars: int = 3900) -> list[str]:
@@ -98,9 +103,13 @@ class SubscriptionCog(commands.Cog):
     # ── helpers ──────────────────────────────────────────────────
 
     async def _require_admin(self, interaction: discord.Interaction) -> bool:
-        """Check if user is in ADMIN_DISCORD_IDS. Returns False and responds if not."""
+        """Check if user is in ADMIN_DISCORD_IDS. Returns False and responds if not.
+
+        Fails closed: with no ADMIN_DISCORD_IDS configured nobody is an
+        admin, as on the web (gosha/api/deps.py). It used to let everyone in.
+        """
         admin_ids = self.bot.settings.admin_user_ids if self.bot.settings else set()
-        if admin_ids and interaction.user.id not in admin_ids:
+        if interaction.user.id not in admin_ids:
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True,
             )
@@ -177,7 +186,7 @@ class SubscriptionCog(commands.Cog):
         max_age_days="Only show jobs posted within this many days (default 7)",
         experience="Experience level filter (default: any)",
         exclude="Keywords to exclude, comma-separated. e.g. 'sales, marketing'",
-        salary_min="Minimum annual salary (in local currency)",
+        salary_min="Minimum gross MONTHLY salary in RON (postings with no salary still match)",
     )
     @app_commands.choices(experience=[
         app_commands.Choice(name="Any level", value="any"),
@@ -316,8 +325,7 @@ class SubscriptionCog(commands.Cog):
                     color=discord.Color.green(),
                 )
                 embed.set_footer(
-                    text=f"Jobs are checked every {interval} min and sent to your DMs. "
-                    f"Use /scrape_now to get results immediately."
+                    text=f"Jobs are checked every {interval} min and sent to your DMs."
                 )
                 await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception:
@@ -365,6 +373,16 @@ class SubscriptionCog(commands.Cog):
                     return
 
                 user_id = sub.user_id
+                # Keep the delivery history (so its jobs aren't sent again)
+                # but detach it: on Postgres the foreign key otherwise
+                # refused the delete for any search that had matched a job.
+                from gosha.models import UserJob
+
+                await session.execute(
+                    update(UserJob)
+                    .where(UserJob.subscription_id == sub.id)
+                    .values(subscription_id=None)
+                )
                 await session.delete(sub)
                 await session.commit()
 
@@ -397,7 +415,7 @@ class SubscriptionCog(commands.Cog):
         experience="New experience level (leave blank to keep)",
         exclude="New exclusions, comma-separated (leave blank to keep)",
         blacklist="Blacklisted companies, comma-separated (leave blank to keep)",
-        salary_min="New minimum salary (0 to remove, -1 to keep)",
+        salary_min="New minimum gross monthly salary in RON (0 to remove, -1 to keep)",
     )
     async def edit(
         self,
@@ -564,7 +582,7 @@ class SubscriptionCog(commands.Cog):
                 if s.company_blacklist:
                     extras.append(f"blacklist: {', '.join(s.company_blacklist)}")
                 if s.salary_min:
-                    extras.append(f"salary>={s.salary_min}")
+                    extras.append(f"salary>={s.salary_min} RON/mo")
                 exp = s.experience_levels
                 if exp and exp != ["any"]:
                     extras.append(f"exp: {', '.join(exp)}")
@@ -592,12 +610,13 @@ class SubscriptionCog(commands.Cog):
     # ── /scrape_now ─────────────────────────────────────────────
 
     _scrape_cooldown: dict[int, float] = {}  # discord_user_id -> last invocation timestamp
+    _scrape_tasks: set[asyncio.Task] = set()
 
     @app_commands.command(
         name="scrape_now", description="Force an immediate scrape cycle"
     )
     async def scrape_now(self, interaction: discord.Interaction) -> None:
-        from gosha.pipeline import run_scrape_cycle
+        from gosha.pipeline import ScrapeCycleBusy, cycle_running, run_scrape_cycle
 
         try:
             if not await self._require_admin(interaction):
@@ -606,6 +625,13 @@ class SubscriptionCog(commands.Cog):
             if self.bot.tunnel_manager is None:
                 await interaction.response.send_message(
                     "Bot not fully initialised yet.", ephemeral=True
+                )
+                return
+
+            if cycle_running():
+                await interaction.response.send_message(
+                    "A scrape cycle is already running — its matches will arrive "
+                    "when it finishes.", ephemeral=True,
                 )
                 return
 
@@ -653,21 +679,31 @@ class SubscriptionCog(commands.Cog):
                 kwargs["semantic_threshold"] = self.bot.settings.semantic_threshold
                 kwargs["semantic_threshold_cv"] = self.bot.settings.semantic_threshold_cv
 
+            async def _notify(text: str) -> None:
+                # A cycle can outlast the 15-minute interaction token; the
+                # followup then fails, which is not a failed scrape.
+                try:
+                    await interaction.followup.send(text, ephemeral=True)
+                except discord.HTTPException as exc:
+                    log.info("/scrape_now followup not delivered: %s", exc)
+
             async def _run_and_notify() -> None:
                 try:
                     total = await run_scrape_cycle(**kwargs)
-                    self.bot._last_scrape_at = time.monotonic()
-                    await interaction.followup.send(
-                        f"Scrape complete — **{total}** new jobs delivered.",
-                        ephemeral=True,
-                    )
+                except ScrapeCycleBusy:
+                    await _notify("A scrape cycle was already running; this one was skipped.")
+                    return
                 except Exception:
                     log.exception("Scrape cycle failed")
-                    await interaction.followup.send(
-                        "Scrape failed. Check bot logs for details.", ephemeral=True
-                    )
+                    await _notify("Scrape failed. Check bot logs for details.")
+                    return
+                self.bot._last_scrape_at = time.monotonic()
+                await _notify(f"Scrape complete — **{total}** new jobs delivered.")
 
-            asyncio.create_task(_run_and_notify())
+            # Held so the task is not garbage-collected mid-cycle.
+            task = asyncio.create_task(_run_and_notify())
+            self._scrape_tasks.add(task)
+            task.add_done_callback(self._scrape_tasks.discard)
         except Exception:
             log.exception("Error in /scrape_now")
             msg = "Something went wrong. Please try again later."
@@ -877,9 +913,9 @@ class SubscriptionCog(commands.Cog):
                     f"**Experience:** Intern + Junior\n"
                     f"**Looking back:** 14 days\n\n"
                     f"This searches **19 job titles** automatically across "
-                    f"Indeed, LinkedIn, and Glassdoor.\n\n"
+                    f"Indeed, LinkedIn, Glassdoor, eJobs, BestJobs and Hipo.\n\n"
                     f"**Next steps:**\n"
-                    f"- Run `/scrape_now` to get your first jobs immediately\n"
+                    f"- Your first matches arrive in your DMs after the next scrape\n"
                     f"- Upload your CV with `/upload_cv` to enable AI cover letters\n"
                     f"- Use `/subscribe` to add more searches (up to 5)"
                 ),
@@ -1003,7 +1039,7 @@ class SubscriptionCog(commands.Cog):
         )
         embed.add_field(
             name="/scrape_now",
-            value="Force an immediate scrape (5 min cooldown).",
+            value="Admins: force an immediate scrape.",
             inline=True,
         )
         embed.add_field(
@@ -1093,7 +1129,7 @@ class SubscriptionCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         job_id: int,
-        notes: str = "",
+        notes: app_commands.Range[str, 0, NOTES_MAX] = "",
     ) -> None:
         from gosha.models import Application, Job
 
@@ -1184,7 +1220,7 @@ class SubscriptionCog(commands.Cog):
         interaction: discord.Interaction,
         job_id: int,
         status: str,
-        notes: str = "",
+        notes: app_commands.Range[str, 0, NOTES_MAX] = "",
     ) -> None:
         from gosha.models import Application, Job, _utcnow
 
@@ -1534,12 +1570,7 @@ class SubscriptionCog(commands.Cog):
     async def cover_letter(
         self, interaction: discord.Interaction, job_id: int,
     ) -> None:
-        from gosha.cover_letter import (
-            generate_cover_letter,
-            get_monthly_usage,
-            load_cv,
-        )
-        from gosha.models import Job
+        from gosha.views import cover_letter_embed
 
         try:
             async with get_session() as session:
@@ -1553,62 +1584,14 @@ class SubscriptionCog(commands.Cog):
                 )
                 return
 
-            # Check CV exists
-            if not load_cv(user.id):
-                await interaction.response.send_message(
-                    "Upload your CV first with `/upload_cv`.", ephemeral=True,
-                )
-                return
-
-            # Check monthly limit
-            usage = await get_monthly_usage(user.id)
-            limit = int(user.limits.get("cover_letters_per_month", 3))
-            if usage >= limit:
-                await interaction.response.send_message(
-                    f"You've used all **{limit}** cover letters this month.\n"
-                    f"Use `/upgrade` to see Pro benefits (unlimited cover letters).",
-                    ephemeral=True,
-                )
-                return
-
-            # Verify job exists
-            async with get_session() as session:
-                job = (await session.execute(
-                    select(Job).where(Job.id == job_id)
-                )).scalar_one_or_none()
-            if not job:
-                await interaction.response.send_message(
-                    f"Job #{job_id} not found.", ephemeral=True,
-                )
-                return
-
             await interaction.response.defer(ephemeral=True)
-
-            # Generate
-            content, was_cached = await generate_cover_letter(user.id, job_id)
-            if not content:
-                await interaction.followup.send(
-                    "Cover letter generation failed (AI service error). Please try again in a few minutes.",
-                    ephemeral=True,
-                )
-                return
-
-            used = 0 if was_cached else 1
-            remaining = limit - usage - used if limit < 100 else None
-
-            embed = discord.Embed(
-                title=f"Cover Letter — {job.title} at {job.company}",
-                description=content,
-                color=discord.Color.purple(),
-            )
-            footer_parts = [f"Job #{job_id}"]
-            if was_cached:
-                footer_parts.append("cached")
-            if remaining is not None:
-                footer_parts.append(f"{remaining} left this month")
-            embed.set_footer(text=" | ".join(footer_parts))
-
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            # The website's path (quota claimed before the LLM call); see
+            # views.cover_letter_embed.
+            result = await cover_letter_embed(user, job_id)
+            if isinstance(result, str):
+                await interaction.followup.send(result, ephemeral=True)
+            else:
+                await interaction.followup.send(embed=result, ephemeral=True)
         except Exception:
             log.exception("Error in /cover_letter")
             msg = "Something went wrong. Please try again later."

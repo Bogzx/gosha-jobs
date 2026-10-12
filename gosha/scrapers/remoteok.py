@@ -15,27 +15,29 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from gosha.scrapers.base import DEFAULT_HEADERS, HTTP_TIMEOUT, RawJob, SearchQuery
+from gosha.scrapers.details import html_to_text, repair_mojibake
 
 log = logging.getLogger(__name__)
 
 API_URL = "https://remoteok.com/api"
 CACHE_TTL_SECONDS = 600
+# After a failed fetch the last good feed (or nothing) is served this long:
+# every keyword term asks, and an outage must not mean a request per term.
+FAILURE_BACKOFF_SECONDS = 600
 
 _cache: tuple[float, list[dict]] | None = None
-
-_BREAK_RE = re.compile(r"</p>|</div>|</li>|<br\s*/?>", re.IGNORECASE)
-_TAG_RE = re.compile(r"<[^>]+>")
 
 REMOTE_LOCATIONS = {"remote", "europe", "eu", "anywhere", "worldwide"}
 
 
 def _strip_html(html: str) -> str:
-    """HTML to readable plain text, keeping paragraph breaks."""
-    text = _BREAK_RE.sub("\n", html or "")
-    text = _TAG_RE.sub(" ", text)
-    text = re.sub(r"[ \t]{2,}", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    """HTML to readable plain text. The feed double-encodes some UTF-8
+    ("youâ\x80\x99ll"), which repair_mojibake undoes."""
+    return html_to_text(repair_mojibake(html or ""))
+
+
+def _text(value: object) -> str:
+    return repair_mojibake(str(value or "")).strip()
 
 
 def _parse(feed: list[dict], query: SearchQuery) -> list[RawJob]:
@@ -72,10 +74,10 @@ def _parse(feed: list[dict], query: SearchQuery) -> list[RawJob]:
 
         jobs.append(RawJob(
             url=str(item.get("url", "")),
-            title=str(item.get("position", "")),
-            company=str(item.get("company") or "Unknown"),
-            location=str(item.get("location") or "Remote") or "Remote",
-            description=_strip_html(str(item.get("description", "")))[:20000],
+            title=_text(item.get("position")),
+            company=_text(item.get("company")) or "Unknown",
+            location=_text(item.get("location")) or "Remote",
+            description=_strip_html(str(item.get("description", ""))),
             salary_min=salary_min or None,
             salary_max=salary_max or None,
             salary_currency="USD" if (salary_min or salary_max) else None,
@@ -85,7 +87,8 @@ def _parse(feed: list[dict], query: SearchQuery) -> list[RawJob]:
             posted_at=posted_at,
             source="remoteok",
         ))
-    return [j for j in jobs if j.url]
+    # The url is shown as a link; anything but http(s) is dropped.
+    return [j for j in jobs if j.url.startswith(("https://", "http://"))]
 
 
 class RemoteOKScraper:
@@ -98,8 +101,8 @@ class RemoteOKScraper:
         if not self.applies_to(query):
             return []
         global _cache
+        now = time.monotonic()
         try:
-            now = time.monotonic()
             if _cache is None or now - _cache[0] > CACHE_TTL_SECONDS:
                 async with httpx.AsyncClient(
                     headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True,
@@ -111,4 +114,9 @@ class RemoteOKScraper:
             return _parse(_cache[1], query)
         except Exception as exc:
             log.warning("RemoteOK scrape failed: %s", exc)
-            return []
+            stale = _cache[1] if _cache else []
+            _cache = (now - CACHE_TTL_SECONDS + FAILURE_BACKOFF_SECONDS, stale)
+            try:
+                return _parse(stale, query)
+            except Exception:
+                return []

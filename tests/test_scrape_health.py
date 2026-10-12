@@ -212,3 +212,14 @@ async def test_cycle_stays_quiet_when_sources_are_healthy(patched_db, monkeypatc
 
     assert sent == []
     reset_scrape_health()
+
+
+def test_breakdown_shows_scraped_and_kept():
+    health = ScrapeHealth()
+    report = health.record_cycle(
+        ["ejobs", "indeed"], {"ejobs": 212, "indeed": 30}, {"ejobs": 15},
+    )
+    assert report.kept == {"ejobs": 15, "indeed": 0}
+    assert report.breakdown() == "ejobs=212→15, indeed=30→0"
+    # Zero kept is not zero scraped: nothing alerts.
+    assert not report.should_alert

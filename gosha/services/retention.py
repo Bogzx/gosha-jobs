@@ -177,9 +177,13 @@ async def _users_holding_cv_data() -> tuple[list[int], set[int]]:
                 select(User.id).where(User.cv_embedding.isnot(None))
             )).all()
         )
+        # Letters whose text was erased with the CV are quota bookkeeping
+        # (which posting, when), not CV data.
         ids.update(
             uid for (uid,) in (await session.execute(
-                select(CoverLetter.user_id).distinct()
+                select(CoverLetter.user_id)
+                .where(CoverLetter.content != cv_storage.ERASED_CONTENT)
+                .distinct()
             )).all()
         )
         known = {
@@ -201,6 +205,8 @@ async def purge_stale_cvs(
     now: datetime | None = None,
 ) -> RetentionReport:
     """Delete CV data of users inactive for longer than the window."""
+    if not dry_run:
+        await purge_erased_letters(now)
     months = retention_months() if months is None else max(0, months)
     if months == 0:
         return RetentionReport(months=0, cutoff=None, dry_run=dry_run)
@@ -231,6 +237,27 @@ async def purge_stale_cvs(
 
     log.info(report.summary())
     return report
+
+
+async def purge_erased_letters(now: datetime | None = None) -> int:
+    """Delete erased cover-letter rows from before this month.
+
+    Deleting a CV erases its letters' text but keeps this month's rows,
+    because they are the monthly quota (gosha/services/cv.py). From the
+    next month on they count for nothing, so they go.
+    """
+    async with get_session() as session:
+        result = await session.execute(
+            delete(CoverLetter).where(
+                CoverLetter.content == cv_storage.ERASED_CONTENT,
+                CoverLetter.created_at < cv_storage.month_start(now),
+            )
+        )
+        await session.commit()
+    removed = result.rowcount or 0
+    if removed:
+        log.info("Removed %d erased cover-letter row(s) from past months", removed)
+    return removed
 
 
 @dataclass

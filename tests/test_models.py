@@ -365,3 +365,39 @@ def test_plan_lines_unlimited_tier():
     from gosha.models import get_tier_limits, plan_lines
 
     assert plan_lines(get_tier_limits("unlimited"))[0] == "Unlimited saved searches"
+
+
+async def test_test_database_enforces_foreign_keys(session):
+    """Like Postgres; SQLite only does with PRAGMA foreign_keys=ON."""
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from gosha.models import UserJob
+
+    session.add(UserJob(user_id=424242, job_id=424242))
+    with pytest.raises(IntegrityError):
+        await session.commit()
+    await session.rollback()
+
+
+async def test_deleting_a_search_keeps_its_deliveries(session):
+    from sqlalchemy import select
+
+    from gosha.models import Job, Subscription, User, UserJob
+
+    user = User(discord_user_id=31337)
+    session.add(user)
+    await session.flush()
+    sub = Subscription(user_id=user.id)
+    sub.keywords, sub.locations = ["x"], ["cluj"]
+    job = Job(url="https://fk.test/1", title="Dev", source="ejobs")
+    session.add_all([sub, job])
+    await session.flush()
+    session.add(UserJob(user_id=user.id, job_id=job.id, subscription_id=sub.id))
+    await session.commit()
+
+    await session.delete(sub)
+    await session.commit()
+    session.expire_all()
+    (uj,) = (await session.execute(select(UserJob))).scalars().all()
+    assert uj.subscription_id is None  # ON DELETE SET NULL, history kept

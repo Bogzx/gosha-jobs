@@ -3,6 +3,11 @@
 Vectors come from the same sentence-transformers model the semantic matcher
 uses (lazy singleton in gosha/matching.py). At the current scale (thousands
 of jobs) numpy brute-force cosine scoring beats running a vector database.
+
+Loading the model takes seconds and encoding a batch of postings tens of
+seconds on CPU, so the async entry points here encode (and, on first use,
+load the model) in a worker thread. On the event loop the same work stalled
+the bot's Discord gateway heartbeat and timed out slash-command responses.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ import logging
 
 import numpy as np
 from sqlalchemy import or_, select
+from sqlalchemy.orm import load_only
 
 from gosha import matching
 from gosha.database import get_session
@@ -40,6 +46,11 @@ CV_CHUNK_OVERLAP_CHARS = 200
 # characters — far past any real CV, and it bounds the work one upload can
 # ask the model to do.
 MAX_CV_CHUNKS = 40
+
+# The scrape cycle and the hourly backfill both call embed_new_jobs. With
+# the encode no longer blocking the loop they can overlap, and would both
+# encode the same batch.
+_embed_lock = asyncio.Lock()
 
 
 def encode_texts(texts: list[str]) -> np.ndarray | None:
@@ -105,36 +116,88 @@ async def embed_new_jobs(limit: int = DEFAULT_BATCH) -> int:
     the previous model. Returns the number of jobs embedded (0 when the
     model is unavailable).
     """
-    async with get_session() as session:
-        result = await session.execute(
-            select(Job)
-            .where(
-                Job.is_active.is_(True),
-                or_(
-                    Job.embedding.is_(None),
-                    stale_model_clause(Job.embedding_model),
-                ),
+    async with _embed_lock:
+        async with get_session() as session:
+            result = await session.execute(
+                select(Job.id, Job.title, Job.company, Job.description)
+                .where(
+                    Job.is_active.is_(True),
+                    or_(
+                        Job.embedding.is_(None),
+                        stale_model_clause(Job.embedding_model),
+                    ),
+                )
+                .limit(limit)
             )
-            .limit(limit)
-        )
-        jobs = list(result.scalars().all())
+            texts = {
+                job_id: build_job_text(title, company, description)
+                for job_id, title, company, description in result.all()
+            }
 
-        if not jobs:
+        if not texts:
             return 0
 
-        texts = [build_job_text(j.title, j.company, j.description) for j in jobs]
-        vectors = encode_texts(texts)
+        # No session held open across the encode (tens of seconds for a
+        # full batch on CPU).
+        vectors = await asyncio.to_thread(encode_texts, list(texts.values()))
         if vectors is None:
-            log.debug("Embedding model unavailable — skipping %d jobs", len(jobs))
+            log.debug("Embedding model unavailable — skipping %d jobs", len(texts))
             return 0
+        by_id = dict(zip(texts, vectors))
 
-        for job, vec in zip(jobs, vectors):
-            job.embedding = vec_to_bytes(vec)
-            job.embedding_model = current_model()
-        await session.commit()
+        embedded = 0
+        async with get_session() as session:
+            result = await session.execute(
+                select(Job)
+                .options(load_only(Job.id, Job.title, Job.company, Job.description))
+                .where(Job.id.in_(list(texts)))
+            )
+            for job in result.scalars().all():
+                # Rescraped with new text while it was being encoded: the
+                # vector describes the old posting. Left for the next run.
+                if build_job_text(job.title, job.company, job.description) != texts[job.id]:
+                    continue
+                job.embedding = vec_to_bytes(by_id[job.id])
+                job.embedding_model = current_model()
+                embedded += 1
+            await session.commit()
 
-    log.info("Embedded %d jobs", len(jobs))
-    return len(jobs)
+    log.info("Embedded %d jobs", embedded)
+    return embedded
+
+
+def _held_vectors(jobs: list[Job]) -> list[np.ndarray | None]:
+    """Each job's vector as the row object holds it (None: absent or stale)."""
+    return [
+        bytes_to_vec(job.embedding)
+        if job.embedding and is_current(job.embedding_model)
+        else None
+        for job in jobs
+    ]
+
+
+def _missing_texts(jobs: list[Job], vectors: list[np.ndarray | None]) -> dict[int, str]:
+    """{index: job text} for the jobs that still need encoding."""
+    return {
+        i: build_job_text(jobs[i].title, jobs[i].company, jobs[i].description)
+        for i, vec in enumerate(vectors)
+        if vec is None
+    }
+
+
+def _fill_and_score(
+    vectors: list[np.ndarray | None],
+    missing: dict[int, str],
+    encoded: np.ndarray | None,
+    query_vec: np.ndarray,
+) -> list[float]:
+    if encoded is not None:
+        for idx, vec in zip(missing, encoded):
+            vectors[idx] = np.asarray(vec, dtype=np.float32)
+    return [
+        float(vec @ query_vec) if vec is not None else 0.0
+        for vec in vectors
+    ]
 
 
 def score_jobs_against_query(query_vec: np.ndarray, jobs: list[Job]) -> list[float]:
@@ -143,32 +206,50 @@ def score_jobs_against_query(query_vec: np.ndarray, jobs: list[Job]) -> list[flo
     Jobs without a stored vector are encoded on the fly (one batch); when
     the model is unavailable they score 0.0. This is what lets the match
     stage avoid re-encoding the same postings for every subscription.
+    Encodes on the calling thread: on the event loop, use
+    score_jobs_against_query_async.
     """
     if not jobs:
         return []
+    vectors = _held_vectors(jobs)
+    missing = _missing_texts(jobs, vectors)
+    encoded = encode_texts(list(missing.values())) if missing else None
+    return _fill_and_score(vectors, missing, encoded, query_vec)
 
-    vectors: list[np.ndarray | None] = [
-        bytes_to_vec(job.embedding)
-        if job.embedding and is_current(job.embedding_model)
-        else None
-        for job in jobs
-    ]
 
-    missing = [i for i, vec in enumerate(vectors) if vec is None]
-    if missing:
-        texts = [
-            build_job_text(jobs[i].title, jobs[i].company, jobs[i].description)
-            for i in missing
-        ]
-        encoded = encode_texts(texts)
-        if encoded is not None:
-            for idx, vec in zip(missing, encoded):
-                vectors[idx] = np.asarray(vec, dtype=np.float32)
+async def score_jobs_against_query_async(
+    query_vec: np.ndarray, jobs: list[Job],
+) -> list[float]:
+    """score_jobs_against_query for async callers (the match stage).
 
-    return [
-        float(vec @ query_vec) if vec is not None else 0.0
-        for vec in vectors
-    ]
+    Same scores. Before encoding anything it looks the missing vectors up
+    in the database: the match stage scores the Job objects the scrape
+    returned, loaded before embed_new_jobs stored their vectors, so every
+    new posting looked unembedded and was re-encoded once per subscription.
+    What is still missing is encoded in a worker thread.
+    """
+    if not jobs:
+        return []
+    vectors = _held_vectors(jobs)
+
+    ids = {jobs[i].id: i for i, vec in enumerate(vectors) if vec is None and jobs[i].id}
+    if ids:
+        async with get_session() as session:
+            result = await session.execute(
+                select(Job.id, Job.embedding).where(
+                    Job.id.in_(list(ids)),
+                    Job.embedding.isnot(None),
+                    current_model_clause(Job.embedding_model),
+                )
+            )
+            for job_id, raw in result.all():
+                vectors[ids[job_id]] = bytes_to_vec(raw)
+
+    missing = _missing_texts(jobs, vectors)
+    encoded = (
+        await asyncio.to_thread(encode_texts, list(missing.values())) if missing else None
+    )
+    return _fill_and_score(vectors, missing, encoded, query_vec)
 
 
 def chunk_cv_text(

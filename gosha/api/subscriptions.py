@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from gosha.api.deps import current_user
 from gosha.api.schemas import (
     OkOut,
+    RowId,
     SubscriptionIn,
     SubscriptionOut,
     SubscriptionPatchIn,
@@ -65,7 +66,7 @@ async def create_subscription(
 
 @router.patch("/{subscription_id}", response_model=SubscriptionOut)
 async def update_subscription(
-    subscription_id: int,
+    subscription_id: RowId,
     body: SubscriptionPatchIn,
     user: User = Depends(current_user),
 ) -> SubscriptionOut:
@@ -77,7 +78,7 @@ async def update_subscription(
 
 @router.post("/{subscription_id}/pause", response_model=SubscriptionOut)
 async def pause_subscription(
-    subscription_id: int, user: User = Depends(current_user),
+    subscription_id: RowId, user: User = Depends(current_user),
 ) -> SubscriptionOut:
     return subscription_to_out(
         await service.set_subscription_active(user.id, subscription_id, False)
@@ -86,7 +87,7 @@ async def pause_subscription(
 
 @router.post("/{subscription_id}/resume", response_model=SubscriptionOut)
 async def resume_subscription(
-    subscription_id: int, user: User = Depends(current_user),
+    subscription_id: RowId, user: User = Depends(current_user),
 ) -> SubscriptionOut:
     return subscription_to_out(
         await service.set_subscription_active(user.id, subscription_id, True)
@@ -95,7 +96,7 @@ async def resume_subscription(
 
 @router.delete("/{subscription_id}", response_model=OkOut)
 async def delete_subscription(
-    subscription_id: int, user: User = Depends(current_user),
+    subscription_id: RowId, user: User = Depends(current_user),
 ) -> OkOut:
     await service.delete_subscription(user.id, subscription_id)
     return OkOut()

@@ -114,8 +114,10 @@ async def test_pipeline_respects_notify_discord(patched_db, session, monkeypatch
 
     since = datetime.now(timezone.utc) - timedelta(seconds=1)
     session.add_all([
-        UserJob(user_id=user.id, job_id=j1.id, subscription_id=quiet_sub.id),
-        UserJob(user_id=user.id, job_id=j2.id, subscription_id=loud_sub.id),
+        UserJob(user_id=user.id, job_id=j1.id, subscription_id=quiet_sub.id,
+                dm_status=UserJob.DM_PENDING),
+        UserJob(user_id=user.id, job_id=j2.id, subscription_id=loud_sub.id,
+                dm_status=UserJob.DM_PENDING),
     ])
     await session.commit()
 
@@ -123,13 +125,14 @@ async def test_pipeline_respects_notify_discord(patched_db, session, monkeypatch
 
     async def fake_dm(bot, discord_id, embed, view=None):
         dms.append(discord_id)
-        return True
+        return pipeline.DM_SENT
 
     monkeypatch.setattr(pipeline, "_dm_user", fake_dm)
 
     class _Bot:
         alert_channel_id = 0
 
-    sent = await pipeline._deliver_new(_Bot(), since)
+    sent = await pipeline.deliver_pending(_Bot())
     assert sent == 1  # only the loud subscription's match was DMed
     assert dms == [903]
+    assert since  # matches recorded after `since` are the ones considered

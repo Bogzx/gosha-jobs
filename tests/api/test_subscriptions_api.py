@@ -151,3 +151,98 @@ async def test_cross_user_404(client, web_user, session):
         f"/api/v1/subscriptions/{sub.id}", cookies=session_cookie(other.id)
     )
     assert resp.status_code == 404
+
+
+async def _enforce_pre_migration_delivery_fk(engine) -> None:
+    """user_jobs as production has it until ON DELETE SET NULL is migrated
+    in: a plain reference, which the delete itself has to clear."""
+    async with engine.connect() as conn:
+        ddl = (await conn.exec_driver_sql(
+            "SELECT sql FROM sqlite_master WHERE name = 'user_jobs'"
+        )).scalar_one()
+        await conn.exec_driver_sql("DROP TABLE user_jobs")
+        await conn.exec_driver_sql(ddl.replace(" ON DELETE SET NULL", ""))
+        await conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_delete_a_search_that_delivered_a_dm(client, web_user, session, engine):
+    """user_jobs.subscription_id references the search: Postgres refused the
+    delete (a 500) for any search that had ever delivered a DM."""
+    from gosha.models import Job, UserJob
+
+    user, cookies = web_user
+    await _enforce_pre_migration_delivery_fk(engine)
+    sid = (await client.post("/api/v1/subscriptions", json=VALID, cookies=cookies)).json()["id"]
+    job = Job(url="https://j.com/dm", title="Dev", company="Acme", source="ejobs")
+    session.add(job)
+    await session.flush()
+    session.add(UserJob(user_id=user.id, job_id=job.id, subscription_id=sid))
+    await session.commit()
+
+    resp = await client.delete(f"/api/v1/subscriptions/{sid}", cookies=cookies)
+
+    assert resp.status_code == 200
+    session.expire_all()
+    assert await session.get(Subscription, sid) is None
+    delivery = (await session.execute(select(UserJob))).scalar_one()
+    assert delivery.subscription_id is None  # the history itself stays
+
+
+@pytest.mark.asyncio
+async def test_patch_null_clears_name_and_salary(client, web_user):
+    """The SPA sends null for an emptied box; absent fields stay as they are."""
+    _user, cookies = web_user
+    created = await client.post(
+        "/api/v1/subscriptions",
+        json=dict(VALID, salary_min=5000),
+        cookies=cookies,
+    )
+    sid = created.json()["id"]
+
+    kept = await client.patch(
+        f"/api/v1/subscriptions/{sid}", json={"remote_ok": True}, cookies=cookies,
+    )
+    assert kept.json()["name"] == "Cluj internships"
+    assert kept.json()["salary_min"] == 5000
+
+    cleared = await client.patch(
+        f"/api/v1/subscriptions/{sid}",
+        json={"name": None, "salary_min": None},
+        cookies=cookies,
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["name"] is None
+    assert cleared.json()["salary_min"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("override", [
+    {"name": "n" * 129},  # String(128)
+    {"salary_min": 2**31},  # INTEGER
+    {"salary_min": -1},
+])
+async def test_out_of_range_fields_are_422_not_500(client, web_user, override):
+    _user, cookies = web_user
+    resp = await client.post(
+        "/api/v1/subscriptions", json=dict(VALID, **override), cookies=cookies,
+    )
+    assert resp.status_code == 422
+    sid = (await client.post("/api/v1/subscriptions", json=VALID, cookies=cookies)).json()["id"]
+    resp = await client.patch(
+        f"/api/v1/subscriptions/{sid}", json=override, cookies=cookies,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,suffix", [
+    ("patch", ""), ("delete", ""), ("post", "/pause"), ("post", "/resume"),
+])
+async def test_ids_beyond_int32_are_422_not_500(client, web_user, method, suffix):
+    _user, cookies = web_user
+    kwargs = {"json": {"name": "x"}} if method == "patch" else {}
+    resp = await getattr(client, method)(
+        f"/api/v1/subscriptions/{2**31}{suffix}", cookies=cookies, **kwargs,
+    )
+    assert resp.status_code == 422

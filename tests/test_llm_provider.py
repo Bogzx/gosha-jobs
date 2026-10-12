@@ -156,3 +156,37 @@ async def test_gemini_falls_through_models(monkeypatch):
         })
     )
     assert await llm.generate_gemini("x") == "Second model wins"
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("response", [
+    Response(200, text="<html>bad gateway</html>"),
+    Response(200, json=["not", "an", "object"]),
+    Response(200, json={"choices": [{"message": {"content": [{"type": "text", "text": "hi"}]}}]}),
+    Response(200, json={"choices": ["no message object"]}),
+])
+async def test_malformed_200_is_a_failure_not_an_exception(monkeypatch, response):
+    """A 200 that isn't the expected JSON used to raise out of generate()
+    (JSONDecodeError / AttributeError) and surface as a 500."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
+    respx.post(DEEPSEEK_URL).mock(return_value=response)
+    assert await llm.generate("x") is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_gemini_malformed_200_falls_through_to_the_next_model(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+    respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*gemini-3-flash-preview.*").mock(
+        return_value=Response(200, text="not json")
+    )
+    respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*gemini-3\.1-flash-lite.*").mock(
+        return_value=Response(200, json={"candidates": [{"content": {"parts": ["bare string"]}}]})
+    )
+    respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*").mock(
+        return_value=Response(200, json={
+            "candidates": [{"content": {"parts": [{"text": "Third model wins"}]}}]
+        })
+    )
+    assert await llm.generate_gemini("x") == "Third model wins"

@@ -118,10 +118,8 @@ def _period_factor(period: str | None, monthly_ron: float) -> float:
     return 1.0
 
 
-def monthly_ron(
-    amount: float | None, currency: str | None, period: str | None = None,
-) -> float | None:
-    """One amount as gross RON per month. None when it cannot be worked out."""
+def _ron_amount(amount: float | None, currency: str | None) -> float | None:
+    """A positive amount converted to RON; None when it is unusable."""
     if amount is None:
         return None
     try:
@@ -130,8 +128,14 @@ def monthly_ron(
         return None
     if value <= 0:
         return None
+    return to_ron(value, currency)
 
-    converted = to_ron(value, currency)
+
+def monthly_ron(
+    amount: float | None, currency: str | None, period: str | None = None,
+) -> float | None:
+    """One amount as gross RON per month. None when it cannot be worked out."""
+    converted = _ron_amount(amount, currency)
     if converted is None:
         return None
 
@@ -144,9 +148,23 @@ def normalise_range(
     currency: str | None,
     period: str | None = None,
 ) -> tuple[float | None, float | None]:
-    """(min, max) as gross RON per month, ordered low-to-high."""
-    low = monthly_ron(salary_min, currency, period)
-    high = monthly_ron(salary_max, currency, period)
+    """(min, max) as gross RON per month, ordered low-to-high.
+
+    Both bounds share one period. When it has to be guessed, it is guessed
+    once, from the larger bound: guessing each bound on its own read
+    USD 15k-25k as 15k a month and 25k a year (9,583-69,000 RON/month) and
+    EUR 70-90 as 70 an hour and 90 a month (450-58,800).
+    """
+    low = _ron_amount(salary_min, currency)
+    high = _ron_amount(salary_max, currency)
+    bounds = [value for value in (low, high) if value is not None]
+    if not bounds:
+        return None, None
+    factor = _period_factor(period, max(bounds))
+    if low is not None:
+        low = round(low * factor, 2)
+    if high is not None:
+        high = round(high * factor, 2)
 
     # A single-sided range is common; keep it single-sided rather than
     # inventing the other bound.

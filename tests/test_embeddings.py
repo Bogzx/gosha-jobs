@@ -78,3 +78,56 @@ async def test_embed_user_cv(patched_db, session, monkeypatch):
     assert user.cv_embedding is not None
     vec = embeddings.bytes_to_vec(user.cv_embedding)
     assert vec.shape == (embeddings.EMBEDDING_DIM,)
+
+
+@pytest.mark.asyncio
+async def test_embed_new_jobs_encodes_off_the_event_loop(patched_db, session, monkeypatch):
+    """Encoding a batch (and loading the model on first use) takes seconds;
+    on the loop it stalled the bot's Discord heartbeat."""
+    import threading
+
+    threads: list[threading.Thread] = []
+
+    def recording_encode(texts):
+        threads.append(threading.current_thread())
+        return fake_encode(texts)
+
+    monkeypatch.setattr(embeddings, "encode_texts", recording_encode)
+    session.add(Job(url="https://e.com/t", title="Go Dev", company="A", source="indeed"))
+    await session.commit()
+
+    assert await embeddings.embed_new_jobs() == 1
+    assert threads and threads[0] is not threading.main_thread()
+
+
+@pytest.mark.asyncio
+async def test_embed_new_jobs_drops_a_vector_whose_text_changed_meanwhile(
+    patched_db, session, monkeypatch,
+):
+    """With the loop free during the encode, a scrape can rewrite the posting
+    (upsert_jobs clears its vector). The old text's vector must not land."""
+    import asyncio
+
+    from sqlalchemy import update
+
+    job = Job(url="https://e.com/race", title="Dev", company="A", source="ejobs")
+    session.add(job)
+    await session.commit()
+    loop = asyncio.get_running_loop()
+
+    async def rescrape() -> None:
+        async with patched_db() as other:
+            await other.execute(
+                update(Job).where(Job.id == job.id).values(description="Now with a description")
+            )
+            await other.commit()
+
+    def encode_during_rescrape(texts):
+        asyncio.run_coroutine_threadsafe(rescrape(), loop).result(timeout=5)
+        return fake_encode(texts)
+
+    monkeypatch.setattr(embeddings, "encode_texts", encode_during_rescrape)
+    assert await embeddings.embed_new_jobs() == 0
+
+    await session.refresh(job)
+    assert job.embedding is None  # picked up again by the next run

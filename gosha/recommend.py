@@ -15,6 +15,8 @@ from typing import NamedTuple
 
 import numpy as np
 from sqlalchemy import or_, select
+from sqlalchemy.orm import defer
+from sqlalchemy.orm.attributes import set_committed_value
 
 from gosha.database import get_session
 from gosha.embeddings import bytes_to_vec, current_model_clause, is_current
@@ -302,13 +304,17 @@ def apply_feedback(
     """Rocchio relevance feedback, as a unit vector.
 
     base + like_weight * mean(liked) - dislike_weight * mean(disliked),
-    where `base` is the CV vector (absent: start from zero, so feedback
-    alone still ranks). None when there is no signal or it cancels out.
+    where `base` is the CV vector (absent: start from zero, so likes alone
+    still rank). None when there is no positive signal or it cancels out.
     Pure, so the offline eval (gosha/evaluation.py) runs exactly this.
     """
-    if base is None and not liked and not disliked:
+    if base is None and not liked:
+        # Dislikes alone say what the user does not want, not what they do.
+        # Ranking by -mean(disliked) put "least like what you turned down"
+        # first: accounting and sales on top for a Python student who
+        # disliked one Python posting. The caller falls back to newest-first.
         return None
-    dim = len(base) if base is not None else len(liked[0] if liked else disliked[0])
+    dim = len(base) if base is not None else len(liked[0])
     vector = (
         np.asarray(base, dtype=np.float64) if base is not None
         else np.zeros(dim, dtype=np.float64)
@@ -330,8 +336,8 @@ async def get_feed(
     """Ranked FeedItems for the user's feed, plus the total count.
 
     Jobs the user already gave feedback on or applied to are excluded.
-    Without any personalization signal, falls back to newest-first with
-    None scores.
+    Without any personalization signal (no current CV vector and no 👍;
+    see apply_feedback), falls back to newest-first with None scores.
     """
     user_vector, liked_mean = await build_user_signal(user_id)
 
@@ -347,8 +353,19 @@ async def get_feed(
         )
         excluded_ids.update(row[0] for row in applied_result.all())
 
+    # Standing exclusions: blacklisted companies / excluded words from any
+    # of the user's searches never appear in the feed.
+    from gosha.services.jobs import get_user_exclusions, passes_user_exclusions
+
+    blacklist, excluded = await get_user_exclusions(user_id)
+
+    # Descriptions are the bulk of a row and ranking does not read them:
+    # only the page returned needs one (filled below), unless excluded
+    # words have to be matched against every candidate's text.
+    with_description = bool(excluded)
     candidates = await load_candidates(
         excluded_ids, embedded_only=user_vector is not None,
+        with_description=with_description,
     )
 
     cv_text = ""
@@ -368,45 +385,43 @@ async def get_feed(
                 # Rank without match reasons rather than fail the feed.
                 log.error("Feed for user %d without CV reasons: %s", user_id, exc)
 
-    # Standing exclusions: blacklisted companies / excluded words from any
-    # of the user's searches never appear in the feed.
-    from gosha.services.jobs import get_user_exclusions, passes_user_exclusions
-
-    blacklist, excluded = await get_user_exclusions(user_id)
     if blacklist or excluded:
         candidates = [
             j for j in candidates if passes_user_exclusions(j, blacklist, excluded)
         ]
 
+    start = (page - 1) * per_page
     if user_vector is None:
         candidates.sort(
             key=lambda j: j.first_seen_at or datetime.min.replace(tzinfo=timezone.utc),
             reverse=True,
         )
-        total = len(candidates)
-        start = (page - 1) * per_page
-        return (
-            [
-                FeedItem(job, None, None, [], [])
-                for job in candidates[start : start + per_page]
-            ],
-            total,
-        )
+        page_jobs = candidates[start : start + per_page]
+        if not with_description:
+            await load_descriptions(page_jobs)
+        return [FeedItem(job, None, None, [], []) for job in page_jobs], len(candidates)
 
-    return rank_candidates(
-        candidates, user_vector, cv_text=cv_text, liked_mean=liked_mean,
-        page=page, per_page=per_page,
+    ranked = _order(candidates, user_vector)
+    page_rows = ranked[start : start + per_page]
+    if not with_description:
+        await load_descriptions([job for job, _, _ in page_rows])
+    return (
+        _explain(page_rows, len(ranked), cv_text=cv_text, liked_mean=liked_mean),
+        len(ranked),
     )
 
 
 async def load_candidates(
     excluded_ids: set[int] | frozenset[int] = frozenset(),
     embedded_only: bool = True,
+    with_description: bool = True,
 ) -> list[Job]:
     """Active, canonical jobs first seen within FEED_WINDOW_DAYS.
 
     `embedded_only` keeps only jobs with a vector from the configured
-    model — what a ranking needs.
+    model — what a ranking needs. `with_description=False` leaves the
+    description in the database; reading it then raises until
+    load_descriptions() has filled it in.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=FEED_WINDOW_DAYS)
     async with get_session() as session:
@@ -422,8 +437,24 @@ async def load_candidates(
             )
         if excluded_ids:
             stmt = stmt.where(Job.id.notin_(excluded_ids))
+        if not with_description:
+            stmt = stmt.options(defer(Job.description))
         result = await session.execute(stmt)
         return list(result.scalars().all())
+
+
+async def load_descriptions(jobs: list[Job]) -> None:
+    """Fill in the description of jobs loaded without one (load_candidates)."""
+    if not jobs:
+        return
+    async with get_session() as session:
+        result = await session.execute(
+            select(Job.id, Job.description).where(Job.id.in_([job.id for job in jobs]))
+        )
+        descriptions = dict(result.all())
+    for job in jobs:
+        # As if loaded with the row: no pending change for a later session.
+        set_committed_value(job, "description", descriptions.get(job.id))
 
 
 def rank_candidates(
@@ -440,8 +471,23 @@ def rank_candidates(
     Shared by the signed-in feed and the public demo (gosha/api/demo.py),
     so the demo shows exactly the ranking users get.
     """
+    ranked = _order(candidates, vector)
+    start = (page - 1) * per_page
+    return (
+        _explain(
+            ranked[start : start + per_page], len(ranked),
+            cv_text=cv_text, liked_mean=liked_mean,
+        ),
+        len(ranked),
+    )
+
+
+def _order(
+    candidates: list[Job], vector: np.ndarray,
+) -> list[tuple[Job, float, int]]:
+    """(job, clipped cosine, percentile) for every candidate, best first."""
     if not candidates:
-        return [], 0
+        return []
 
     matrix = np.stack([bytes_to_vec(j.embedding) for j in candidates])
     scores = matrix @ vector
@@ -453,20 +499,24 @@ def rank_candidates(
     # page — otherwise page 2 would relabel its own worst jobs as top
     # matches.
     ranked_percentiles = percentile_ranks(ranked_scores)
+    return list(zip(ranked_jobs, ranked_scores, ranked_percentiles))
 
-    total = len(ranked_jobs)
-    start = (page - 1) * per_page
-    page_slice = slice(start, start + per_page)
 
-    # Explanations are the expensive part (regex tokenisation over every
-    # job description), so they are computed for the page being returned
-    # rather than for all ~2000 candidates that get thrown away.
+def _explain(
+    page_rows: list[tuple[Job, float, int]],
+    total: int,
+    *,
+    cv_text: str,
+    liked_mean: np.ndarray | None,
+) -> list[FeedItem]:
+    """FeedItems for one page of _order()'s output.
+
+    Explanations are the expensive part (regex tokenisation over every
+    job description), so they are computed for the page being returned
+    rather than for all ~2000 candidates that get thrown away.
+    """
     items: list[FeedItem] = []
-    for job, score, percentile in zip(
-        ranked_jobs[page_slice],
-        ranked_scores[page_slice],
-        ranked_percentiles[page_slice],
-    ):
+    for job, score, percentile in page_rows:
         liked_similarity = None
         if liked_mean is not None and job.embedding:
             liked_similarity = float(bytes_to_vec(job.embedding) @ liked_mean)
@@ -479,5 +529,4 @@ def rank_candidates(
             liked_similarity=liked_similarity,
         )
         items.append(FeedItem(job, score, percentile, reasons, signals))
-
-    return items, total
+    return items

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -46,16 +47,17 @@ async def _record_consent(user_id: int) -> None:
 
 
 async def require_consent(user_id: int, consent: bool) -> None:
-    """Record fresh consent, or confirm one is on file; raise otherwise.
+    """Confirm consent is given now or already on file; raise otherwise.
 
     Called before the CV text is written anywhere. Consent used to live
     only in the browser's localStorage and the bot never asked at all, so
     there was nothing server-side to show that a stored CV was stored
-    with the owner's agreement.
+    with the owner's agreement. Fresh consent is recorded by store_cv_text
+    once a CV is actually stored: recording it here left a consent on file
+    for uploads that were then rejected (unreadable file), and the next
+    upload skipped the question.
     """
-    if consent:
-        await _record_consent(user_id)
-    elif not await has_cv_consent(user_id):
+    if not consent and not await has_cv_consent(user_id):
         raise ConsentRequiredError(CONSENT_REQUIRED_MESSAGE)
 
 
@@ -84,7 +86,9 @@ async def upload_cv(
         raise FileTooLargeError("CV files can be at most 5 MB.")
     await require_consent(user_id, consent)
 
-    text = storage.extract_text(filename, content)
+    # CPU-bound parsing (a PDF can take seconds) must not stall the loop
+    # every other request is served from.
+    text = await asyncio.to_thread(storage.extract_text, filename, content)
     if not text or not text.strip():
         raise ValidationError(
             "Couldn't read any text from that file — try a different format."
@@ -101,8 +105,10 @@ async def store_cv_text(user_id: int, text: str) -> None:
     call the storage module directly and skipped the embedding, so a CV
     uploaded on Discord never reached the ranking — and a vector left over
     from an older web upload kept ranking the user by their previous CV.
-    Callers must have passed require_consent() first.
+    Callers must have passed require_consent() first; the consent is
+    recorded here, with the CV it covers.
     """
+    await _record_consent(user_id)
     storage.save_cv(user_id, text)
 
     # Best-effort: feed falls back gracefully when the model is unavailable
@@ -121,17 +127,33 @@ async def delete_cv(user_id: int) -> bool:
     user asked us to erase was still sitting in the database, quoted back at
     them on the CV page. Deleting also withdraws the recorded consent, so a
     later upload asks again.
+
+    The letters' text goes; this month's rows stay, emptied, because they
+    are the monthly cover-letter quota (one row per letter generated).
+    Deleting them reset the quota: delete the CV, re-upload, five more.
+    Older rows no longer count toward anything and are deleted outright.
     """
     existed = storage.delete_cv(user_id)
 
     try:
         from sqlalchemy import delete as sql_delete
+        from sqlalchemy import update as sql_update
 
         from gosha.models import CoverLetter
 
         async with get_session() as session:
             await session.execute(
-                sql_delete(CoverLetter).where(CoverLetter.user_id == user_id)
+                sql_delete(CoverLetter).where(
+                    CoverLetter.user_id == user_id,
+                    CoverLetter.created_at < storage.month_start(),
+                )
+            )
+            # Pending claims too: a letter still being generated must not
+            # be stored once the CV it came from is gone.
+            await session.execute(
+                sql_update(CoverLetter)
+                .where(CoverLetter.user_id == user_id)
+                .values(content=storage.ERASED_CONTENT)
             )
             await session.commit()
     except Exception as exc:

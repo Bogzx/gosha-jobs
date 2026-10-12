@@ -4,11 +4,14 @@
 
 # Core
 discord.py>=2.3,<3
-# 1.1.82 is the release verified to accept everything gosha/scraper.py
-# passes (hours_old, country_indeed, linkedin_fetch_description).
-# Without the floor a resolver may legally pick 1.1.13 — it satisfies ">=1.1"
-# and coexists with numpy 2 — and every JobSpy call raises TypeError.
-python-jobspy>=1.1.82,<1.2
+# 1.3.0 is the first release whose Glassdoor scraper works again:
+# Glassdoor retired findPopularLocationAjax.htm, which 1.1.x used to
+# resolve every location, so Glassdoor returned 0 jobs for months (1.2.0
+# switched endpoints but returned one job per search). It also renamed
+# linkedin_fetch_description to fetch_description, which gosha/scraper.py
+# passes. The floor matters: an older release silently drops that argument
+# (scrape_jobs takes **kwargs) and Glassdoor finds nothing.
+python-jobspy>=1.3.0,<1.4
 # [asyncio] pulls in greenlet. SQLAlchemy 2.1 stopped installing it by
 # default, so a fresh image could not even import the async engine.
 sqlalchemy[asyncio]>=2.0,<3

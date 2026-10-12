@@ -13,7 +13,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from gosha.bot import JobBot
 from gosha.config import load_settings
 from gosha.database import init_db
-from gosha.pipeline import run_scrape_cycle
+from gosha.pipeline import ScrapeCycleBusy, run_scrape_cycle
 from gosha.ssh_tunnels import SSHTunnelManager
 
 logging.basicConfig(
@@ -56,7 +56,11 @@ async def main() -> None:
     async def _scrape_and_track(**kwargs: object) -> None:
         """Wrapper that tracks last scrape time on the bot."""
         import time as _time
-        await run_scrape_cycle(**kwargs)
+        try:
+            await run_scrape_cycle(**kwargs)
+        except ScrapeCycleBusy:
+            log.warning("Skipping the scheduled scrape: /scrape_now's cycle is still running.")
+            return
         bot._last_scrape_at = _time.monotonic()
 
     # Interval triggers count from process start, so without an explicit
@@ -88,16 +92,49 @@ async def main() -> None:
         misfire_grace_time=max(60, settings.scrape_interval_minutes * 30),
     )
 
-    def _on_job_missed(event: object) -> None:
-        log.error(
-            "Scheduled job %s missed its run time — the previous cycle is "
-            "still running or the loop is blocked.",
-            getattr(event, "job_id", "?"),
-        )
+    from apscheduler.events import (
+        EVENT_JOB_ERROR,
+        EVENT_JOB_MAX_INSTANCES,
+        EVENT_JOB_MISSED,
+    )
 
-    from apscheduler.events import EVENT_JOB_MISSED
+    # Jobs whose failure someone should hear about, not just the log. The
+    # rest (outbox poll, heartbeat, backfills) log and retry on their own.
+    alert_jobs = {"scrape_cycle", "deadlink_check", "cv_retention"}
+    main_loop = asyncio.get_running_loop()
 
-    scheduler.add_listener(_on_job_missed, EVENT_JOB_MISSED)
+    async def _alert(text: str) -> None:
+        channel = bot.get_channel(settings.alert_channel_id) if settings.alert_channel_id else None
+        if channel is None:
+            return
+        try:
+            await channel.send(text)  # type: ignore[union-attr]
+        except Exception as exc:
+            log.error("Failed to post scheduler alert: %s", exc)
+
+    def _on_job_event(event: object) -> None:
+        job_id = getattr(event, "job_id", "?")
+        code = getattr(event, "code", None)
+        if code == EVENT_JOB_ERROR:
+            log.error("Scheduled job %s raised: %r", job_id, getattr(event, "exception", None))
+            message = f"**Scheduler**: `{job_id}` failed: `{getattr(event, 'exception', '?')!r}`"[:1900]
+        elif code == EVENT_JOB_MAX_INSTANCES:
+            # An overrunning cycle fires this, not EVENT_JOB_MISSED.
+            log.error("Scheduled job %s skipped: its previous run is still going.", job_id)
+            message = f"**Scheduler**: `{job_id}` skipped — the previous run is still going."
+        else:
+            log.error(
+                "Scheduled job %s missed its run time — the previous cycle is "
+                "still running or the loop is blocked.", job_id,
+            )
+            message = f"**Scheduler**: `{job_id}` missed its run time."
+        if job_id in alert_jobs:
+            # Listeners may run off the loop thread (executor-run jobs).
+            main_loop.call_soon_threadsafe(lambda: main_loop.create_task(_alert(message)))
+
+    scheduler.add_listener(
+        _on_job_event, EVENT_JOB_MISSED | EVENT_JOB_MAX_INSTANCES | EVENT_JOB_ERROR,
+    )
 
     # Deliver web-enqueued Discord messages (outbox) every 30 seconds
     async def _outbox_tick() -> None:
@@ -184,9 +221,16 @@ async def main() -> None:
     # wedges — the classic failure here — the scheduler stops firing, the
     # stamp goes stale, and the healthcheck turns the container unhealthy
     # instead of leaving it "up" and silently scraping nothing.
-    from gosha.heartbeat import HEARTBEAT_INTERVAL_SECONDS, touch as _touch_heartbeat
+    from gosha.heartbeat import (
+        HEARTBEAT_INTERVAL_SECONDS,
+        start_watchdog,
+        touch as _touch_heartbeat,
+    )
 
     _touch_heartbeat()
+    # Docker does not restart an "unhealthy" container; the watchdog exits
+    # the process when the heartbeat stops, and the restart policy does.
+    start_watchdog()
     scheduler.add_job(
         _touch_heartbeat,
         trigger=IntervalTrigger(seconds=HEARTBEAT_INTERVAL_SECONDS),

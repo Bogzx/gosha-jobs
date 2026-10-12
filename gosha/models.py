@@ -12,6 +12,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -230,9 +231,19 @@ class Job(Base):
     last_checked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Seniority as the board files it ("intern" | "entry" | "mid" |
+    # "senior"), independent of the title: eJobs and BestJobs label
+    # entry-level postings that are titled plainly "QA Engineer".
+    # gosha.filters.matches_experience_level honours it. NULL = unknown.
+    experience_level: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     user_jobs: Mapped[list[UserJob]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        # The feed, browse and dedup all scan recent active jobs.
+        Index("ix_jobs_active_first_seen", "is_active", "first_seen_at"),
     )
 
     def __repr__(self) -> str:
@@ -356,12 +367,25 @@ class UserJob(Base):
     job_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("jobs.id"), nullable=False
     )
+    # SET NULL: deleting a saved search keeps its delivery history (so its
+    # jobs are not delivered again) instead of failing on this key.
     subscription_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("subscriptions.id"), nullable=True
+        Integer, ForeignKey("subscriptions.id", ondelete="SET NULL"), nullable=True
     )
     relevance_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # When the match was recorded — NOT when (or whether) a DM went out.
     delivered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
+    )
+    # Discord DM state (DM_* below). The match stage writes "pending"; the
+    # deliver stage retries a pending row until it is sent, given up on or
+    # ages out. NULL = never a DM candidate: rows the website creates
+    # (feedback, apply clicks), rows from before DM tracking, and rows an
+    # older release writes during a rolled-back deploy (it DMs at match
+    # time itself). Explicit, so none of those can be sent twice.
+    dm_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    dm_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     feedback: Mapped[str | None] = mapped_column(
         String(32), nullable=True
@@ -376,6 +400,14 @@ class UserJob(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "job_id", name="uq_user_job_delivery"),
     )
+
+    DM_PENDING = "pending"
+    DM_SENT = "sent"
+    # Not sent and not to be retried: DMs closed (Forbidden), the search
+    # does not notify Discord, a duplicate of another posting, or over the
+    # per-cycle cap. The match still shows on the website.
+    DM_FAILED = "failed"
+    DM_SKIPPED = "skipped"
 
     def __repr__(self) -> str:
         return (
@@ -499,6 +531,12 @@ class CoverLetter(Base):
 
     user: Mapped[User] = relationship(passive_deletes=True)
     job: Mapped[Job] = relationship(passive_deletes=True)
+
+    __table_args__ = (
+        # Every generation looks up the user's latest letter for the job;
+        # the rows are also the monthly quota ledger, so they accumulate.
+        Index("ix_cover_letters_user_job_created", "user_id", "job_id", "created_at"),
+    )
 
     def __repr__(self) -> str:
         return f"<CoverLetter user={self.user_id} job={self.job_id}>"

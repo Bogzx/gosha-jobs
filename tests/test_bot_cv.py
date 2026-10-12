@@ -145,4 +145,5 @@ async def test_delete_removes_vector_letters_and_consent(
     letters = await session.execute(
         select(CoverLetter).where(CoverLetter.user_id == user.id)
     )
-    assert letters.scalars().all() == []
+    # The text is gone; the row stays as this month's quota record.
+    assert [letter.content for letter in letters.scalars()] == [""]

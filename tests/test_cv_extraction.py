@@ -105,3 +105,29 @@ def test_garbage_bytes_do_not_raise():
 
 def test_unsupported_extension_returns_none():
     assert extract_text("cv.exe", b"MZ") is None
+
+
+def _pdf(pages: list[str]) -> bytes:
+    import pymupdf
+
+    doc = pymupdf.open()
+    for text in pages:
+        doc.new_page().insert_text((20, 20), text, fontsize=4)
+    return doc.tobytes()
+
+
+def test_pdf_pages_past_the_cap_are_not_read():
+    from gosha.cover_letter import MAX_CV_PAGES
+
+    text = extract_text("cv.pdf", _pdf([f"PAGE{i:03d}" for i in range(MAX_CV_PAGES + 10)]))
+    assert f"PAGE{MAX_CV_PAGES - 1:03d}" in text
+    assert f"PAGE{MAX_CV_PAGES:03d}" not in text
+
+
+def test_extracted_text_is_capped():
+    """A 0.4 MB PDF of 3,000 dense pages produced 24 MB of text."""
+    from gosha.cover_letter import MAX_CV_CHARS
+
+    dense = "\n".join(["Python Django React Docker Kubernetes " * 3] * 70)
+    assert len(extract_text("cv.pdf", _pdf([dense] * 40))) <= MAX_CV_CHARS
+    assert len(extract_text("cv.txt", b"x" * (MAX_CV_CHARS * 3))) == MAX_CV_CHARS

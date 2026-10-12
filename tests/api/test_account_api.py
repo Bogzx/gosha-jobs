@@ -144,7 +144,11 @@ async def test_delete_account_leaves_public_job_rows_alone(
 async def test_deleting_a_cv_also_deletes_its_cover_letters(
     client, web_user, session,
 ):
-    """Letters are derived from the CV; "delete" has to include them."""
+    """Letters are derived from the CV; "delete" has to include them.
+
+    Their text, that is: this month's rows stay, empty, as the monthly
+    quota record (see test_cv_api's quota-reset test).
+    """
     user, cookies = web_user
     user_id = user.id
     await _seed_full_account(client, session, user, cookies)
@@ -158,7 +162,12 @@ async def test_deleting_a_cv_also_deletes_its_cover_letters(
             select(CoverLetter).where(CoverLetter.user_id == user_id)
         )
     ).scalars().all()
-    assert letters == []
+    assert [letter.content for letter in letters] == [""]
+    assert (await client.get("/api/v1/cover-letters", cookies=cookies)).json() == {
+        "items": []
+    }
+    export = (await client.get("/api/v1/account/export", cookies=cookies)).json()
+    assert [c["content"] for c in export["cover_letters"]] == [None]
 
 
 @pytest.mark.asyncio

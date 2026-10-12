@@ -33,7 +33,10 @@ async def init_db(database_url: str) -> AsyncEngine:
     """
     global _engine, _session_factory
 
-    _engine = create_async_engine(database_url, echo=False)
+    # pool_pre_ping: a deploy that pulls a new postgres image restarts
+    # Postgres under the running bot and api; without it each process's
+    # first query on every pooled connection failed afterwards.
+    _engine = create_async_engine(database_url, echo=False, pool_pre_ping=True)
 
     # Enable WAL mode for safe concurrent access from bot + web
     if "sqlite" in database_url:

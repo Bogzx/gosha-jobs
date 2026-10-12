@@ -20,12 +20,17 @@ returns at least one job whose url/title/company survive validation. Some
 boards legitimately have nothing for one narrow query, which is why every
 adapter gets several.
 
-JobSpy (Indeed, LinkedIn) is probed once per board, directly — production
-goes through SSH tunnels this runner does not have — with the exact
-arguments production builds (gosha.scraper.jobspy_kwargs). Indeed gates.
-LinkedIn is ADVISORY: it throttles datacenter IPs such as GitHub's, so a
-failure there is reported but does not fail the run or open an issue.
-Glassdoor is not probed; it blocks datacenter IPs outright.
+Each adapter is only asked the probe queries its applies_to() accepts
+(RemoteOK and Jobicy serve remote searches, Hipo Romanian cities), the same
+rule production uses.
+
+JobSpy (Indeed, LinkedIn, Glassdoor) is probed once per board, directly —
+production goes through SSH tunnels this runner does not have — with the
+exact arguments production builds (gosha.scraper.jobspy_kwargs; Glassdoor
+gets the city-only location production gives it). Indeed gates. LinkedIn
+and Glassdoor are ADVISORY: they throttle or block datacenter IPs such as
+GitHub's, so a failure there is reported but does not fail the run or
+open an issue.
 """
 
 from __future__ import annotations
@@ -59,7 +64,7 @@ JOBSPY_PROBE = SearchQuery(
     keyword="software engineer", location="cluj", max_age_days=30,
 )
 JOBSPY_RESULTS = 5
-JOBSPY_BOARDS = {"indeed": False, "linkedin": True}  # board -> advisory
+JOBSPY_BOARDS = {"indeed": False, "linkedin": True, "glassdoor": True}  # board -> advisory
 
 # How many sampled jobs are validated per query.
 SAMPLE_SIZE = 5
@@ -72,6 +77,10 @@ class SourceResult:
     jobs_found: int = 0
     queries_with_jobs: int = 0
     sampled: int = 0
+    # Company presence is judged over every job returned, not the sample:
+    # BestJobs ranks its few anonymous (recruiter) postings first, so a
+    # top-5 sample was mostly companyless while 95% of results named one.
+    company_checked: int = 0
     missing_company: int = 0
     problems: list[str] = field(default_factory=list)
     samples: list[str] = field(default_factory=list)
@@ -115,10 +124,10 @@ def _has_company(job: RawJob) -> bool:
 
 
 def _company_problem(result: SourceResult) -> str | None:
-    """A source whose sample is MOSTLY companyless has a broken parser."""
-    if result.sampled and result.missing_company * 2 > result.sampled:
+    """A source whose results are MOSTLY companyless has a broken parser."""
+    if result.company_checked and result.missing_company * 2 > result.company_checked:
         return (
-            f"{result.name}: {result.missing_company}/{result.sampled} sampled "
+            f"{result.name}: {result.missing_company}/{result.company_checked} "
             f"jobs have no company — the company field is probably no longer parsed"
         )
     return None
@@ -135,8 +144,8 @@ def _record_jobs(result: SourceResult, jobs: list[RawJob]) -> None:
     for job in jobs[:SAMPLE_SIZE]:
         result.problems.extend(_validate(job, result.name))
         result.sampled += 1
-        if not _has_company(job):
-            result.missing_company += 1
+    result.company_checked += len(jobs)
+    result.missing_company += sum(1 for job in jobs if not _has_company(job))
     for job in jobs[:2]:
         salary = (
             f" | {job.salary_min}-{job.salary_max} {job.salary_currency}"
@@ -151,8 +160,10 @@ def _record_jobs(result: SourceResult, jobs: list[RawJob]) -> None:
 
 async def probe(scraper) -> SourceResult:
     result = SourceResult(name=scraper.name)
+    applies_to = getattr(scraper, "applies_to", lambda _query: True)
+    queries = [q for q in PROBE_QUERIES if applies_to(q)]
 
-    for query in PROBE_QUERIES:
+    for query in queries:
         try:
             jobs = await asyncio.wait_for(
                 scraper.search(query), timeout=QUERY_TIMEOUT
@@ -182,7 +193,7 @@ async def probe(scraper) -> SourceResult:
     if result.jobs_found == 0:
         result.problems.append(
             f"{scraper.name}: returned 0 jobs for all "
-            f"{len(PROBE_QUERIES)} probe queries — adapter is probably broken"
+            f"{len(queries)} probe queries — adapter is probably broken"
         )
     return result
 
@@ -213,17 +224,22 @@ async def probe_jobspy(board: str, advisory: bool) -> SourceResult:
 
     from jobspy import scrape_jobs
 
-    from gosha.filters import normalize_location
-    from gosha.scraper import indeed_country, jobspy_kwargs
+    from gosha.filters import city_only, normalize_location
+    from gosha.scraper import glassdoor_country, indeed_country, jobspy_kwargs
 
     query = JOBSPY_PROBE
     location, _subs = normalize_location(query.location)
+    if board == "glassdoor":
+        country = glassdoor_country(location)
+        location = city_only(location)
+    else:
+        country = indeed_country(location)
     kwargs = jobspy_kwargs(
         [board], query.keyword, location, query.max_age_days,
-        proxy=None, country=indeed_country(location),
+        proxy=None, country=country,
     )
     kwargs["results_wanted"] = JOBSPY_RESULTS
-    kwargs["linkedin_fetch_description"] = False  # one request, not six
+    kwargs["fetch_description"] = False  # one request, not six
 
     result = SourceResult(name=board, advisory=advisory)
     try:
@@ -328,7 +344,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--no-jobspy", action="store_true",
-        help="skip the Indeed/LinkedIn probes",
+        help="skip the Indeed/LinkedIn/Glassdoor probes",
     )
     parser.add_argument(
         "--result-file",

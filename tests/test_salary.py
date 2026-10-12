@@ -94,6 +94,26 @@ class TestNormaliseRange:
     def test_unknown_currency_yields_nothing(self):
         assert normalise_range(5000, 9000, "XYZ", "monthly") == (None, None)
 
+    def test_unlabelled_range_gets_one_period_from_its_larger_bound(self):
+        """Guessed per bound, USD 15k-25k became 9,583-69,000 RON/month:
+        the 15k read as monthly, the 25k as annual."""
+        low, high = normalise_range(15_000, 25_000, "USD", None)
+        assert low == pytest.approx(15_000 * 4.6 / 12, rel=0.01)  # 5,750
+        assert high == pytest.approx(25_000 * 4.6 / 12, rel=0.01)  # 9,583
+
+    def test_unlabelled_small_range_is_not_split_across_periods(self):
+        """EUR 70-90 became 450-58,800: 70 read as hourly, 90 as monthly.
+        The larger bound (450 RON) is above the hourly ceiling, so both
+        bounds are read as monthly."""
+        low, high = normalise_range(70, 90, "EUR", None)
+        assert (low, high) == (pytest.approx(350), pytest.approx(450))
+        assert high / low == pytest.approx(90 / 70)
+
+    def test_unlabelled_hourly_range_stays_hourly(self):
+        low, high = normalise_range(15, 25, "EUR", None)
+        assert low == pytest.approx(15 * 5.0 * 168)
+        assert high == pytest.approx(25 * 5.0 * 168)
+
     def test_sources_become_comparable(self):
         """The point of the whole module."""
         ejobs = normalise_range(8000, 12000, "RON", "monthly")

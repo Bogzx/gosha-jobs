@@ -3,8 +3,20 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 
+from fastapi import Path
 from pydantic import BaseModel, Field
+
+# Integer columns are 32-bit on Postgres: a larger id or amount fails at
+# the driver (a 500), so it is refused here instead (422).
+DB_INT_MAX = 2**31 - 1
+
+# A row id taken from the URL path.
+RowId = Annotated[int, Path(ge=1, le=DB_INT_MAX)]
+
+# Mirrors Subscription.name's String(128).
+SUBSCRIPTION_NAME_MAX = 128
 
 
 class MeOut(BaseModel):
@@ -106,36 +118,41 @@ class ApplicationOut(BaseModel):
 
 
 class ApplicationCreateIn(BaseModel):
-    job_id: int
+    job_id: int = Field(ge=1, le=DB_INT_MAX)
 
 
 class ApplicationPatchIn(BaseModel):
+    """Only the fields sent are changed; `notes` sent as null clears them."""
+
     status: str | None = None
     notes: str | None = None
 
 
 class SubscriptionIn(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=SUBSCRIPTION_NAME_MAX)
     keywords: list[str] = Field(min_length=1)
     locations: list[str] = Field(min_length=1)
     excluded_keywords: list[str] = []
     company_blacklist: list[str] = []
     experience_levels: list[str] = ["any"]
     remote_ok: bool = False
-    salary_min: int | None = None
+    salary_min: int | None = Field(default=None, ge=0, le=DB_INT_MAX)
     max_age_days: int = Field(default=7, ge=1, le=30)
     notify_discord: bool = True
 
 
 class SubscriptionPatchIn(BaseModel):
-    name: str | None = None
+    """Only the fields sent are changed; `name` / `salary_min` sent as null
+    clear them (the router passes exclude_unset)."""
+
+    name: str | None = Field(default=None, max_length=SUBSCRIPTION_NAME_MAX)
     keywords: list[str] | None = None
     locations: list[str] | None = None
     excluded_keywords: list[str] | None = None
     company_blacklist: list[str] | None = None
     experience_levels: list[str] | None = None
     remote_ok: bool | None = None
-    salary_min: int | None = None
+    salary_min: int | None = Field(default=None, ge=0, le=DB_INT_MAX)
     max_age_days: int | None = Field(default=None, ge=1, le=30)
     notify_discord: bool | None = None
 

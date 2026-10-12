@@ -35,7 +35,7 @@ The best roles get 200 applicants in the first 48 hours. GOSHA makes sure you're
 |---|---|
 | 🧪 **Try it without an account** | [`/demo`](https://gosha.bogdantruta.com/demo) ranks today's postings for one of four sample CVs (one written in Romanian) with the same code as the signed-in feed, "why this matched" included. Only a persona id goes to the server; nothing is stored ([`gosha/api/demo.py`](gosha/api/demo.py)). |
 | 🎯 **CV-matched feed** | Every posting gets a match score from sentence-embedding similarity against *your* CV — no keyword setup needed. "Matches your python, react, docker" tells you why. |
-| 🔭 **7 job boards, one feed** | Indeed, LinkedIn, Glassdoor (via [JobSpy](https://github.com/speedyapply/JobSpy)) plus native adapters for **eJobs.ro**, **BestJobs.ro**, **Hipo.ro**, and **RemoteOK**. Cross-board duplicates collapse into one card. |
+| 🔭 **8 job boards, one feed** | Indeed, LinkedIn, Glassdoor (via [JobSpy](https://github.com/speedyapply/JobSpy)) plus native adapters for **eJobs.ro**, **BestJobs.ro**, **Hipo.ro**, **RemoteOK** and **[Jobicy](https://jobicy.com)** (remote jobs open to Europe). Cross-board duplicates collapse into one card. |
 | 📬 **Discord alerts** | The bot scrapes around the clock and DMs you fresh matches. Saved searches are managed on the web — zero slash-command setup (slash commands still work too). |
 | ✅ **Self-filling tracker** | Click **Apply** and the job is already in your tracker. Move it through applied → screen → interview → offer, with notes. |
 | ✍️ **AI cover letters** | One click per job: your CV + the posting → a tailored letter via DeepSeek (direct or through OpenRouter) or Gemini. Cached 30 days. |
@@ -59,7 +59,7 @@ The best roles get 200 applicants in the first 48 hours. GOSHA makes sure you're
 flowchart LR
     subgraph sources["Job boards"]
         A1[Indeed / LinkedIn / Glassdoor]
-        A2[eJobs / BestJobs / Hipo / RemoteOK]
+        A2[eJobs / BestJobs / Hipo / RemoteOK / Jobicy]
     end
 
     subgraph pipeline["Bot process (hourly cycle)"]
@@ -97,7 +97,7 @@ Three processes share one database — the bot (Discord + scheduler), the API (F
 **Backend** · Python 3.11, FastAPI, SQLAlchemy 2 (async), discord.py, APScheduler, sentence-transformers, httpx
 **Frontend** · React 18, TypeScript, Vite, Tailwind CSS v4, TanStack Query, Recharts
 **Infra** · PostgreSQL 16, Caddy, Docker Compose, GitHub Actions (CI + auto-deploy on push to `main`)
-**Tests** · 500+ backend (pytest) + frontend (vitest), scraper adapters tested on live-recorded fixtures, a daily live smoke of the boards (`.github/workflows/scraper-smoke.yml`; Glassdoor excluded), and an offline ranking-quality eval that CI re-runs when ranking code changes ([docs/EVAL.md](docs/EVAL.md))
+**Tests** · 650+ backend (pytest, SQLite with foreign keys enforced, plus opt-in Postgres tests) + frontend (vitest), scraper adapters tested on live-recorded fixtures, a daily live smoke of every board (`.github/workflows/scraper-smoke.yml`; LinkedIn and Glassdoor advisory, since they throttle GitHub's IPs), and an offline ranking-quality eval that CI re-runs when ranking code changes ([docs/EVAL.md](docs/EVAL.md))
 
 ## Self-hosting
 
@@ -108,6 +108,9 @@ git clone https://github.com/Bogzx/gosha-jobs.git && cd gosha-jobs
 
 cp .env.example .env        # fill in: DISCORD_TOKEN, SESSION_SECRET,
 nano .env                   # DISCORD_CLIENT_ID/SECRET, POSTGRES_PASSWORD, ...
+
+# The containers run as uid 1000; Docker would create these root-owned.
+mkdir -p data keys && sudo chown 1000:1000 data keys
 
 docker compose -f docker-compose.prod.yml up -d --build
 ```
@@ -181,7 +184,7 @@ Then open `http://localhost:5173/api/v1/auth/debug-login?uid=1`.
 
 LinkedIn and Glassdoor rate-limit aggressively. Configure up to 9 VPSs in `.env` (`VPS_1_HOST`, `VPS_1_USER`, `VPS_1_KEY`, ...) and the bot opens SOCKS5 tunnels, rotating per scrape with automatic health checks.
 
-**Without proxies, JobSpy is off unless you allow direct scraping.** By default the JobSpy path (Indeed, LinkedIn, Glassdoor) needs at least one healthy tunnel; with none it logs a warning and skips the search ([`gosha/scraper.py`](gosha/scraper.py)), because a single IP scraping LinkedIn gets blocked within a day or two. `SCRAPE_DIRECT=true` lets JobSpy also use the server's own IP: it is shuffled together with the live tunnels, and with no tunnel alive scraping continues directly. The four native adapters (eJobs, BestJobs, Hipo, RemoteOK) call the boards' own endpoints and need no proxies at all, so a proxy-less install still produces a useful Romanian feed. Glassdoor blocks datacenter IPs outright and is not covered by the daily smoke test, so expect it to yield little from a VPS.
+**Without proxies, JobSpy is off unless you allow direct scraping.** By default the JobSpy path (Indeed, LinkedIn, Glassdoor) needs at least one healthy tunnel; with none it logs a warning and skips the search ([`gosha/scraper.py`](gosha/scraper.py)), because a single IP scraping LinkedIn gets blocked within a day or two. `SCRAPE_DIRECT=true` lets JobSpy also use the server's own IP: it is shuffled together with the live tunnels, and with no tunnel alive scraping continues directly. The five native adapters (eJobs, BestJobs, Hipo, RemoteOK, Jobicy) call the boards' own endpoints and need no proxies at all, so a proxy-less install still produces a useful Romanian feed. Glassdoor needs python-jobspy 1.3+ (Glassdoor retired the location endpoint older releases used, and every Glassdoor search returned nothing); it throttles datacenter IPs, so the daily smoke probes it as advisory.
 </details>
 
 ## Discord commands
@@ -197,13 +200,13 @@ gosha/
 ├── domain/        # pure business logic + domain errors
 ├── services/      # use cases (transactions, rules)
 ├── api/           # FastAPI HTTP adapter (/api/v1)
-├── scrapers/      # one adapter per job board
+├── scrapers/      # one adapter per job board (+ scrape_health.py: yield alerts)
 ├── bot.py         # Discord adapter (slash commands)
 ├── pipeline.py    # scrape → match → deliver cycle
 ├── recommend.py   # CV-similarity feed ranking
 └── llm.py         # DeepSeek / OpenRouter / Gemini provider port
 web/               # React SPA (Vite + Tailwind)
-tests/             # pytest suite (500+ tests)
+tests/             # pytest suite (650+ tests)
 eval/              # labelled postings + sample CVs for the ranking eval
 ```
 
@@ -219,7 +222,7 @@ GOSHA holds real CVs. [`PRIVACY.md`](PRIVACY.md) is the operator-facing version 
 
 ## Backups
 
-**Backups are built and tested, but not switched on in production yet.** [`docs/BACKUPS.md`](docs/BACKUPS.md) describes an opt-in `backup` service (`pg_dump` + encrypted restic snapshots of the database and the CV files) and a restore drill that loads the newest snapshot into a scratch Postgres and compares row counts with the live database. [`scripts/backup/drill.sh`](scripts/backup/drill.sh) runs backup → restore → CV decryption end to end on throwaway containers, and CI repeats it on every change to the backup code. An operator still has to point it at an off-site repository and run the restore drill there; until then, treat the data as unbacked-up.
+**Backups are built and tested, but not switched on in production yet.** Their secrets (restic password, bucket keys) go in a separate `.env.backup` that only the backup container reads, never in `.env`. [`docs/BACKUPS.md`](docs/BACKUPS.md) describes an opt-in `backup` service (`pg_dump` + encrypted restic snapshots of the database and the CV files) and a restore drill that loads the newest snapshot into a scratch Postgres and compares row counts with the live database. [`scripts/backup/drill.sh`](scripts/backup/drill.sh) runs backup → restore → CV decryption end to end on throwaway containers, and CI repeats it on every change to the backup code. An operator still has to point it at an off-site repository and run the restore drill there; until then, treat the data as unbacked-up.
 
 ## Credits
 

@@ -15,6 +15,17 @@ Two signals, because they fail differently:
   markup/API and its adapter needs fixing. This is the failure mode that
   hides for weeks, because the feed keeps working on the other sources.
 
+Yields are counted on what each board RETURNED (unique postings), before
+the pipeline's relevance filter. Counting after it made a working board
+look dead whenever no subscriber's keyword matched its postings — the
+alerts said "adapter probably broken" about boards that were fine. The
+post-filter counts are still reported alongside, as `kept`.
+
+A source is only judged when it was attempted, and the pipeline only
+attempts a source whose applies_to() accepts some subscription's location:
+RemoteOK used to "return 0 jobs for 57 consecutive cycles" simply because
+nobody searched remote.
+
 State is in-process and resets on restart. That is deliberate: after a
 restart the first few cycles re-establish the baseline, and a scraper that
 is genuinely dead trips the streak again within the hour.
@@ -42,7 +53,10 @@ class CycleReport:
     """What one scrape cycle yielded, and what deserves an alert."""
 
     total: int = 0
+    # Unique postings each source returned (pre-filter).
     per_source: dict[str, int] = field(default_factory=dict)
+    # How many of them passed the relevance filter and were stored.
+    kept: dict[str, int] = field(default_factory=dict)
     attempted: list[str] = field(default_factory=list)
     zero_yield: bool = False
     zero_cycle_streak: int = 0
@@ -57,6 +71,16 @@ class CycleReport:
     def summary(self) -> str:
         """One-line human summary for logs and the Discord alert channel."""
         return "\n".join(self.alerts)
+
+    def breakdown(self) -> str:
+        """`source=scraped→kept` per source, e.g. `ejobs=212→15`."""
+        parts = []
+        for name, count in sorted(self.per_source.items()):
+            if name in self.kept:
+                parts.append(f"{name}={count}→{self.kept[name]}")
+            else:
+                parts.append(f"{name}={count}")
+        return ", ".join(parts)
 
 
 class ScrapeHealth:
@@ -77,22 +101,29 @@ class ScrapeHealth:
         self,
         attempted: Iterable[str],
         per_source: Mapping[str, int],
+        kept: Mapping[str, int] | None = None,
     ) -> CycleReport:
         """Fold one cycle's yields into the running state.
 
         `attempted` is every source we asked for — a source that returned
         nothing has no key in `per_source`, so without it a dead source
         would simply disappear from the accounting instead of alerting.
+        `per_source` is what each source returned; `kept` (optional) what
+        survived the relevance filter, reported but not judged.
         """
         attempted_list = sorted({s for s in attempted if s})
         counts = {s: int(per_source.get(s, 0)) for s in attempted_list}
         for source, count in per_source.items():
             counts.setdefault(source, int(count))
+        kept_counts: dict[str, int] = {}
+        if kept is not None:
+            kept_counts = {s: int(kept.get(s, 0)) for s in counts}
 
         total = sum(counts.values())
         report = CycleReport(
             total=total,
             per_source=counts,
+            kept=kept_counts,
             attempted=attempted_list,
             zero_yield=total == 0,
         )
@@ -139,9 +170,8 @@ class ScrapeHealth:
             log.error("Scrape health: %s", " | ".join(report.alerts))
         else:
             log.info(
-                "Scrape health: %d jobs (%s)",
-                total,
-                ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "no sources",
+                "Scrape health: %d jobs scraped (%s)",
+                total, report.breakdown() or "no sources",
             )
 
         self.last_report = report

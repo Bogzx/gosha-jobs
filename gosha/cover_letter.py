@@ -10,14 +10,15 @@ Flow:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from gosha import cv_crypto, llm
 from gosha.database import get_session
@@ -33,6 +34,15 @@ CV_DIR = Path(__file__).resolve().parent.parent / "data" / "cvs"
 # number is named rather than inlined and is quoted verbatim by the privacy
 # notice (gosha/api/legal.py) — the two can never drift.
 CV_CHARS_TO_LLM = 15000
+
+# What one CV upload may cost to parse. A real CV is a few pages and a few
+# thousand characters; a crafted 0.4 MB PDF of 3,000 dense pages produced
+# 24 MB of text and held the event loop for 3 s. Text past these bounds is
+# cut off rather than the file refused: they are far above any real CV,
+# only the start of a CV is ever used (CV_CHARS_TO_LLM above), and the
+# bot's /upload_cv needs no new error path for it.
+MAX_CV_PAGES = 50
+MAX_CV_CHARS = 100_000
 
 
 # ---------------------------------------------------------------------------
@@ -240,27 +250,36 @@ def _clean_pdf_text(text: str) -> str:
 async def extract_text_from_attachment(attachment) -> str | None:
     """Extract text from a Discord attachment (PDF or plain text)."""
     content = await attachment.read()
-    return extract_text(attachment.filename, content)
+    # Parsing is CPU-bound; off the event loop so the bot keeps serving.
+    return await asyncio.to_thread(extract_text, attachment.filename, content)
 
 
 def extract_text(filename: str, content: bytes) -> str | None:
     """Extract CV text from raw file bytes (PDF/DOCX/TXT/MD).
 
     Shared by the Discord upload path and the web API upload path.
-    Returns None on failure or unsupported extension.
+    Returns None on failure or unsupported extension. At most MAX_CV_PAGES
+    pages are read and MAX_CV_CHARS characters returned. Synchronous and
+    CPU-bound: async callers run it in a thread (asyncio.to_thread).
     """
     filename = filename.lower()
 
     if filename.endswith(".txt") or filename.endswith(".md"):
-        return content.decode("utf-8", errors="replace")
+        return content.decode("utf-8", errors="replace")[:MAX_CV_CHARS]
 
     if filename.endswith(".pdf"):
         try:
             import pymupdf
 
             doc = pymupdf.open(stream=content, filetype="pdf")
-            pages = [page.get_text() for page in doc]
-            text = "\n".join(pages).strip()
+            pages: list[str] = []
+            size = 0
+            for index, page in enumerate(doc):
+                if index >= MAX_CV_PAGES or size >= MAX_CV_CHARS:
+                    break
+                pages.append(page.get_text())
+                size += len(pages[-1])
+            text = "\n".join(pages)[:MAX_CV_CHARS].strip()
             text = _clean_pdf_text(text)
             return text if text else None
         except ImportError:
@@ -272,7 +291,8 @@ def extract_text(filename: str, content: bytes) -> str | None:
 
     if filename.endswith(".docx"):
         try:
-            return _extract_docx_text(content)
+            text = _extract_docx_text(content)
+            return text[:MAX_CV_CHARS] if text else None
         except Exception as exc:
             log.error("DOCX extraction failed: %s", exc)
             return None
@@ -335,19 +355,85 @@ def _extract_docx_text(content: bytes) -> str | None:
 
 # ---------------------------------------------------------------------------
 # Monthly usage tracking
+#
+# cover_letters rows ARE the quota ledger: usage is the number of rows
+# created this month, one per generation. Deleting a letter's row to make
+# way for a new one handed its slot back, so that never happens; two kinds
+# of row hold no letter yet still count (only a failed generation's claim
+# is deleted, which refunds it):
 # ---------------------------------------------------------------------------
+
+# A quota slot claimed by a request whose letter is still being generated
+# (gosha/services/cover_letters.py). Never shown as a letter.
+PENDING_CONTENT = "__generating__"
+# A letter whose text was erased with the CV (gosha/services/cv.py). Real
+# letters are never empty: generation treats an empty reply as a failure.
+ERASED_CONTENT = ""
+# A claim older than this was left by a request that died mid-generation.
+# The slowest provider path (Gemini's model fallback) gives up well within.
+PENDING_TTL = timedelta(minutes=10)
+# Cached letters are regenerated after this many days.
+LETTER_MAX_AGE_DAYS = 30
+
+
+def month_start(now: datetime | None = None) -> datetime:
+    now = now or datetime.now(timezone.utc)
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    # SQLite returns naive datetimes — they are UTC.
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def is_letter(row: CoverLetter) -> bool:
+    """Whether the row holds letter text (not a claim, not erased)."""
+    return row.content not in (PENDING_CONTENT, ERASED_CONTENT)
+
+
+def is_fresh_letter(row: CoverLetter, now: datetime | None = None) -> bool:
+    created = _utc(row.created_at)
+    if not is_letter(row) or created is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    return (now - created).days < LETTER_MAX_AGE_DAYS
+
+
+def is_in_flight(row: CoverLetter, now: datetime | None = None) -> bool:
+    created = _utc(row.created_at)
+    now = now or datetime.now(timezone.utc)
+    return (
+        row.content == PENDING_CONTENT
+        and created is not None
+        and now - created < PENDING_TTL
+    )
+
+
+async def latest_letter_row(session, user_id: int, job_id: int) -> CoverLetter | None:
+    """The newest row for a user + job; older ones are history.
+
+    Not scalar_one_or_none(): a regenerated letter leaves its predecessor
+    behind (erased), and races before claims were locked left duplicate
+    rows, which turned every later request for that job into a 500.
+    """
+    result = await session.execute(
+        select(CoverLetter)
+        .where(CoverLetter.user_id == user_id, CoverLetter.job_id == job_id)
+        .order_by(CoverLetter.created_at.desc(), CoverLetter.id.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
 
 
 async def get_monthly_usage(user_id: int) -> int:
     """Return the number of cover letters generated this calendar month."""
-    now = datetime.now(timezone.utc)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
     async with get_session() as session:
         result = await session.execute(
             select(func.count(CoverLetter.id)).where(
                 CoverLetter.user_id == user_id,
-                CoverLetter.created_at >= month_start,
+                CoverLetter.created_at >= month_start(),
             )
         )
         return result.scalar() or 0
@@ -405,35 +491,28 @@ Write the cover letter now:"""
 
 
 async def generate_cover_letter(
-    user_id: int, job_id: int, *, force_regenerate: bool = False,
+    user_id: int, job_id: int, *, claim_id: int | None = None,
 ) -> tuple[str | None, bool]:
     """Generate a cover letter for a user + job pair.
 
     Returns (content, was_cached) — content is None on failure.
     Stores the result in the DB for later retrieval.
-    If force_regenerate is True, deletes any existing cached letter first.
+
+    `claim_id` is a PENDING_CONTENT row the caller already wrote under its
+    quota lock (gosha/services/cover_letters.py): the letter is written
+    into that row, so the slot stays claimed until the letter is in. Without
+    one (the bot), a fresh cached letter is returned, a letter another
+    request is still generating counts as a failure, and anything else is
+    generated into a new row.
     """
-    # Check for existing cover letter
-    async with get_session() as session:
-        existing = await session.execute(
-            select(CoverLetter).where(
-                CoverLetter.user_id == user_id,
-                CoverLetter.job_id == job_id,
-            )
-        )
-        found = existing.scalar_one_or_none()
-        if found:
-            # Auto-expire cached letters older than 30 days.
-            # SQLite returns naive datetimes — normalize to UTC before math.
-            created_at = found.created_at
-            if created_at is not None and created_at.tzinfo is None:
-                created_at = created_at.replace(tzinfo=timezone.utc)
-            age_days = (datetime.now(timezone.utc) - created_at).days if created_at else 999
-            if not force_regenerate and age_days < 30:
-                return found.content, True
-            # Stale or force-regenerate: delete and recreate
-            await session.delete(found)
-            await session.commit()
+    if claim_id is None:
+        async with get_session() as session:
+            found = await latest_letter_row(session, user_id, job_id)
+        if found is not None and is_fresh_letter(found):
+            return found.content, True
+        if found is not None and is_in_flight(found):
+            log.info("Cover letter for user %d, job %d is already being generated", user_id, job_id)
+            return None, False
 
     # Load CV
     cv_text = load_cv(user_id)
@@ -459,8 +538,33 @@ async def generate_cover_letter(
 
     # Store
     async with get_session() as session:
-        cl = CoverLetter(user_id=user_id, job_id=job_id, content=content)
-        session.add(cl)
+        if claim_id is not None:
+            # Only into a claim that is still pending: deleting the CV
+            # meanwhile erases claims too, and the letter must not outlive it.
+            filled = await session.execute(
+                update(CoverLetter)
+                .where(CoverLetter.id == claim_id, CoverLetter.content == PENDING_CONTENT)
+                .values(content=content)
+            )
+            row_id = claim_id if filled.rowcount == 1 else None
+        else:
+            row = CoverLetter(user_id=user_id, job_id=job_id, content=content)
+            session.add(row)
+            await session.flush()
+            row_id = row.id
+        if row_id is not None:
+            # The letter it replaces (expired) keeps its row — a quota
+            # record for its month — but not its text.
+            await session.execute(
+                update(CoverLetter)
+                .where(
+                    CoverLetter.user_id == user_id,
+                    CoverLetter.job_id == job_id,
+                    CoverLetter.id != row_id,
+                    CoverLetter.content != PENDING_CONTENT,
+                )
+                .values(content=ERASED_CONTENT)
+            )
         await session.commit()
 
     log.info("Generated cover letter for user %d, job %d (%d chars)", user_id, job_id, len(content))

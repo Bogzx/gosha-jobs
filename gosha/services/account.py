@@ -133,10 +133,13 @@ async def export_account(user_id: int) -> dict:
                 }
                 for a in applications
             ],
+            # Rows without a letter (text erased with the CV, or one still
+            # being generated) are kept as the monthly quota record; they
+            # are still data about the user, so they are listed, textless.
             "cover_letters": [
                 {
                     "job_id": c.job_id,
-                    "content": c.content,
+                    "content": c.content if cv_storage.is_letter(c) else None,
                     "created_at": _iso(c.created_at),
                 }
                 for c in letters

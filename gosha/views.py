@@ -10,14 +10,19 @@ log = logging.getLogger(__name__)
 
 
 class JobFeedbackView(discord.ui.View):
-    """View with Apply / Interested / Not Relevant buttons on job embeds.
+    """View with Apply / Cover Letter / Interested / Not Relevant buttons.
 
-    The custom_id encodes the UserJob ID so the handler can record feedback
-    even after a bot restart (handled by setup_interaction_handler).
+    The custom_ids encode the UserJob and Job ids, and every click is
+    handled by the global listener in setup_interaction_handler — which
+    also works after a restart. The buttons deliberately have no callbacks
+    of their own: discord.py dispatches a click both to a live view and to
+    on_interaction, so per-button callbacks handled each click twice (two
+    feedback writes, then InteractionResponded). Senders call stop() after
+    sending, which also frees the view instead of keeping every DM's view
+    in memory until restart.
     """
 
     def __init__(self, user_job_id: int, job_url: str | None = None, job_id: int | None = None) -> None:
-        # timeout=None makes the view persistent (survives bot restarts)
         super().__init__(timeout=None)
         self.user_job_id = user_job_id
 
@@ -31,45 +36,47 @@ class JobFeedbackView(discord.ui.View):
             ))
 
         # Cover Letter button — triggers AI generation
-        self._job_id: int | None = None
         if job_id is not None:
-            cover_btn = discord.ui.Button(
+            self.add_item(discord.ui.Button(
                 style=discord.ButtonStyle.primary,
                 label="Cover Letter",
                 custom_id=f"cover_letter:{job_id}:{user_job_id}",
                 emoji="\U0001f4dd",
-            )
-            cover_btn.callback = self._on_cover_letter
-            self.add_item(cover_btn)
-            self._job_id = job_id
+            ))
 
-        interested_btn = discord.ui.Button(
+        self.add_item(discord.ui.Button(
             style=discord.ButtonStyle.success,
             label="Interested",
             custom_id=f"job_feedback:interested:{user_job_id}",
             emoji="\U0001f44d",
-        )
-        interested_btn.callback = self._on_interested
-
-        not_relevant_btn = discord.ui.Button(
+        ))
+        self.add_item(discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             label="Not Relevant",
             custom_id=f"job_feedback:not_relevant:{user_job_id}",
             emoji="\U0001f44e",
-        )
-        not_relevant_btn.callback = self._on_not_relevant
+        ))
 
-        self.add_item(interested_btn)
-        self.add_item(not_relevant_btn)
 
-    async def _on_cover_letter(self, interaction: discord.Interaction) -> None:
-        await _handle_cover_letter_interaction(interaction, self._job_id)
+def _view_after_feedback(
+    message: discord.Message | None, feedback: str,
+) -> discord.ui.View:
+    """The message's own buttons with the feedback pair disabled.
 
-    async def _on_interested(self, interaction: discord.Interaction) -> None:
-        await _handle_feedback_interaction(interaction, "interested", self.user_job_id)
-
-    async def _on_not_relevant(self, interaction: discord.Interaction) -> None:
-        await _handle_feedback_interaction(interaction, "not_relevant", self.user_job_id)
+    Replacing the whole view with one disabled button took Apply and Cover
+    Letter away the moment the user said they were interested.
+    """
+    label = "Interested" if feedback == "interested" else "Not Relevant"
+    view = discord.ui.View.from_message(message, timeout=None) if message else discord.ui.View()
+    for item in view.children:
+        custom_id = getattr(item, "custom_id", None) or ""
+        if custom_id.startswith("job_feedback:"):
+            item.disabled = True  # type: ignore[attr-defined]
+            if custom_id.split(":")[1] == feedback:
+                item.label = f"Feedback: {label}"  # type: ignore[attr-defined]
+    if not view.children:
+        view.add_item(discord.ui.Button(label=f"Feedback: {label}", disabled=True))
+    return view
 
 
 async def _handle_feedback_interaction(
@@ -82,18 +89,13 @@ async def _handle_feedback_interaction(
 
     success = await record_feedback(user_job_id, feedback)
     if success:
-        label = "Interested" if feedback == "interested" else "Not Relevant"
-        # Disable both buttons on the message
-        view = discord.ui.View()
-        view.add_item(discord.ui.Button(
-            style=discord.ButtonStyle.success if feedback == "interested" else discord.ButtonStyle.secondary,
-            label=f"Feedback: {label}",
-            disabled=True,
-        ))
+        view = _view_after_feedback(interaction.message, feedback)
         try:
             await interaction.response.edit_message(view=view)
         except discord.HTTPException:
             pass
+        finally:
+            view.stop()  # clicks stay with on_interaction (see JobFeedbackView)
         log.info("Feedback %s recorded for UserJob %d", feedback, user_job_id)
     else:
         try:
@@ -104,6 +106,60 @@ async def _handle_feedback_interaction(
             pass
 
 
+async def cover_letter_embed(user, job_id: int) -> discord.Embed | str:
+    """A cover letter for `job_id` as an embed, or a message saying why not.
+
+    Goes through gosha.services.cover_letters.generate_for_job, the same
+    path as the website: it claims the quota slot before calling the LLM,
+    so a double click or a click racing the website cannot generate past
+    the monthly limit, and a second click while the first is generating
+    is told so instead of starting another.
+    """
+    from gosha.cover_letter import get_monthly_usage
+    from gosha.database import get_session
+    from gosha.domain.errors import (
+        DomainError,
+        GenerationInProgressError,
+        NoCvError,
+        QuotaExceededError,
+    )
+    from gosha.models import Job
+    from gosha.services.cover_letters import generate_for_job
+
+    try:
+        content, was_cached = await generate_for_job(user, job_id)
+    except NoCvError:
+        return "Upload your CV first with `/upload_cv`, then try again."
+    except QuotaExceededError as exc:
+        return f"{exc.message} Use `/upgrade` to see Pro benefits (unlimited cover letters)."
+    except GenerationInProgressError:
+        return "That letter is still being written — give it a few seconds."
+    except DomainError as exc:
+        return exc.message
+
+    async with get_session() as session:
+        job = await session.get(Job, job_id)
+    title = job.title if job else f"Job #{job_id}"
+    company = job.company if job else "Unknown"
+
+    embed = discord.Embed(
+        # Discord rejects titles over 256 characters, and the letter was
+        # already generated (and counted) by then.
+        title=f"Cover Letter — {title} at {company}"[:256],
+        description=content[:4096],
+        color=discord.Color.purple(),
+    )
+    footer_parts = [f"Job #{job_id}"]
+    if was_cached:
+        footer_parts.append("cached")
+    limit = int(user.limits.get("cover_letters_per_month", 3))
+    if limit < 100:
+        remaining = max(0, limit - await get_monthly_usage(user.id))
+        footer_parts.append(f"{remaining} left this month")
+    embed.set_footer(text=" | ".join(footer_parts))
+    return embed
+
+
 async def _handle_cover_letter_interaction(
     interaction: discord.Interaction,
     job_id: int,
@@ -111,9 +167,8 @@ async def _handle_cover_letter_interaction(
     """Handle the Cover Letter button click on job embeds."""
     from sqlalchemy import select
 
-    from gosha.cover_letter import generate_cover_letter, get_monthly_usage, load_cv
     from gosha.database import get_session
-    from gosha.models import Job, User
+    from gosha.models import User
 
     try:
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -129,52 +184,11 @@ async def _handle_cover_letter_interaction(
             )
             return
 
-        if not load_cv(user.id):
-            await interaction.followup.send(
-                "Upload your CV first with `/upload_cv`, then try again.", ephemeral=True,
-            )
-            return
-
-        # Check limit
-        usage = await get_monthly_usage(user.id)
-        limit = int(user.limits.get("cover_letters_per_month", 3))
-        if usage >= limit:
-            await interaction.followup.send(
-                f"You've used all **{limit}** cover letters this month. "
-                f"Use `/upgrade` to get unlimited.", ephemeral=True,
-            )
-            return
-
-        content, was_cached = await generate_cover_letter(user.id, job_id)
-        if not content:
-            await interaction.followup.send(
-                "Cover letter generation failed. Make sure you've uploaded your CV with `/upload_cv`.",
-                ephemeral=True,
-            )
-            return
-
-        async with get_session() as session:
-            job = (await session.execute(
-                select(Job).where(Job.id == job_id)
-            )).scalar_one_or_none()
-
-        title = job.title if job else f"Job #{job_id}"
-        company = job.company if job else "Unknown"
-        # Only subtract 1 from remaining if this was a fresh generation (not cached)
-        used = 0 if was_cached else 1
-        remaining = limit - usage - used if limit < 100 else None
-
-        embed = discord.Embed(
-            title=f"Cover Letter — {title} at {company}",
-            description=content,
-            color=discord.Color.purple(),
-        )
-        footer_parts = [f"Job #{job_id}"]
-        if remaining is not None:
-            footer_parts.append(f"{remaining} left this month")
-        embed.set_footer(text=" | ".join(footer_parts))
-
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        result = await cover_letter_embed(user, job_id)
+        if isinstance(result, str):
+            await interaction.followup.send(result, ephemeral=True)
+        else:
+            await interaction.followup.send(embed=result, ephemeral=True)
 
     except Exception as exc:
         log.error("Cover letter button failed: %s", exc)

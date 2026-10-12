@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from gosha.api.deps import current_user
+from gosha.api.schemas import RowId
 from gosha.models import User
 from gosha.services import cover_letters as service
 
@@ -30,6 +31,6 @@ async def list_cover_letters(user: User = Depends(current_user)) -> dict:
 
 
 @router.post("/jobs/{job_id}/cover-letter")
-async def generate_for_job(job_id: int, user: User = Depends(current_user)) -> dict:
+async def generate_for_job(job_id: RowId, user: User = Depends(current_user)) -> dict:
     content, cached = await service.generate_for_job(user, job_id)
     return {"content": content, "cached": cached}

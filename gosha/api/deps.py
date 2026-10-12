@@ -59,11 +59,23 @@ def serializer() -> URLSafeTimedSerializer:
     )
 
 
-def set_session_cookie(response: Response, user_id: int) -> None:
+# The cookie names the Discord account as well as the row id. On SQLite a
+# deleted user's id is handed to the next new account (rowids are reused
+# without AUTOINCREMENT), so {"uid"} alone let a deleted account's leftover
+# cookie open a stranger's account; "did" must match the row it lands on.
+# Cookies issued before "did" existed carry only "uid" and stay valid until
+# they expire (SESSION_MAX_AGE): Postgres never reuses ids, so forcing every
+# user to sign in again would buy production nothing.
+def set_session_cookie(
+    response: Response, user_id: int, discord_id: int | None = None,
+) -> None:
     settings = load_web_settings()
+    payload: dict[str, int] = {"uid": user_id}
+    if discord_id is not None:
+        payload["did"] = discord_id
     response.set_cookie(
         COOKIE_NAME,
-        serializer().dumps({"uid": user_id}),
+        serializer().dumps(payload),
         max_age=SESSION_MAX_AGE,
         httponly=True,
         samesite="lax",
@@ -76,7 +88,8 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(COOKIE_NAME, path="/")
 
 
-def _session_user_id(request: Request) -> int | None:
+def _session_claims(request: Request) -> tuple[int, int | None] | None:
+    """(user id, Discord id or None for a pre-"did" cookie), or None."""
     raw = request.cookies.get(COOKIE_NAME)
     if not raw:
         return None
@@ -84,17 +97,31 @@ def _session_user_id(request: Request) -> int | None:
         data = serializer().loads(raw, max_age=SESSION_MAX_AGE)
     except BadSignature:
         return None
-    uid = data.get("uid") if isinstance(data, dict) else None
-    return uid if isinstance(uid, int) else None
+    if not isinstance(data, dict):
+        return None
+    uid, did = data.get("uid"), data.get("did")
+    if not isinstance(uid, int) or (did is not None and not isinstance(did, int)):
+        return None
+    return uid, did
+
+
+async def _session_user(request: Request) -> User | None:
+    claims = _session_claims(request)
+    if claims is None:
+        return None
+    uid, did = claims
+    async with get_session() as session:
+        user = await session.get(User, uid)
+    if user is None or (did is not None and user.discord_user_id != did):
+        return None
+    return user
 
 
 async def current_user(request: Request) -> User:
     """Resolve the signed-in user or raise 401."""
-    uid = _session_user_id(request)
-    if uid is None:
+    if _session_claims(request) is None:
         raise ApiError(401, "unauthenticated", "Sign in with Discord to continue.")
-    async with get_session() as session:
-        user = await session.get(User, uid)
+    user = await _session_user(request)
     if user is None:
         raise ApiError(401, "unauthenticated", "Session is no longer valid.")
     return user
@@ -102,11 +129,7 @@ async def current_user(request: Request) -> User:
 
 async def optional_user(request: Request) -> User | None:
     """Resolve the signed-in user, or None for anonymous requests."""
-    uid = _session_user_id(request)
-    if uid is None:
-        return None
-    async with get_session() as session:
-        return await session.get(User, uid)
+    return await _session_user(request)
 
 
 def is_admin(user: User) -> bool:

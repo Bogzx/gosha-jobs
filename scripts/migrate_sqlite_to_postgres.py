@@ -8,7 +8,8 @@ Usage:
 The destination schema is created from the current models; the destination
 must be empty (no users) so a half-done copy can't silently merge. Primary
 keys are preserved so foreign keys stay valid; Postgres sequences are reset
-afterwards.
+afterwards. Rows are streamed in batches (the events table can be large),
+and SQLite's naive timestamps are marked as the UTC they were written in.
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import func, insert, select, text
+from sqlalchemy import DateTime, Table, func, insert, select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 # Runnable as `python scripts/<name>.py` from anywhere: that puts scripts/
@@ -82,25 +84,31 @@ async def copy_all(src_url: str, dst_url: str) -> dict[str, int]:
 
         # Old SQLite installs never enforced foreign keys — null out or drop
         # references to rows that no longer exist before Postgres rejects them.
+        # Ids are kept only for the tables something references.
         copied_ids: dict[str, set] = {}
 
         for table in TABLES:
-            async with src.connect() as src_conn:
-                rows = [dict(r) for r in (await src_conn.execute(select(table))).mappings().all()]
+            tz_columns = _tz_columns(table)
+            ids: set | None = set() if table.name in _REFERENCED_TABLES else None
+            count = dropped = 0
+            async with src.connect() as src_conn, dst.begin() as dst_conn:
+                result = await src_conn.stream(select(table))
+                async for partition in result.mappings().partitions(BATCH_SIZE):
+                    rows = [_as_utc(dict(r), tz_columns) for r in partition]
+                    rows, broken = _sanitize_foreign_keys(table.name, rows, copied_ids)
+                    dropped += broken
+                    if rows:
+                        await dst_conn.execute(insert(table), rows)
+                    if ids is not None:
+                        ids.update(r["id"] for r in rows)
+                    count += len(rows)
 
-            rows, dropped = _sanitize_foreign_keys(table.name, rows, copied_ids)
             if dropped:
                 log.warning("%s: dropped %d rows with broken references", table.name, dropped)
-
-            async with dst.begin() as dst_conn:
-                for start in range(0, len(rows), BATCH_SIZE):
-                    batch = rows[start : start + BATCH_SIZE]
-                    if batch:
-                        await dst_conn.execute(insert(table), batch)
-
-            copied_ids[table.name] = {r["id"] for r in rows if "id" in r}
-            copied[table.name] = len(rows)
-            log.info("Copied %5d rows -> %s", len(rows), table.name)
+            if ids is not None:
+                copied_ids[table.name] = ids
+            copied[table.name] = count
+            log.info("Copied %5d rows -> %s", count, table.name)
 
         # Postgres: bump sequences past the copied primary keys.
         if dst.dialect.name == "postgresql":
@@ -129,6 +137,28 @@ _FK_RULES: dict[str, list[tuple[str, str, bool]]] = {
     "cover_letters": [("user_id", "users", False), ("job_id", "jobs", False)],
     "outbox": [("user_id", "users", False)],
 }
+_REFERENCED_TABLES = {ref for rules in _FK_RULES.values() for _, ref, _ in rules}
+
+
+def _tz_columns(table: Table) -> list[str]:
+    return [
+        column.name for column in table.columns
+        if isinstance(column.type, DateTime) and column.type.timezone
+    ]
+
+
+def _as_utc(row: dict, tz_columns: list[str]) -> dict:
+    """Mark SQLite's naive timestamps as UTC.
+
+    SQLite stores no offset, and GOSHA always wrote UTC. asyncpg reads a
+    naive value bound to a timestamptz column as the copying host's local
+    time, so on a host off UTC every timestamp would shift by its offset.
+    """
+    for name in tz_columns:
+        value = row.get(name)
+        if isinstance(value, datetime) and value.tzinfo is None:
+            row[name] = value.replace(tzinfo=timezone.utc)
+    return row
 
 
 def _sanitize_foreign_keys(

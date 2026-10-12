@@ -38,9 +38,6 @@ class Limit:
 # Sign-in start and the OAuth callback: a person needs a few; a script
 # hammering Discord's token endpoint through us needs many.
 AUTH = Limit("auth", 20, 60)
-# The SPA polls the handoff every 2 s for up to 5 min (web/src/lib/signin.ts)
-# — 30 a minute per waiting tab, so this leaves room for two tabs.
-AUTH_HANDOFF = Limit("auth-handoff", 90, 60)
 # Each CV upload parses a file and runs the embedding model.
 CV_UPLOAD = Limit("cv-upload", 10, 3600)
 # Unauthenticated analytics writes (over-limit events are dropped silently).

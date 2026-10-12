@@ -149,3 +149,38 @@ async def test_api_exposes_the_comparable_figure(client, web_user, session):
     assert item["salary_currency"] == "USD"
     assert item["salary_period"] == "yearly"
     assert item["salary_monthly_min_ron"] == 46_000
+
+
+@pytest.mark.asyncio
+async def test_backfill_moves_past_rows_it_cannot_normalise(
+    patched_db, session, monkeypatch,
+):
+    """Unknown currencies stay NULL and keep matching the backfill's query.
+    Each run used to re-read the same first `limit` of them, so a fillable
+    row behind them was never reached."""
+    from gosha.services import jobs as jobs_service
+
+    monkeypatch.setattr(jobs_service, "_salary_backfill_cursor", 0)
+    for i in range(3):
+        _job(
+            session, url=f"https://old.com/xyz{i}", salary_min=100,
+            salary_currency="XYZ", salary_period="monthly",
+        )
+    _job(session, url="https://old.com/negative", salary_min=-5, salary_currency="RON")
+    _job(
+        session, url="https://old.com/fillable", salary_min=7000,
+        salary_currency="RON", salary_period="monthly",
+    )
+    await session.commit()
+
+    assert await jobs_service.backfill_salary_normalisation(limit=2) == 0
+    assert await jobs_service.backfill_salary_normalisation(limit=2) == 1
+
+    session.expire_all()
+    filled = (
+        await session.execute(select(Job).where(Job.url == "https://old.com/fillable"))
+    ).scalar_one()
+    assert filled.salary_monthly_min_ron == 7000
+    # A short run means the end was reached: the next one starts over.
+    assert await jobs_service.backfill_salary_normalisation(limit=2) == 0
+    assert jobs_service._salary_backfill_cursor == 0

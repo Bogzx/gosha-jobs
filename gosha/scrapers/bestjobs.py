@@ -7,6 +7,18 @@ EUR. The list payload carries no description, so the detail page is
 fetched for each result (gosha/scrapers/details.py: capped, cached): it is
 a Next.js page whose __NEXT_DATA__ JSON holds props.pageProps.job with the
 HTML description and the employer name (probed 2026-09-30).
+
+Probed again 2026-10-12:
+- `location` is honoured as a ranking hint (75% of a Cluj search is in
+  Cluj), but "romania" and "europe" are not places to it: both come back
+  ~100% remote. Without a location the API geolocates the caller's IP. So
+  a nationwide search asks for the largest cities one by one, and a
+  remote one passes "europe", which is what yields remote postings.
+- `limit` and paging are ignored; every call returns up to 100 items.
+- The detail page's job carries `careerLevels` (Entry / Fără experiență /
+  Middle / Senior / Executive) and `expired`. Details are fetched for the
+  titles that would be relevant at entry level, and the board's own level
+  then decides (RawJob.experience_level).
 """
 
 from __future__ import annotations
@@ -18,7 +30,7 @@ from typing import Any
 
 import httpx
 
-from gosha.filters import normalize_location
+from gosha.filters import fold, normalize_location
 from gosha.scrapers.base import DEFAULT_HEADERS, HTTP_TIMEOUT, RawJob, SearchQuery
 from gosha.scrapers.details import fetch_details, html_to_text
 from gosha.scrapers.salary import parse_salary_range
@@ -32,13 +44,38 @@ MAX_RESULTS = 100
 # cycle after a restart fills the cache; later cycles fetch only new jobs.
 MAX_DETAIL_FETCHES = 20
 
+REMOTE_LOCATIONS = {"remote", "anywhere", "worldwide"}
+NATIONWIDE_LOCATIONS = {"romania", "europe", "eu"}
+NATIONWIDE_CITIES = ("bucuresti", "cluj-napoca", "timisoara", "iasi")
+
+# careerLevels slugs on the detail page, most junior first: an employer
+# who ticks several says who may apply.
+_CAREER_LEVELS = (
+    ("fara-experienta", "entry"),
+    ("entry", "entry"),
+    ("middle", "mid"),
+    ("senior", "senior"),
+    ("executive", "senior"),
+)
+
 _NEXT_DATA_RE = re.compile(
     r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL,
 )
 
 
+def experience_level(career_levels: list[Any] | None) -> str | None:
+    slugs = [
+        str(level.get("slug") or "") for level in career_levels or []
+        if isinstance(level, dict)
+    ]
+    for prefix, label in _CAREER_LEVELS:
+        if any(slug.startswith(prefix) for slug in slugs):
+            return label
+    return None
+
+
 def _extract_detail(page: str) -> dict[str, Any]:
-    """{description, company} from a job page's __NEXT_DATA__."""
+    """{description, company, experience_level, expired} from a job page."""
     match = _NEXT_DATA_RE.search(page)
     if not match:
         return {}
@@ -53,18 +90,33 @@ def _extract_detail(page: str) -> dict[str, Any]:
     employer = (job.get("employer") or {}).get("employerName")
     if employer:
         detail["company"] = str(employer).strip()
+    level = experience_level(job.get("careerLevels"))
+    if level:
+        detail["experience_level"] = level
+    if job.get("expired"):
+        detail["expired"] = True
     return detail
 
 
-def _apply_details(jobs: list[RawJob], details: dict[str, dict[str, Any]]) -> None:
+def _apply_details(
+    jobs: list[RawJob], details: dict[str, dict[str, Any]],
+) -> list[RawJob]:
+    """Fold detail pages into the jobs; drops postings the page calls expired."""
+    kept: list[RawJob] = []
     for job in jobs:
         detail = details.get(job.url) or {}
+        if detail.get("expired"):
+            continue
         if detail.get("description"):
             job.description = detail["description"]
         # Recruiter-posted jobs have an empty companyName in the list
         # payload; the page sometimes names the employer.
         if job.company == "Unknown" and detail.get("company"):
             job.company = detail["company"]
+        if detail.get("experience_level"):
+            job.experience_level = detail["experience_level"]
+        kept.append(job)
+    return kept
 
 
 def location_to_slug(location: str) -> str:
@@ -113,27 +165,54 @@ def _parse(payload: dict, query: SearchQuery) -> list[RawJob]:
     return jobs[:MAX_RESULTS]
 
 
+def search_locations(location: str) -> list[str | None]:
+    """BestJobs `location` values to query for one search location."""
+    key = fold(location.strip())
+    if key in REMOTE_LOCATIONS:
+        return ["europe"]
+    if key in NATIONWIDE_LOCATIONS:
+        return list(NATIONWIDE_CITIES)
+    return [location_to_slug(location) or None]
+
+
 class BestJobsScraper:
     name = "bestjobs"
 
+    def applies_to(self, query: SearchQuery) -> bool:
+        # BestJobs lists Romanian jobs plus remote ones; a foreign city's
+        # search would return Romanian postings ranked by distance.
+        key = fold(query.location.strip())
+        if key in REMOTE_LOCATIONS or key in NATIONWIDE_LOCATIONS:
+            return True
+        search_loc, _subs = normalize_location(query.location)
+        return "romania" in fold(search_loc) or key == fold(search_loc)
+
     async def search(self, query: SearchQuery) -> list[RawJob]:
+        if not self.applies_to(query):
+            return []
         try:
-            params = {"keyword": query.keyword, "limit": MAX_RESULTS}
-            slug = location_to_slug(query.location)
-            # Remote/Europe-wide queries skip the location filter
-            if slug and query.location.strip().lower() not in ("remote", "europe", "eu"):
-                params["location"] = slug
             async with httpx.AsyncClient(
                 headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True,
             ) as client:
-                resp = await client.get(API_URL, params=params)
-                resp.raise_for_status()
-                jobs = _parse(resp.json(), query)
+                jobs: list[RawJob] = []
+                seen: set[str] = set()
+                for location in search_locations(query.location):
+                    params: dict[str, Any] = {"keyword": query.keyword}
+                    if location:
+                        params["location"] = location
+                    resp = await client.get(API_URL, params=params)
+                    resp.raise_for_status()
+                    for job in _parse(resp.json(), query):
+                        if job.url not in seen:
+                            seen.add(job.url)
+                            jobs.append(job)
+                # A title that would be relevant at entry level is worth a
+                # page fetch: the page says whether it IS entry level.
+                wanted = [j.url for j in jobs if query.is_relevant(j.title, "entry")]
                 details = await fetch_details(
-                    client, [j.url for j in jobs], _extract_detail, MAX_DETAIL_FETCHES,
+                    client, wanted, _extract_detail, MAX_DETAIL_FETCHES,
                 )
-                _apply_details(jobs, details)
-                return jobs
+                return _apply_details(jobs, details)
         except Exception as exc:
             log.warning("BestJobs scrape failed for %r: %s", query.keyword, exc)
             return []

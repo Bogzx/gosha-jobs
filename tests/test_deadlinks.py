@@ -15,7 +15,8 @@ def make_job(url: str, days_old: int = 10, **kwargs) -> Job:
         url=url,
         title=kwargs.pop("title", "Dev"),
         company="Acme",
-        source=kwargs.pop("source", "indeed"),
+        # A board whose links can be checked (see UNCHECKABLE_SOURCES).
+        source=kwargs.pop("source", "ejobs"),
         **kwargs,
     )
     job.first_seen_at = datetime.now(timezone.utc) - timedelta(days=days_old)
@@ -102,3 +103,52 @@ async def test_oldest_checked_first_and_sample_capped(patched_db, session, monke
     await deadlinks.check_dead_links(sample_size=1)
 
     assert checked == ["https://x.com/never"]  # never-checked goes first
+
+
+@pytest.mark.asyncio
+async def test_bot_walled_sources_do_not_use_the_check_budget(patched_db, session, monkeypatch):
+    """LinkedIn/Indeed/Glassdoor answer 999/403/429 to live and dead postings
+    alike; sampled first (never checked), they crowded out boards whose
+    checks work."""
+    walled = [
+        make_job(f"https://www.{source}.com/{i}", source=source)
+        for i, source in enumerate(sorted(deadlinks.UNCHECKABLE_SOURCES))
+    ]
+    checkable = make_job("https://www.ejobs.ro/job/1")
+    checkable.last_checked_at = datetime.now(timezone.utc) - timedelta(days=1)
+    session.add_all([*walled, checkable])
+    await session.commit()
+
+    checked: list[str] = []
+
+    async def fake_status(client, url: str) -> int | None:
+        checked.append(url)
+        return 999
+
+    monkeypatch.setattr(deadlinks, "_check_url_status", fake_status)
+    await deadlinks.check_dead_links(sample_size=1)
+
+    assert checked == ["https://www.ejobs.ro/job/1"]
+
+
+@pytest.mark.asyncio
+async def test_jobs_no_scrape_returns_any_more_expire(patched_db, session, monkeypatch):
+    now = datetime.now(timezone.utc)
+    gone = make_job("https://www.linkedin.com/gone", source="linkedin", days_old=60)
+    gone.last_seen_at = now - timedelta(days=deadlinks.UNSEEN_EXPIRY_DAYS + 1)
+    still_listed = make_job("https://www.linkedin.com/listed", source="linkedin", days_old=60)
+    still_listed.last_seen_at = now - timedelta(days=2)
+    session.add_all([gone, still_listed])
+    await session.commit()
+
+    async def fake_status(client, url: str) -> int | None:
+        raise AssertionError("bot-walled boards are not link-checked")
+
+    monkeypatch.setattr(deadlinks, "_check_url_status", fake_status)
+    assert await deadlinks.check_dead_links() == 1
+
+    await session.refresh(gone)
+    await session.refresh(still_listed)
+    assert gone.is_active is False
+    assert still_listed.is_active is True
+

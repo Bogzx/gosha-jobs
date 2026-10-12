@@ -118,6 +118,9 @@ async def test_hipo_search_adds_descriptions_and_dates():
     respx.get(url__regex=r"https://www\.hipo\.ro/locuri-de-munca/locuri_de_munca/.*").mock(
         return_value=httpx.Response(200, text=fixture("hipo_detail.html")),
     )
+    respx.get(hipo.LISTING_URL.format(city="Cluj-Napoca") + "/2").mock(
+        return_value=httpx.Response(200, text=listing),  # no new cards: stop
+    )
     jobs = await hipo.HipoScraper().search(SearchQuery("anything", "cluj"))
     enriched = [j for j in jobs if j.description]
     assert enriched and len(enriched) == min(len(jobs), hipo.MAX_DETAIL_FETCHES)
@@ -163,3 +166,17 @@ def test_mojibake_repair_leaves_good_text_alone(text):
     from gosha.scrapers.details import repair_mojibake
 
     assert repair_mojibake(text) == text
+
+
+@respx.mock
+async def test_detail_fetches_share_an_hourly_budget_per_host(monkeypatch):
+    """Many terms x per-search limit must not mean hundreds of pages at once."""
+    monkeypatch.setattr(details, "HOST_BUDGET_PER_HOUR", 4)
+    page = respx.get(url__regex=r"https://board\.test/.*").mock(
+        return_value=httpx.Response(200, text="<p>x</p>"),
+    )
+    async with httpx.AsyncClient() as client:
+        for term in range(3):  # three searches, limit 3 each
+            urls = [f"https://board.test/{term}/{i}" for i in range(3)]
+            await details.fetch_details(client, urls, lambda t: {"d": t}, limit=3)
+    assert page.call_count == 4

@@ -9,6 +9,11 @@ Hipo's IT-Software domain already narrows the field.
 Detail pages carry a schema.org JobPosting JSON-LD block (probed
 2026-09-30) with the description, qualifications and datePosted; they are
 fetched per result through gosha/scrapers/details.py (capped, cached).
+
+Probed 2026-10-12: the listing is paginated by a path suffix
+(.../IT-Software/Bucuresti/2, 40 cards a page; a `?page=` query is
+ignored), and career fairs and workshops are listed as cards too. Their
+JSON-LD says employmentType "eveniment", which is how they are dropped.
 """
 
 from __future__ import annotations
@@ -32,9 +37,13 @@ BASE_URL = "https://www.hipo.ro"
 LISTING_URL = BASE_URL + "/locuri-de-munca/cautajob/IT-Software/{city}"
 
 # Hipo ignores keywords (city catalog pages), so keyword-expanded searches
-# would refetch the same page — cache per city for a few minutes.
+# would refetch the same pages — cache per city for a few minutes.
 CACHE_TTL_SECONDS = 600
-_cache: dict[str, tuple[float, str]] = {}
+_cache: dict[str, tuple[float, list[str]]] = {}
+# Bucharest's IT-Software catalog runs to a few pages; smaller cities to one.
+MAX_PAGES = 4
+# schema.org employmentType values that are not jobs.
+NON_JOB_TYPES = {"eveniment", "event"}
 
 # City segment names hipo uses in its catalog URLs
 CITY_SEGMENTS = {
@@ -85,6 +94,11 @@ def _extract_detail(page: str) -> dict[str, Any]:
         if text and text not in parts:
             parts.append(text)
     detail: dict[str, Any] = {}
+    if posting:
+        types = posting.get("employmentType") or []
+        types = [types] if isinstance(types, str) else types
+        if any(str(t).strip().lower() in NON_JOB_TYPES for t in types):
+            detail["not_a_job"] = True
     if parts:
         detail["description"] = "\n\n".join(parts)[:20000]
     raw_date = posting.get("datePosted")
@@ -137,40 +151,76 @@ def _parse(html: str, city_label: str) -> list[RawJob]:
     return jobs
 
 
+async def _listing_pages(segment: str) -> list[str]:
+    """Every catalog page for a city (cached), stopping at the first page
+    that adds no new card."""
+    now = time.monotonic()
+    cached = _cache.get(segment)
+    if cached is not None and now - cached[0] < CACHE_TTL_SECONDS:
+        return cached[1]
+
+    pages: list[str] = []
+    seen: set[str] = set()
+    async with httpx.AsyncClient(
+        headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True,
+    ) as client:
+        for number in range(1, MAX_PAGES + 1):
+            url = LISTING_URL.format(city=segment)
+            if number > 1:
+                url += f"/{number}"
+            try:
+                resp = await client.get(url)
+                resp.raise_for_status()
+            except httpx.HTTPError:
+                if number == 1:
+                    raise
+                break  # a later page failing still leaves the earlier ones
+            hrefs = {m.group("href") for m in _CARD_RE.finditer(resp.text)}
+            if not hrefs - seen:
+                break
+            seen |= hrefs
+            pages.append(resp.text)
+    _cache[segment] = (now, pages)
+    return pages
+
+
 class HipoScraper:
     name = "hipo"
+
+    def applies_to(self, query: SearchQuery) -> bool:
+        return city_segment(query.location) is not None  # hipo is Romania-only
 
     async def search(self, query: SearchQuery) -> list[RawJob]:
         segment = city_segment(query.location)
         if segment is None:
-            return []  # hipo is Romania-only
+            return []
         try:
-            now = time.monotonic()
-            cached = _cache.get(segment)
-            if cached is not None and now - cached[0] < CACHE_TTL_SECONDS:
-                html = cached[1]
-            else:
-                async with httpx.AsyncClient(
-                    headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True,
-                ) as client:
-                    resp = await client.get(LISTING_URL.format(city=segment))
-                    resp.raise_for_status()
-                    html = resp.text
-                _cache[segment] = (now, html)
-            jobs = _parse(html, segment.replace("-", " "))
+            jobs: list[RawJob] = []
+            seen: set[str] = set()
+            for html in await _listing_pages(segment):
+                for job in _parse(html, segment.replace("-", " ")):
+                    if job.url not in seen:
+                        seen.add(job.url)
+                        jobs.append(job)
             async with httpx.AsyncClient(
                 headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True,
             ) as client:
                 details = await fetch_details(
-                    client, [j.url for j in jobs], _extract_detail, MAX_DETAIL_FETCHES,
+                    client,
+                    [j.url for j in jobs if query.is_relevant(j.title, "entry")],
+                    _extract_detail, MAX_DETAIL_FETCHES,
                 )
+            kept: list[RawJob] = []
             for job in jobs:
                 detail = details.get(job.url) or {}
+                if detail.get("not_a_job"):
+                    continue
                 if detail.get("description"):
                     job.description = detail["description"]
                 if detail.get("posted_at"):
                     job.posted_at = detail["posted_at"]
-            return jobs
+                kept.append(job)
+            return kept
         except Exception as exc:
             log.warning("Hipo scrape failed for %r: %s", query.location, exc)
             return []

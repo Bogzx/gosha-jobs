@@ -52,7 +52,7 @@ async def run_migrations(conn: AsyncConnection) -> None:
         })
 
     if "jobs" in existing_tables:
-        await _add_missing_columns(conn, "jobs", {
+        added_job_columns = await _add_missing_columns(conn, "jobs", {
             "posted_at": dt_type,
             "embedding": blob_type,
             "embedding_model": "VARCHAR(128)",
@@ -64,7 +64,41 @@ async def run_migrations(conn: AsyncConnection) -> None:
             "salary_period": "VARCHAR(16)",
             "salary_monthly_min_ron": "FLOAT",
             "salary_monthly_max_ron": "FLOAT",
+            "experience_level": "VARCHAR(16)",
         })
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_jobs_active_first_seen "
+            "ON jobs (is_active, first_seen_at)"
+        ))
+        if "experience_level" in added_job_columns:
+            # Once, with the release that fixed range normalisation: ranges
+            # stored without a period had each bound guessed separately
+            # (gosha/salary.py), e.g. USD 15k-25k became 9,583-69,000
+            # RON/month. Clearing them lets the hourly salary backfill
+            # recompute them with the fixed code.
+            await conn.execute(text(
+                "UPDATE jobs SET salary_monthly_min_ron = NULL, "
+                "salary_monthly_max_ron = NULL "
+                "WHERE salary_period IS NULL AND salary_min IS NOT NULL "
+                "AND salary_max IS NOT NULL"
+            ))
+
+    if "user_jobs" in existing_tables:
+        # NULL dm_status = never a DM candidate (see UserJob.dm_status), so
+        # rows from before DM tracking — and rows the previous release
+        # writes while a failed deploy is rolled back — are not re-sent.
+        await _add_missing_columns(conn, "user_jobs", {
+            "dm_status": "VARCHAR(16)",
+            "dm_sent_at": dt_type,
+        })
+        if is_pg:
+            await _subscription_fk_set_null(conn)
+
+    if "cover_letters" in existing_tables:
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_cover_letters_user_job_created "
+            "ON cover_letters (user_id, job_id, created_at)"
+        ))
 
     if "applications" in existing_tables:
         await _add_missing_columns(conn, "applications", {
@@ -91,11 +125,12 @@ async def run_migrations(conn: AsyncConnection) -> None:
 
 async def _add_missing_columns(
     conn: AsyncConnection, table: str, columns: dict[str, str],
-) -> None:
-    """Add columns to a table if they don't already exist."""
+) -> list[str]:
+    """Add columns to a table if they don't already exist; return those added."""
     existing = await conn.run_sync(
         lambda sync_conn: [c["name"] for c in inspect(sync_conn).get_columns(table)]
     )
+    added: list[str] = []
     for col_name, col_type in columns.items():
         if col_name not in existing:
             try:
@@ -103,8 +138,40 @@ async def _add_missing_columns(
                     f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"
                 ))
                 log.info("Added column %s.%s", table, col_name)
+                added.append(col_name)
             except Exception as e:
                 log.debug("Column %s.%s may already exist: %s", table, col_name, e)
+    return added
+
+
+async def _subscription_fk_set_null(conn: AsyncConnection) -> None:
+    """user_jobs.subscription_id -> subscriptions: ON DELETE SET NULL.
+
+    Created without an ON DELETE rule, so on Postgres deleting any saved
+    search that had ever delivered a job failed on this key (500 on the
+    web, "Something went wrong" from /unsubscribe). SQLite does not
+    enforce foreign keys by default, which is why the tests never saw it.
+    """
+    # Only keys without the rule: compared in SQL because asyncpg hands
+    # the "char" column back as bytes (b"n"), so a Python `== "n"` never
+    # matched and the key was dropped and re-validated on every boot.
+    rows = (await conn.execute(text("""
+        SELECT c.conname
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY (c.conkey)
+        WHERE t.relname = 'user_jobs' AND c.contype = 'f'
+          AND a.attname = 'subscription_id'
+          AND c.confdeltype <> 'n'
+    """))).all()
+    for (name,) in rows:
+        await conn.execute(text(f'ALTER TABLE user_jobs DROP CONSTRAINT "{name}"'))
+        await conn.execute(text(
+            f'ALTER TABLE user_jobs ADD CONSTRAINT "{name}" '
+            "FOREIGN KEY (subscription_id) REFERENCES subscriptions (id) "
+            "ON DELETE SET NULL"
+        ))
+        log.info("user_jobs.%s now ON DELETE SET NULL", name)
 
 
 async def _migrate_subscriptions(conn: AsyncConnection, inspector) -> None:

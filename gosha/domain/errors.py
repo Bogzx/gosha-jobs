@@ -51,3 +51,7 @@ class FileTooLargeError(DomainError):
 
 class GenerationFailedError(DomainError):
     code = "generation_failed"
+
+
+class GenerationInProgressError(DomainError):
+    code = "generation_in_progress"

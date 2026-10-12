@@ -253,3 +253,166 @@ async def test_apply_click_creates_application_idempotently(
     resp = await client.get("/api/v1/jobs", cookies=cookies)
     item = next(i for i in resp.json()["items"] if i["id"] == job_id)
     assert item["applied"] is True
+
+
+@pytest.mark.asyncio
+async def test_location_filter_reaches_past_the_newest_2000(client, web_user, session):
+    """Location is matched in Python. It used to run over only the newest
+    2,000 candidates, so 100 Iasi postings behind 2,000 newer Cluj ones
+    came back as total 0."""
+    _user, cookies = web_user
+    now = datetime.now(timezone.utc)
+    jobs = [
+        Job(
+            url=f"https://j.com/cluj-{i}", title="Developer", company="C",
+            location="Cluj-Napoca, Romania", source="ejobs",
+            first_seen_at=now - timedelta(minutes=i),
+        )
+        for i in range(2000)
+    ] + [
+        Job(
+            url=f"https://j.com/iasi-{i}", title="Developer", company="I",
+            location="Iași, România", source="ejobs",
+            first_seen_at=now - timedelta(days=3, minutes=i),
+        )
+        for i in range(100)
+    ]
+    session.add_all(jobs)
+    await session.commit()
+
+    resp = await client.get(
+        "/api/v1/jobs", params={"locations": "Iasi", "per_page": 100, "page": 1},
+        cookies=cookies,
+    )
+
+    body = resp.json()
+    assert body["total"] == 100
+    assert len(body["items"]) == 100
+    assert {item["location"] for item in body["items"]} == {"Iași, România"}
+
+
+@pytest.mark.asyncio
+async def test_python_filters_page_and_count_consistently(client, web_user, jobs_fixture):
+    """Pages come from the filtered list in newest-first order, and total is
+    the size of that list, not of the page."""
+    _user, cookies = web_user
+    first = await client.get(
+        "/api/v1/jobs", params={"locations": "romania", "per_page": 1, "page": 1},
+        cookies=cookies,
+    )
+    second = await client.get(
+        "/api/v1/jobs", params={"locations": "romania", "per_page": 1, "page": 2},
+        cookies=cookies,
+    )
+    past_end = await client.get(
+        "/api/v1/jobs", params={"locations": "romania", "per_page": 1, "page": 3},
+        cookies=cookies,
+    )
+    assert first.json()["total"] == second.json()["total"] == past_end.json()["total"] == 2
+    assert first.json()["items"][0]["title"] == "Python Developer Intern"
+    assert second.json()["items"][0]["title"] == "Senior Java Engineer"
+    assert past_end.json()["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_sort_match_is_refused_not_ignored(client, web_user, jobs_fixture):
+    _user, cookies = web_user
+    assert (await client.get(
+        "/api/v1/jobs", params={"sort": "date"}, cookies=cookies,
+    )).status_code == 200
+    resp = await client.get("/api/v1/jobs", params={"sort": "match"}, cookies=cookies)
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_out_of_range_numbers_are_422_not_500(client, web_user, jobs_fixture):
+    _user, cookies = web_user
+    huge = 2**31
+    # Beyond SQLite's int64 this was a 500 even in tests.
+    assert (await client.get(
+        "/api/v1/jobs", params={"salary_min": "99999999999999999999999"},
+        cookies=cookies,
+    )).status_code == 422
+    for method, path in (
+        ("get", f"/api/v1/jobs/{huge}"),
+        ("post", f"/api/v1/jobs/{huge}/apply-click"),
+        ("post", f"/api/v1/jobs/{huge}/cover-letter"),
+    ):
+        resp = await getattr(client, method)(path, cookies=cookies)
+        assert resp.status_code == 422, path
+    resp = await client.post(
+        f"/api/v1/jobs/{huge}/feedback", json={"feedback": "interested"}, cookies=cookies,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_feedback_racing_a_delivery_updates_that_row(
+    client, web_user, jobs_fixture, session, monkeypatch,
+):
+    """The row appears between our lookup and our insert (a double-click, or
+    the bot delivering the job): uq_user_job_delivery used to make it a 500."""
+    from gosha.services import jobs as service
+
+    user, cookies = web_user
+    job_id = jobs_fixture[0].id
+    session.add(UserJob(user_id=user.id, job_id=job_id))
+    await session.commit()
+    real_find = service._find_user_job
+    calls = {"n": 0}
+
+    async def find_misses_once(*args):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else await real_find(*args)
+
+    monkeypatch.setattr(service, "_find_user_job", find_misses_once)
+    resp = await client.post(
+        f"/api/v1/jobs/{job_id}/feedback", json={"feedback": "interested"},
+        cookies=cookies,
+    )
+
+    assert resp.status_code == 200
+    session.expire_all()
+    rows = (await session.execute(select(UserJob))).scalars().all()
+    assert [(r.job_id, r.feedback) for r in rows] == [(job_id, "interested")]
+
+
+@pytest.mark.asyncio
+async def test_apply_click_racing_another_click_returns_the_first(
+    client, web_user, jobs_fixture, session, monkeypatch,
+):
+    from gosha.services import applications
+
+    user, cookies = web_user
+    job = jobs_fixture[0]
+    existing = Application(user_id=user.id, job_id=job.id, source="web")
+    session.add(existing)
+    await session.commit()
+    real_find = applications._find_application
+    calls = {"n": 0}
+
+    async def find_misses_once(*args):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else await real_find(*args)
+
+    monkeypatch.setattr(applications, "_find_application", find_misses_once)
+    resp = await client.post(f"/api/v1/jobs/{job.id}/apply-click", cookies=cookies)
+
+    assert resp.status_code == 200
+    assert resp.json()["id"] == existing.id
+    assert len((await session.execute(select(Application))).scalars().all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_experience_filter_honours_the_boards_label(client, web_user, session):
+    """A board's own seniority label counts, even when the title has none."""
+    _user, cookies = web_user
+    session.add(Job(
+        url="https://j.com/labelled", title="Software Developer", company="L",
+        location="Cluj", source="ejobs", experience_level="intern",
+    ))
+    await session.commit()
+    resp = await client.get(
+        "/api/v1/jobs", params={"experience": "intern"}, cookies=cookies,
+    )
+    assert [item["title"] for item in resp.json()["items"]] == ["Software Developer"]

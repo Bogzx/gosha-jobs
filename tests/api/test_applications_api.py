@@ -116,3 +116,60 @@ async def test_cross_user_access_404(client, tracked, session):
     assert resp.status_code == 404
     resp = await client.delete(f"/api/v1/applications/{app.id}", cookies=other_cookies)
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_patch_notes_null_clears_and_absent_keeps(client, tracked):
+    _user, cookies, app, _job = tracked
+    url = f"/api/v1/applications/{app.id}"
+    await client.patch(url, json={"notes": "Call back Friday"}, cookies=cookies)
+
+    kept = await client.patch(url, json={"status": "interview"}, cookies=cookies)
+    assert kept.json()["notes"] == "Call back Friday"
+
+    cleared = await client.patch(url, json={"notes": None}, cookies=cookies)
+    assert cleared.status_code == 200
+    assert cleared.json()["notes"] is None
+    assert cleared.json()["status"] == "interview"
+
+
+@pytest.mark.asyncio
+async def test_create_racing_a_concurrent_create_returns_its_row(
+    client, tracked, session, monkeypatch,
+):
+    """Double-click: both requests find nothing, the second insert hits
+    uq_user_application. It used to be a 500; now it returns the first's row."""
+    from gosha.services import applications as service
+
+    _user, cookies, app, job = tracked
+    real_find = service._find_application
+    calls = {"n": 0}
+
+    async def find_misses_once(*args):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else await real_find(*args)
+
+    monkeypatch.setattr(service, "_find_application", find_misses_once)
+    resp = await client.post(
+        "/api/v1/applications", json={"job_id": job.id}, cookies=cookies,
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["id"] == app.id
+    rows = (await session.execute(select(Application))).scalars().all()
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_ids_beyond_int32_are_422_not_500(client, tracked):
+    _user, cookies, _app, _job = tracked
+    big = 2**31
+    assert (await client.patch(
+        f"/api/v1/applications/{big}", json={"notes": "x"}, cookies=cookies,
+    )).status_code == 422
+    assert (await client.delete(
+        f"/api/v1/applications/{big}", cookies=cookies,
+    )).status_code == 422
+    assert (await client.post(
+        "/api/v1/applications", json={"job_id": big}, cookies=cookies,
+    )).status_code == 422

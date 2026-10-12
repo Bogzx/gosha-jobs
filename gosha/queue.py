@@ -77,6 +77,7 @@ async def enqueue_delivery(
             job_id=job_id,
             subscription_id=subscription_id,
             relevance_score=relevance_score,
+            dm_status=UserJob.DM_PENDING,
         )
         session.add(uj)
         await session.commit()
@@ -119,6 +120,8 @@ async def enqueue_deliveries_batch(
                 job_id=item["job_id"],
                 subscription_id=item.get("subscription_id"),
                 relevance_score=item.get("score"),
+                # The deliver stage DMs pending rows only (UserJob.dm_status).
+                dm_status=UserJob.DM_PENDING,
             )
             session.add(uj)
             existing_pairs.add(pair)  # Prevent in-batch duplicates

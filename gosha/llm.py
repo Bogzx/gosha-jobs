@@ -23,6 +23,10 @@ DEFAULT_DEEPSEEK_MODEL = "deepseek-flash"
 
 PROVIDERS = ("deepseek", "openrouter", "gemini")
 
+# What parsing an unexpected 200 body raises: JSONDecodeError (a
+# ValueError) for non-JSON, the rest for JSON of the wrong shape.
+_MALFORMED = (ValueError, TypeError, AttributeError, KeyError, IndexError)
+
 GEMINI_MODELS = [
     "gemini-3-flash-preview",
     "gemini-3.1-flash-lite-preview",
@@ -111,9 +115,14 @@ async def _chat_completion(
             return None
         choices = resp.json().get("choices") or []
         content = (choices[0].get("message") or {}).get("content") if choices else None
-        return content.strip() if content else None
+        return (content.strip() or None) if isinstance(content, str) else None
     except httpx.HTTPError as exc:
         log.error("%s request failed: %s", name, exc)
+        return None
+    except _MALFORMED as exc:
+        # A 200 that is not the expected JSON (a proxy's HTML page, a
+        # list-shaped content): "no letter", not a 500.
+        log.error("%s returned a malformed response: %r", name, exc)
         return None
 
 
@@ -160,4 +169,9 @@ async def generate_gemini(prompt: str) -> str | None:
                     return text
             except httpx.HTTPError as exc:
                 log.warning("Gemini model %s failed: %s — trying next", model, exc)
+            except _MALFORMED as exc:
+                log.warning(
+                    "Gemini model %s returned a malformed response: %r — trying next",
+                    model, exc,
+                )
     return None

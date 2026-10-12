@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query
 
 from gosha.api.deps import current_user
 from gosha.api.schemas import (
+    DB_INT_MAX,
     ApplicationOut,
     FeedbackIn,
     JobListOut,
@@ -13,6 +14,7 @@ from gosha.api.schemas import (
     JobSummaryOut,
     MatchSignalOut,
     OkOut,
+    RowId,
 )
 from gosha.models import Application, Job, User
 from gosha.services import jobs as jobs_service
@@ -96,10 +98,12 @@ async def list_jobs(
     locations: str = "",
     experience: str = "",
     sources: str = "",
-    salary_min: int | None = None,
+    salary_min: int | None = Query(default=None, ge=0, le=DB_INT_MAX),
     posted_within_days: int | None = Query(default=None, ge=1, le=90),
     remote: bool = False,
-    sort: str = Query(default="date", pattern="^(date|match)$"),
+    # Browsing is newest-first only; ranking by match is what /feed does.
+    # "match" used to be accepted here and silently ignored.
+    sort: str = Query(default="date", pattern="^date$"),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=1, le=100),
 ) -> JobListOut:
@@ -125,7 +129,7 @@ async def list_jobs(
 
 
 @router.get("/{job_id}", response_model=JobOut)
-async def job_detail(job_id: int, user: User = Depends(current_user)) -> JobOut:
+async def job_detail(job_id: RowId, user: User = Depends(current_user)) -> JobOut:
     job = await jobs_service.get_job(job_id)
     feedback, applied = await jobs_service.annotate_user_state(user.id, [job.id])
     return job_to_out(
@@ -138,14 +142,14 @@ async def job_detail(job_id: int, user: User = Depends(current_user)) -> JobOut:
 
 @router.post("/{job_id}/feedback", response_model=OkOut)
 async def job_feedback(
-    job_id: int, body: FeedbackIn, user: User = Depends(current_user),
+    job_id: RowId, body: FeedbackIn, user: User = Depends(current_user),
 ) -> OkOut:
     await jobs_service.set_feedback(user.id, job_id, body.feedback)
     return OkOut()
 
 
 @router.post("/{job_id}/apply-click", response_model=ApplicationOut)
-async def apply_click(job_id: int, user: User = Depends(current_user)) -> ApplicationOut:
+async def apply_click(job_id: RowId, user: User = Depends(current_user)) -> ApplicationOut:
     """Record that the user clicked Apply — auto-tracks the application."""
     app, job = await jobs_service.record_apply_click(user.id, job_id)
     return application_to_out(app, job)

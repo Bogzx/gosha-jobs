@@ -48,6 +48,7 @@ _DOMAIN_STATUS = {
     "consent_required": 422,
     "file_too_large": 413,
     "generation_failed": 502,
+    "generation_in_progress": 409,
 }
 
 

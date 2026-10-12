@@ -213,3 +213,149 @@ async def test_upsert_handles_the_same_url_twice_in_one_batch(patched_db, sessio
         await session.execute(select(Job).where(Job.url == "https://dupe.com/1"))
     ).scalars().all()
     assert len(stored) == 1
+
+
+async def _one_sub(session, discord_id: int, keyword: str, location: str = "cluj") -> None:
+    user = User(discord_user_id=discord_id)
+    session.add(user)
+    await session.flush()
+    sub = Subscription(user_id=user.id, max_age_days=7)
+    sub.keywords = [keyword]
+    sub.locations = [location]
+    sub.boards = ["indeed"]
+    session.add(sub)
+    await session.commit()
+
+
+class _NoTunnels:
+    def active_proxies(self):
+        return []
+
+
+@pytest.mark.asyncio
+async def test_inapplicable_sources_are_not_attempted(patched_db, session, monkeypatch):
+    """RemoteOK for a Cluj search is not a broken RemoteOK."""
+    from gosha.scrape_health import ScrapeHealth
+
+    await _one_sub(session, 5101, "python developer")
+
+    async def no_jobspy(*_a, **_kw):
+        return pd.DataFrame()
+
+    monkeypatch.setattr("gosha.scraper.scrape_jobs_raw", no_jobspy)
+
+    class RemoteOnly:
+        name = "remoteok"
+        calls = 0
+
+        def applies_to(self, query):
+            return query.location == "remote"
+
+        async def search(self, query):
+            RemoteOnly.calls += 1
+            return []
+
+    monkeypatch.setattr("gosha.scrapers.registry.get_extra_scrapers", lambda: [RemoteOnly()])
+    health = ScrapeHealth()
+    await pipeline.run_scrape_stage(_NoTunnels(), health)
+
+    assert RemoteOnly.calls == 0
+    assert "remoteok" not in health.last_report.per_source
+
+
+@pytest.mark.asyncio
+async def test_health_counts_what_boards_returned_not_what_was_kept(
+    patched_db, session, monkeypatch,
+):
+    from gosha.scrape_health import ScrapeHealth
+
+    await _one_sub(session, 5102, "computer science internship")
+
+    async def jobspy(*_a, **_kw):
+        return pd.DataFrame([
+            {"job_url": f"https://in.test/{i}", "title": "Senior Accountant", "site": "indeed"}
+            for i in range(4)
+        ])
+
+    monkeypatch.setattr("gosha.scraper.scrape_jobs_raw", jobspy)
+
+    seen_relevance: list[bool] = []
+
+    class Board:
+        name = "ejobs"
+
+        def applies_to(self, query):
+            return True
+
+        async def search(self, query):
+            seen_relevance.append(query.is_relevant("Agent Vanzari"))
+            return [
+                RawJob(url="https://e.test/1", title="QA Engineer", source="ejobs",
+                       location="Cluj-Napoca, Romania", experience_level="entry"),
+                RawJob(url="https://e.test/2", title="Agent Vanzari", source="ejobs",
+                       location="Cluj-Napoca, Romania"),
+            ]
+
+    monkeypatch.setattr("gosha.scrapers.registry.get_extra_scrapers", lambda: [Board()])
+    health = ScrapeHealth()
+    jobs = await pipeline.run_scrape_stage(_NoTunnels(), health)
+
+    report = health.last_report
+    # Two unique eJobs postings (every expanded term returned the same two),
+    # four Indeed ones; only the entry-level QA posting survives the filter.
+    assert report.per_source == {"ejobs": 2, "indeed": 4}
+    assert report.kept == {"ejobs": 1, "indeed": 0}
+    assert {j.url for j in jobs} == {"https://e.test/1"}
+    assert not report.dead_sources
+    # The subscription's relevance filter reached the adapter.
+    assert seen_relevance and not any(seen_relevance)
+
+
+@pytest.mark.asyncio
+async def test_upsert_fits_values_to_column_widths(patched_db, session):
+    many_cities = ", ".join(f"City{i}" for i in range(60))  # ~450 chars
+    df = pd.DataFrame([
+        {"job_url": "https://w.test/1", "title": "T" * 600, "company": "C" * 300,
+         "location": many_cities, "site": "bestjobs"},
+        {"job_url": "https://w.test/" + "x" * 1100, "title": "Too long a url",
+         "site": "bestjobs"},
+    ])
+    jobs = await pipeline.upsert_jobs(df)
+
+    (job,) = jobs
+    assert len(job.title) <= 512 and len(job.company) <= 256
+    assert len(job.location) <= 256
+    assert job.location.startswith("City0, City1") and not job.location.endswith(",")
+
+
+@pytest.mark.asyncio
+async def test_a_failing_batch_does_not_end_the_cycle(patched_db, session, monkeypatch):
+    await _one_sub(session, 5103, "python developer")
+
+    async def jobspy(*_a, **_kw):
+        return pd.DataFrame([{"job_url": "https://in.test/ok", "title": "Python Developer",
+                              "site": "indeed", "location": "Cluj-Napoca, Romania"}])
+
+    monkeypatch.setattr("gosha.scraper.scrape_jobs_raw", jobspy)
+
+    class Board:
+        name = "ejobs"
+
+        def applies_to(self, query):
+            return True
+
+        async def search(self, query):
+            return [RawJob(url="https://e.test/bad", title="Python Developer", source="ejobs",
+                           location="Cluj-Napoca, Romania")]
+
+    monkeypatch.setattr("gosha.scrapers.registry.get_extra_scrapers", lambda: [Board()])
+    real_upsert = pipeline.upsert_jobs
+
+    async def flaky_upsert(df):
+        if (df["site"] == "ejobs").any():
+            raise RuntimeError("value too long for type character varying(256)")
+        return await real_upsert(df)
+
+    monkeypatch.setattr(pipeline, "upsert_jobs", flaky_upsert)
+    jobs = await pipeline.run_scrape_stage(_NoTunnels())
+    assert {j.url for j in jobs} == {"https://in.test/ok"}

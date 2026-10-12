@@ -75,8 +75,12 @@ IP addresses. gosha.bogdantruta.com runs behind Cloudflare.
   generated from it (`gosha/services/retention.py`). Deliveries do not
   count as activity; signing in, uploading, feedback, tracking and
   searches do.
-- **Cover letters** — deleted with the CV (by the user or by the rule
-  above) and with the account (`gosha/services/cv.py`).
+- **Cover letters** — the text is deleted with the CV (by the user or by
+  the rule above) and with the account (`gosha/services/cv.py`). A row
+  without text (user, posting, time) stays until the month ends, because
+  those rows are the monthly cover-letter quota; deleting the CV must not
+  reset it. The daily retention job then deletes them
+  (`purge_erased_letters` in `gosha/services/retention.py`).
 - **Events** (page views, deliveries, sign-ins) — until the account is
   deleted, or for `EVENT_RETENTION_MONTHS` when set (off by default, since
   it deletes analytics history; never shorter than `CV_RETENTION_MONTHS`,
@@ -89,7 +93,9 @@ IP addresses. gosha.bogdantruta.com runs behind Cloudflare.
   per service (`docker-compose.prod.yml`).
 - **Everything else** — until the account is deleted.
 
-There is no automatic retention limit on delivery history or scraped jobs.
+There is no automatic retention limit on delivery history or scraped jobs
+(a posting not seen on its board for 30 days is marked inactive, not
+deleted).
 
 ## User rights
 
@@ -98,7 +104,7 @@ There is no automatic retention limit on delivery history or scraped jobs.
 | Access / portability (Art. 15, 20) | `GET /api/v1/account/export` — everything we hold, as JSON. Button on the profile page. |
 | Erasure (Art. 17) | `DELETE /api/v1/account?confirm=DELETE` — account row, CV file, cover letters, saved searches, delivery history, tracked applications and the event log. Irreversible. Button on the profile page. |
 | Rectification | Discord profile fields refresh on each sign-in; the CV can be re-uploaded. |
-| Withdraw consent | Delete the CV (web or `/delete_cv`), or the account. Deleting the CV also removes its embedding, the cover letters generated from it, and the consent record, so a new upload asks again. |
+| Withdraw consent | Delete the CV (web or `/delete_cv`), or the account. Deleting the CV also removes its embedding, the text of the cover letters generated from it, and the consent record, so a new upload asks again. |
 | Complain | To a data protection authority; in Romania, ANSPDCP (<https://www.dataprotection.ro>). `/privacy` says so. |
 
 Erasure is implemented as explicit statements rather than ORM cascades
