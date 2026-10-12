@@ -32,9 +32,7 @@ const STEPS = [
 export default function Landing() {
   // Prefetch OAuth URLs (+ CSRF cookie) so the sign-in click can navigate
   // synchronously: mobile browsers block app deep links otherwise.
-  useEffect(() => {
-    prefetchLogin()
-  }, [])
+  useEffect(() => prefetchLogin(), [])
 
   return (
     <div className="min-h-dvh overflow-x-clip">

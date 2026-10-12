@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { trackPageview } from './api/client'
 import { ChunkErrorBoundary } from './components/ChunkErrorBoundary'
 import { Layout } from './components/Layout'
+import { LoadError } from './components/LoadError'
 import { useMe } from './hooks/useMe'
 import Landing from './pages/Landing'
 
@@ -16,7 +17,6 @@ const CvPage = lazy(() => import('./pages/CvPage'))
 const Profile = lazy(() => import('./pages/Profile'))
 const Admin = lazy(() => import('./pages/Admin'))
 const Welcome = lazy(() => import('./pages/Welcome'))
-const SignedIn = lazy(() => import('./pages/SignedIn'))
 const Privacy = lazy(() => import('./pages/Privacy'))
 const Demo = lazy(() => import('./pages/Demo'))
 const NotFound = lazy(() => import('./pages/NotFound'))
@@ -37,10 +37,18 @@ function usePageviews() {
 }
 
 function Protected({ children }: { children: ReactNode }) {
-  const { me, isLoading } = useMe()
+  const { me, isLoading, isError, isFetching, refetch } = useMe()
   if (isLoading) return <Loading />
-  if (!me) return <Navigate to="/" replace />
-  return <Layout>{children}</Layout>
+  if (me) return <Layout>{children}</Layout>
+  // Not a 401: we don't know who this is yet, so don't sign them out.
+  if (isError) {
+    return (
+      <div className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4">
+        <LoadError what="your account" onRetry={() => void refetch()} retrying={isFetching} />
+      </div>
+    )
+  }
+  return <Navigate to="/" replace />
 }
 
 export default function App() {
@@ -54,11 +62,12 @@ export default function App() {
       <Route
         path="/"
         element={
-          !isLoading && me ? <Navigate to="/feed" replace /> : <Landing />
+          // Wait for /me so a signed-in user never mounts Landing (and its
+          // sign-in prefetch) on the way to /feed.
+          isLoading ? <Loading /> : me ? <Navigate to="/feed" replace /> : <Landing />
         }
       />
       <Route path="/welcome" element={<Welcome />} />
-      <Route path="/signed-in" element={<SignedIn />} />
       <Route path="/privacy" element={<Privacy />} />
       <Route path="/demo" element={<Demo />} />
       <Route path="/feed" element={<Protected><Feed /></Protected>} />

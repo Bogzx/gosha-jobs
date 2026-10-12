@@ -65,9 +65,15 @@ export function JobDetail({ job, onClose }: Props) {
           action: {
             label: 'Undo',
             onClick: () =>
-              undoApply.mutate({ applicationId: app.id, jobId: job.id }),
+              undoApply.mutate({ applicationId: app.id, jobId: job.id }, {
+                onError: () =>
+                  toast({ message: "Couldn't undo — remove it in the tracker.", tone: 'tomato' }),
+              }),
           },
         })
+      },
+      onError: () => {
+        toast({ message: "Couldn't add it to your tracker.", tone: 'tomato' })
       },
     })
   }
@@ -88,16 +94,20 @@ export function JobDetail({ job, onClose }: Props) {
     })
   }
 
+  // The thumbs flip at once (optimistic); the toast waits for the server.
   const react = (value: 'interested' | 'not_relevant') => {
-    feedback.mutate({
-      jobId: job.id,
-      feedback: value,
+    feedback.mutate({ jobId: job.id, feedback: value }, {
+      onSuccess: () => {
+        if (value === 'not_relevant') {
+          toast({ message: 'Got it — fewer jobs like this.' })
+        } else {
+          toast({ message: 'Nice — more jobs like this.', tone: 'go' })
+        }
+      },
+      onError: () => {
+        toast({ message: "Couldn't save that — try again.", tone: 'tomato' })
+      },
     })
-    if (value === 'not_relevant') {
-      toast({ message: 'Got it — fewer jobs like this.' })
-    } else {
-      toast({ message: 'Nice — more jobs like this.', tone: 'go' })
-    }
   }
 
   return (
@@ -165,6 +175,7 @@ export function JobDetail({ job, onClose }: Props) {
             <button
               type="button"
               aria-label="More like this"
+              aria-pressed={job.feedback === 'interested'}
               onClick={() => react('interested')}
               className={`rounded-md border p-2 transition-colors ${
                 job.feedback === 'interested'
@@ -177,6 +188,7 @@ export function JobDetail({ job, onClose }: Props) {
             <button
               type="button"
               aria-label="Not relevant"
+              aria-pressed={job.feedback === 'not_relevant'}
               onClick={() => react('not_relevant')}
               className={`rounded-md border p-2 transition-colors ${
                 job.feedback === 'not_relevant'

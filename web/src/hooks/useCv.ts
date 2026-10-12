@@ -23,6 +23,8 @@ function useInvalidateCv() {
     void queryClient.invalidateQueries({ queryKey: ['cv'] })
     void queryClient.invalidateQueries({ queryKey: ['me'] })
     void queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    // Deleting the CV deletes every letter written from it, server-side.
+    void queryClient.invalidateQueries({ queryKey: ['cover-letters'] })
   }
 }
 

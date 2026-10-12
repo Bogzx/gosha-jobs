@@ -162,14 +162,18 @@ export function SearchForm({ existing, onDone }: Props) {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label htmlFor="search-salary" className="mb-1.5 block font-mono text-[11px] font-semibold tracking-wider text-ink-faint uppercase">
-                Min salary
+                Min RON / month
               </label>
               <input
                 id="search-salary"
                 type="number"
                 min={0}
+                step={500}
                 className="input-ink"
                 placeholder="any"
+                // Compared as gross RON per month, like the feed filter
+                // (gosha/salary.py converts other currencies at ingest).
+                title="Gross RON per month. Listings in EUR or USD, and annual figures, are converted before matching. Jobs that don't state a salary are always included."
                 value={salaryMin}
                 onChange={(e) => setSalaryMin(e.target.value)}
               />

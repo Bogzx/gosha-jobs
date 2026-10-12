@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { FileUp, Loader2 } from 'lucide-react'
 import { ApiError } from '../api/client'
 import { useUploadCv } from '../hooks/useCv'
+import { useMe } from '../hooks/useMe'
 import { hasStoredConsent, storeConsent } from '../lib/cvConsent'
 import { useToast } from '../hooks/useToast'
 
@@ -12,15 +13,26 @@ import { useToast } from '../hooks/useToast'
 // not consent. The tick is sent with the upload and recorded server-side;
 // see lib/cvConsent.ts for the local copy.
 
+// Mirrors MAX_CV_BYTES (gosha/services/cv.py). Checked here too because a
+// much bigger file is cut off by the proxy with a bare 413, before the API
+// can say why.
+const MAX_CV_BYTES = 5 * 1024 * 1024
+
 export function CvDropzone({ onUploaded }: { onUploaded?: () => void }) {
   const toast = useToast()
+  const { me } = useMe()
   const upload = useUploadCv()
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
-  const [consented, setConsented] = useState(hasStoredConsent)
+  const [consented, setConsented] = useState(() => hasStoredConsent(me?.id))
+  const busy = upload.isPending
 
   const handleFile = (file: File | undefined) => {
-    if (!file || !consented) return
+    if (!file || !consented || busy) return
+    if (file.size > MAX_CV_BYTES) {
+      toast({ message: 'CV files can be at most 5 MB.', tone: 'tomato' })
+      return
+    }
     upload.mutate({ file, consent: true }, {
       onSuccess: () => {
         toast({ message: 'CV uploaded — your feed just got personal', tone: 'go' })
@@ -43,7 +55,7 @@ export function CvDropzone({ onUploaded }: { onUploaded?: () => void }) {
           checked={consented}
           onChange={(e) => {
             setConsented(e.target.checked)
-            if (e.target.checked) storeConsent()
+            if (e.target.checked) storeConsent(me?.id)
           }}
           className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-go)]"
         />
@@ -61,13 +73,25 @@ export function CvDropzone({ onUploaded }: { onUploaded?: () => void }) {
         </span>
       </label>
 
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".pdf,.docx,.txt,.md"
+        className="hidden"
+        onChange={(e) => {
+          handleFile(e.target.files?.[0])
+          // Clear it, or picking the same file again (say, after a failed
+          // upload) fires no change event.
+          e.target.value = ''
+        }}
+      />
       <button
         type="button"
-        disabled={!consented}
+        disabled={!consented || busy}
         aria-describedby="cv-consent-hint"
         onClick={() => inputRef.current?.click()}
         onDragOver={(e) => {
-          if (!consented) return
+          if (!consented || busy) return
           e.preventDefault()
           setDragging(true)
         }}
@@ -81,20 +105,13 @@ export function CvDropzone({ onUploaded }: { onUploaded?: () => void }) {
           dragging ? 'border-go bg-go-soft' : 'border-rule bg-card hover:border-ink'
         } ${consented ? '' : 'cursor-not-allowed opacity-50'}`}
       >
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".pdf,.docx,.txt,.md"
-          className="hidden"
-          onChange={(e) => handleFile(e.target.files?.[0])}
-        />
-        {upload.isPending ? (
+        {busy ? (
           <Loader2 size={28} className="animate-spin text-go" aria-label="Uploading" />
         ) : (
           <FileUp size={28} className="text-ink-faint" aria-hidden />
         )}
         <p className="font-semibold">
-          {upload.isPending ? 'Reading your CV…' : 'Drop your CV here or click to browse'}
+          {busy ? 'Reading your CV…' : 'Drop your CV here or click to browse'}
         </p>
         <p id="cv-consent-hint" className="font-mono text-xs text-ink-faint">
           {consented

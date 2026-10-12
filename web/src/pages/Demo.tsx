@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState, type Ref } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, ExternalLink, Loader2, MapPin } from 'lucide-react'
@@ -8,6 +8,7 @@ import { JobCard } from '../components/JobCard'
 import { Logo } from '../components/Logo'
 import { MatchBadge } from '../components/MatchBadge'
 import { WhyThisMatched } from '../components/WhyThisMatched'
+import { useIsDesktop } from '../hooks/useIsDesktop'
 import { sourceLabel, timeAgo } from '../lib/format'
 import { signInWithDiscord } from '../lib/signin'
 
@@ -50,6 +51,10 @@ export default function Demo() {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const jobs = feed.data?.items ?? []
   const selected = jobs.find((job) => job.id === selectedId) ?? jobs[0] ?? null
+  // Below lg the detail sits after every card, so a tap would change
+  // something off-screen: bring it into view.
+  const isDesktop = useIsDesktop()
+  const detailRef = useRef<HTMLElement>(null)
 
   return (
     <div className="min-h-dvh">
@@ -129,11 +134,16 @@ export default function Demo() {
                   key={job.id}
                   job={job}
                   selected={job.id === selected?.id}
-                  onSelect={(next) => setSelectedId(next.id)}
+                  onSelect={(next) => {
+                    setSelectedId(next.id)
+                    if (!isDesktop) {
+                      detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                    }
+                  }}
                 />
               ))}
             </section>
-            {selected && <DemoDetail job={selected} />}
+            {selected && <DemoDetail ref={detailRef} job={selected} />}
           </div>
         )}
       </main>
@@ -141,9 +151,9 @@ export default function Demo() {
   )
 }
 
-function DemoDetail({ job }: { job: Job }) {
+function DemoDetail({ job, ref }: { job: Job; ref?: Ref<HTMLElement> }) {
   return (
-    <article className="card-press sticky top-6 mt-4 p-4 lg:mt-0">
+    <article ref={ref} className="card-press sticky top-6 mt-4 scroll-mt-4 p-4 lg:mt-0">
       <div className="flex items-start gap-3">
         <MatchBadge percentile={job.match_percentile} size="lg" />
         <div className="min-w-0">

@@ -17,10 +17,15 @@ export function ApplicationCard({ app }: { app: Application }) {
   const [editingNotes, setEditingNotes] = useState(false)
   const [notes, setNotes] = useState(app.notes ?? '')
 
+  // The local draft survives a failed save, so reopening the notes shows
+  // what was typed rather than the stored copy.
   const saveNotes = () => {
     setEditingNotes(false)
     if (notes !== (app.notes ?? '')) {
-      update.mutate({ id: app.id, notes })
+      update.mutate({ id: app.id, notes }, {
+        onError: () =>
+          toast({ message: "Couldn't save your notes — try again.", tone: 'tomato' }),
+      })
     }
   }
 
@@ -52,7 +57,13 @@ export function ApplicationCard({ app }: { app: Application }) {
           value={app.status}
           aria-label="Application status"
           onChange={(e) =>
-            update.mutate({ id: app.id, status: e.target.value as ApplicationStatus })
+            update.mutate(
+              { id: app.id, status: e.target.value as ApplicationStatus },
+              {
+                onError: () =>
+                  toast({ message: "Couldn't change the status — try again.", tone: 'tomato' }),
+              },
+            )
           }
           className={`cursor-pointer rounded-md border px-2 py-1 font-mono text-xs font-bold ${STATUS_META[app.status].tone}`}
         >
@@ -79,6 +90,8 @@ export function ApplicationCard({ app }: { app: Application }) {
           onClick={() =>
             remove.mutate(app.id, {
               onSuccess: () => toast({ message: 'Removed from tracker' }),
+              onError: () =>
+                toast({ message: "Couldn't remove it — try again.", tone: 'tomato' }),
             })
           }
           className="ml-auto rounded-md border border-rule p-1.5 text-ink-faint transition-colors hover:border-tomato hover:text-tomato"

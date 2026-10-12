@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -25,8 +26,12 @@ function filtersToParams(filters: JobFilters, page: number): string {
   return params.toString()
 }
 
-/** Infinite list for either the personalized feed or filtered browsing. */
-export function useJobList(mode: 'feed' | 'browse', filters: JobFilters) {
+/**
+ * Infinite list for either the personalized feed or filtered browsing.
+ * The previous list stays on screen while new filters load (or are held
+ * back with `enabled`), instead of blanking to a spinner.
+ */
+export function useJobList(mode: 'feed' | 'browse', filters: JobFilters, enabled = true) {
   return useInfiniteQuery({
     queryKey: ['jobs', mode, filters],
     queryFn: ({ pageParam }) => {
@@ -36,6 +41,8 @@ export function useJobList(mode: 'feed' | 'browse', filters: JobFilters) {
     initialPageParam: 1,
     getNextPageParam: (last) =>
       last.page * last.per_page < last.total ? last.page + 1 : undefined,
+    placeholderData: keepPreviousData,
+    enabled,
   })
 }
 
@@ -60,6 +67,22 @@ function patchJobEverywhere(
   )
 }
 
+/** One job as currently cached in any list, for rolling back a patch. */
+function findCachedJob(
+  queryClient: ReturnType<typeof useQueryClient>,
+  jobId: number,
+): Job | undefined {
+  for (const [, data] of queryClient.getQueriesData<InfiniteData<JobList>>({
+    queryKey: ['jobs'],
+  })) {
+    for (const page of data?.pages ?? []) {
+      const job = page.items.find((item) => item.id === jobId)
+      if (job) return job
+    }
+  }
+  return undefined
+}
+
 /** Full job record (untruncated description) for the detail pane. */
 export function useJobDetail(jobId: number | undefined) {
   return useQuery({
@@ -76,10 +99,12 @@ export function useFeedback() {
     mutationFn: ({ jobId, feedback }: { jobId: number; feedback: 'interested' | 'not_relevant' }) =>
       api.post(`/jobs/${jobId}/feedback`, { feedback }),
     onMutate: ({ jobId, feedback }) => {
+      const previous = findCachedJob(queryClient, jobId)?.feedback ?? null
       patchJobEverywhere(queryClient, jobId, { feedback })
+      return { previous }
     },
-    onError: (_err, { jobId }) => {
-      patchJobEverywhere(queryClient, jobId, { feedback: null })
+    onError: (_err, { jobId }, context) => {
+      patchJobEverywhere(queryClient, jobId, { feedback: context?.previous ?? null })
     },
   })
 }
@@ -109,8 +134,13 @@ export function useUndoApply() {
 }
 
 export function useCoverLetter() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (jobId: number) =>
       api.post<{ content: string; cached: boolean }>(`/jobs/${jobId}/cover-letter`),
+    // The CV page lists every letter generated so far.
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['cover-letters'] })
+    },
   })
 }

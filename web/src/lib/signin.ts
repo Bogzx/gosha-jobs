@@ -19,14 +19,15 @@
 // gesture, hence the prefetched URLs (+ CSRF state cookie) on page load.
 
 const LOGIN_PATH = '/api/v1/auth/discord/login'
-const HANDOFF_PATH = '/api/v1/auth/discord/handoff'
 // State cookie lives 10 min; refresh the prefetched URLs well within that.
 const REFRESH_MS = 8 * 60 * 1000
-// Cross-browser handoff: the callback may land in the system default
-// browser, which gets no session (that would be the login-CSRF hole).
-// This tab holds the state cookie, so it collects the sign-in itself.
-const HANDOFF_POLL_MS = 2000
-const HANDOFF_WINDOW_MS = 5 * 60 * 1000
+// Past this, the cookie may expire before the callback lands.
+const STALE_MS = 9 * 60 * 1000
+// No cross-browser handoff: when the desktop app opens the callback in the
+// system default browser, that browser starts and finishes a sign-in of
+// its own (gosha/api/auth.py). Handing this tab the session approved over
+// there let anyone who got a victim to open their authorize link sign in
+// as the victim.
 
 interface LoginUrls {
   web_url: string
@@ -34,7 +35,7 @@ interface LoginUrls {
 }
 
 let cached: LoginUrls | null = null
-let refreshTimer: number | undefined
+let cachedAt = 0
 
 async function fetchUrls(): Promise<LoginUrls | null> {
   try {
@@ -46,57 +47,36 @@ async function fetchUrls(): Promise<LoginUrls | null> {
   }
 }
 
-/** Call on page load so the click handler can navigate synchronously. */
-export function prefetchLogin(): void {
-  void fetchUrls().then((urls) => {
-    cached = urls
-  })
-  if (refreshTimer === undefined) {
-    refreshTimer = window.setInterval(() => {
-      void fetchUrls().then((urls) => {
-        if (urls) cached = urls
-      })
-    }, REFRESH_MS)
-  }
+function remember(urls: LoginUrls) {
+  cached = urls
+  cachedAt = Date.now()
 }
 
-let handoffTimer: number | undefined
-
-/** Poll for a sign-in that completed in another browser, then land the user. */
-export function startHandoffPolling(): () => void {
-  if (handoffTimer !== undefined) return () => undefined
-  const deadline = Date.now() + HANDOFF_WINDOW_MS
-
-  const stop = () => {
-    if (handoffTimer !== undefined) {
-      window.clearInterval(handoffTimer)
-      handoffTimer = undefined
-    }
-  }
-
-  handoffTimer = window.setInterval(() => {
-    if (Date.now() > deadline) {
-      stop()
-      return
-    }
-    void fetch(HANDOFF_PATH, { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body: { signed_in?: boolean; new_user?: boolean } | null) => {
-        if (!body?.signed_in) return
-        stop()
-        window.location.href = body.new_user ? '/welcome' : '/feed'
-      })
-      .catch(() => undefined)
-  }, HANDOFF_POLL_MS)
-
-  return stop
+/**
+ * Call on page load so the click handler can navigate synchronously.
+ * Returns the cleanup that stops the refresh: run it when the page goes
+ * away, or every signed-in session keeps polling the login endpoint.
+ */
+export function prefetchLogin(): () => void {
+  void fetchUrls().then((urls) => {
+    if (urls) remember(urls)
+  })
+  const timer = window.setInterval(() => {
+    void fetchUrls().then((urls) => {
+      if (urls) remember(urls)
+    })
+  }, REFRESH_MS)
+  return () => window.clearInterval(timer)
 }
 
 /** Synchronous within the click gesture — required for app deep links. */
 export function signInWithDiscord(): void {
-  const urls = cached
+  // Nothing refreshes the URLs once the prefetching page unmounts, and a
+  // state older than its cookie would fail the callback.
+  const urls = Date.now() - cachedAt < STALE_MS ? cached : null
   if (!urls) {
-    // Prefetch hasn't landed (or failed) — plain browser flow always works.
+    // Prefetch hasn't landed (or failed, or went stale) — plain browser
+    // flow always works.
     window.location.href = LOGIN_PATH
     return
   }
@@ -113,9 +93,7 @@ export function signInWithDiscord(): void {
   }
 
   // Desktop: try the app scheme, fall back to the web flow unless the
-  // app visibly took over. The app hands the callback to the system
-  // default browser, so this tab watches for the handoff.
-  startHandoffPolling()
+  // app visibly took over.
   const fallback = window.setTimeout(() => {
     window.location.href = urls.web_url
   }, 1600)

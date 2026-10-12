@@ -1,14 +1,19 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Loader2, SlidersHorizontal, Sparkles } from 'lucide-react'
 import type { Job, JobFilters } from '../api/types'
 import { FilterPanel } from '../components/FilterPanel'
 import { JobCard } from '../components/JobCard'
 import { JobDetail } from '../components/JobDetail'
+import { LoadError } from '../components/LoadError'
+import { useDebouncedValue } from '../hooks/useDebouncedValue'
+import { useIsDesktop } from '../hooks/useIsDesktop'
 import { useMe } from '../hooks/useMe'
 import { useJobList } from '../hooks/useJobs'
 
 type Mode = 'feed' | 'browse'
+
+const TYPING_DEBOUNCE_MS = 300
 
 export default function Feed() {
   const { me } = useMe()
@@ -17,23 +22,52 @@ export default function Feed() {
   const [selected, setSelected] = useState<Job | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
 
-  const query = useJobList(mode, filters)
-  const jobs = useMemo(
-    () => query.data?.pages.flatMap((page) => page.items) ?? [],
-    [query.data],
-  )
+  // The search and salary boxes apply once typing pauses rather than
+  // fetching per keystroke; until then the current list stays up.
+  const q = useDebouncedValue(filters.q, TYPING_DEBOUNCE_MS)
+  const salaryMin = useDebouncedValue(filters.salary_min, TYPING_DEBOUNCE_MS)
+  const settled = q === filters.q && salaryMin === filters.salary_min
+  const query = useJobList(mode, { ...filters, q, salary_min: salaryMin }, settled)
+
+  const jobs = useMemo(() => {
+    // Pages are offsets into a list that shifts as jobs are scraped or
+    // re-ranked, so one job can turn up on two pages: keep the first.
+    const seen = new Set<number>()
+    return (query.data?.pages ?? [])
+      .flatMap((page) => page.items)
+      .filter((job) => {
+        if (seen.has(job.id)) return false
+        seen.add(job.id)
+        return true
+      })
+  }, [query.data])
   const total = query.data?.pages[0]?.total
 
   // Desktop shows the first job until the user picks one, so the detail
-  // pane is never empty. Derived during render: setting state from an
-  // effect cost an extra render pass on every list change.
-  const [isDesktop] = useState(() => window.matchMedia('(min-width: 1024px)').matches)
+  // pane is never empty. Phones open the sheet only on a tap: the fallback
+  // there would pin open a sheet that Close can't dismiss. Derived during
+  // render: setting state from an effect cost an extra render pass on
+  // every list change.
+  const isDesktop = useIsDesktop()
 
   // Keep the detail pane in sync with fresh data (feedback/applied flags)
   const selectedFresh = useMemo(() => {
     const current = selected ?? (isDesktop ? (jobs[0] ?? null) : null)
     return jobs.find((job) => job.id === current?.id) ?? current
   }, [jobs, selected, isDesktop])
+  const detailSheetOpen = !isDesktop && selectedFresh != null
+
+  // Escape closes whichever mobile sheet is up.
+  useEffect(() => {
+    if (!detailSheetOpen && !sheetOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (sheetOpen) setSheetOpen(false)
+      else setSelected(null)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [detailSheetOpen, sheetOpen])
 
   return (
     <div className="lg:grid lg:grid-cols-[230px_minmax(340px,_1fr)_1.2fr] lg:items-start lg:gap-5">
@@ -107,10 +141,16 @@ export default function Feed() {
           </Link>
         )}
 
-        {query.isLoading ? (
+        {query.isPending ? (
           <div className="flex justify-center py-20">
             <Loader2 className="animate-spin text-ink-faint" aria-label="Loading" />
           </div>
+        ) : query.isError && jobs.length === 0 ? (
+          <LoadError
+            what="jobs"
+            onRetry={() => void query.refetch()}
+            retrying={query.isFetching}
+          />
         ) : jobs.length === 0 ? (
           <div className="card-press p-8 text-center">
             <p className="headline text-xl">Nothing here yet</p>
@@ -152,9 +192,11 @@ export default function Feed() {
 
       {/* ── Detail: desktop pane ── */}
       <aside className="sticky top-20 hidden h-[calc(100dvh-6.5rem)] lg:block">
-        {selectedFresh ? (
+        {isDesktop && selectedFresh ? (
           <div className="card-press h-full overflow-hidden">
-            <JobDetail job={selectedFresh} />
+            {/* Keyed so a cover letter (or one still generating) never
+                carries over to the next job. */}
+            <JobDetail key={selectedFresh.id} job={selectedFresh} />
           </div>
         ) : (
           <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-rule">
@@ -164,8 +206,13 @@ export default function Feed() {
       </aside>
 
       {/* ── Detail: mobile slide-over ── */}
-      {selectedFresh && (
-        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal>
+      {detailSheetOpen && (
+        <div
+          className="fixed inset-0 z-50 lg:hidden"
+          role="dialog"
+          aria-modal
+          aria-label="Job details"
+        >
           <button
             type="button"
             aria-label="Close details"
@@ -173,14 +220,23 @@ export default function Feed() {
             onClick={() => setSelected(null)}
           />
           <div className="absolute inset-x-0 top-12 bottom-0 animate-slide-up overflow-hidden rounded-t-xl border border-ink bg-card">
-            <JobDetail job={selectedFresh} onClose={() => setSelected(null)} />
+            <JobDetail
+              key={selectedFresh.id}
+              job={selectedFresh}
+              onClose={() => setSelected(null)}
+            />
           </div>
         </div>
       )}
 
       {/* ── Filters: mobile bottom sheet ── */}
       {sheetOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal>
+        <div
+          className="fixed inset-0 z-50 lg:hidden"
+          role="dialog"
+          aria-modal
+          aria-labelledby="filters-sheet-title"
+        >
           <button
             type="button"
             aria-label="Close filters"
@@ -189,7 +245,7 @@ export default function Feed() {
           />
           <div className="absolute inset-x-0 bottom-0 max-h-[80dvh] animate-slide-up overflow-y-auto rounded-t-xl border border-ink bg-card p-5 pb-10">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="headline text-lg">Filters</h2>
+              <h2 id="filters-sheet-title" className="headline text-lg">Filters</h2>
               <button
                 type="button"
                 className="btn-ink px-3 py-1 text-xs"

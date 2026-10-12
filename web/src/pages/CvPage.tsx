@@ -2,15 +2,20 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Copy, FileCheck2, Loader2, Trash2 } from 'lucide-react'
 import { CvDropzone } from '../components/CvDropzone'
+import { LoadError } from '../components/LoadError'
 import { useToast } from '../hooks/useToast'
 import { useCoverLetters, useCv, useDeleteCv } from '../hooks/useCv'
+import { useMe } from '../hooks/useMe'
 import { forgetConsent } from '../lib/cvConsent'
 import { timeAgo } from '../lib/format'
 
 export default function CvPage() {
   const toast = useToast()
-  const { data: cv, isLoading } = useCv()
-  const { data: letters } = useCoverLetters()
+  const { me } = useMe()
+  const cvQuery = useCv()
+  const { data: cv, isLoading } = cvQuery
+  const lettersQuery = useCoverLetters()
+  const letters = lettersQuery.data
   const deleteCv = useDeleteCv()
   const [openLetter, setOpenLetter] = useState<number | null>(null)
 
@@ -44,7 +49,14 @@ export default function CvPage() {
           .
         </p>
 
-        {cv?.has_cv ? (
+        {cvQuery.isError ? (
+          // Not "no CV": an upload box here would invite replacing one.
+          <LoadError
+            what="your CV"
+            onRetry={() => void cvQuery.refetch()}
+            retrying={cvQuery.isFetching}
+          />
+        ) : cv?.has_cv ? (
           <div className="card-press overflow-hidden">
             <div className="flex items-center justify-between border-b border-rule bg-go-soft px-4 py-3">
               <p className="flex items-center gap-2 font-semibold">
@@ -62,7 +74,7 @@ export default function CvPage() {
                   if (window.confirm('Delete your CV? This also deletes every cover letter generated from it, and match scores stop working. This cannot be undone.')) {
                     deleteCv.mutate(undefined, {
                       onSuccess: () => {
-                        forgetConsent()
+                        forgetConsent(me?.id)
                         toast({ message: 'CV deleted' })
                       },
                     })
@@ -91,7 +103,13 @@ export default function CvPage() {
         <p className="mb-4 text-sm text-ink-soft">
           Generated from any job's detail view. Cached for 30 days.
         </p>
-        {letters && letters.length > 0 ? (
+        {lettersQuery.isError ? (
+          <LoadError
+            what="your cover letters"
+            onRetry={() => void lettersQuery.refetch()}
+            retrying={lettersQuery.isFetching}
+          />
+        ) : letters && letters.length > 0 ? (
           <ul className="space-y-2">
             {letters.map((letter) => (
               <li key={letter.id} className="card-press overflow-hidden">

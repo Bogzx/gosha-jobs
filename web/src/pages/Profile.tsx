@@ -33,7 +33,7 @@ export default function Profile() {
         credentials: 'include',
       })
       if (!resp.ok) throw new Error('failed')
-      forgetConsent()
+      forgetConsent(me.id)
       window.location.href = '/'
     } catch {
       toast({ message: 'Could not delete the account — try again.', tone: 'tomato' })

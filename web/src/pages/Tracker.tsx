@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Archive, Loader2 } from 'lucide-react'
 import type { Application, ApplicationStatus } from '../api/types'
 import { ApplicationCard } from '../components/ApplicationCard'
+import { LoadError } from '../components/LoadError'
 import { STATUS_META } from '../lib/applicationStatus'
 import { useApplications } from '../hooks/useApplications'
 
@@ -10,7 +11,7 @@ const PIPELINE: ApplicationStatus[] = ['applied', 'phone_screen', 'interview', '
 const ARCHIVE: ApplicationStatus[] = ['rejected', 'withdrawn']
 
 export default function Tracker() {
-  const { data: apps, isLoading } = useApplications()
+  const { data: apps, isLoading, isError, isFetching, refetch } = useApplications()
   const [showArchive, setShowArchive] = useState(false)
 
   const byStatus = useMemo(() => {
@@ -32,6 +33,18 @@ export default function Tracker() {
     return (
       <div className="flex justify-center py-20">
         <Loader2 className="animate-spin text-ink-faint" aria-label="Loading" />
+      </div>
+    )
+  }
+
+  if (isError && !apps) {
+    return (
+      <div className="mx-auto max-w-md py-16">
+        <LoadError
+          what="your applications"
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
       </div>
     )
   }

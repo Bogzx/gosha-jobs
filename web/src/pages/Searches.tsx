@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import type { Subscription } from '../api/types'
 import { DiscordHelp } from '../components/DiscordHelp'
+import { LoadError } from '../components/LoadError'
 import { SearchForm } from '../components/SearchForm'
 import { useToast } from '../hooks/useToast'
 import { useMe } from '../hooks/useMe'
@@ -62,7 +63,9 @@ function SearchCard({ sub, onEdit }: { sub: Subscription; onEdit: () => void }) 
           </span>
         ))}
         {sub.salary_min != null && (
-          <span className="chip">≥ {sub.salary_min}</span>
+          <span className="chip" title="Gross RON per month">
+            ≥ {sub.salary_min} RON/mo
+          </span>
         )}
         <span className="chip border-transparent bg-transparent">
           last {sub.max_age_days}d
@@ -105,7 +108,7 @@ function SearchCard({ sub, onEdit }: { sub: Subscription; onEdit: () => void }) 
 
 export default function Searches() {
   const { me } = useMe()
-  const { data: subs, isLoading } = useSubscriptions()
+  const { data: subs, isLoading, isError, isFetching, refetch } = useSubscriptions()
   const [editing, setEditing] = useState<Subscription | 'new' | null>(null)
 
   if (isLoading) {
@@ -145,6 +148,12 @@ export default function Searches() {
             onDone={() => setEditing(null)}
           />
         </div>
+      ) : isError && !subs ? (
+        <LoadError
+          what="your searches"
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
       ) : subs && subs.length > 0 ? (
         <div className="space-y-3">
           {subs.map((sub) => (

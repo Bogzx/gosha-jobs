@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client'
+import { LoadError } from '../components/LoadError'
 import { Logo } from '../components/Logo'
 
 /**
@@ -44,7 +45,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 export default function Privacy() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['legal', 'privacy'],
     queryFn: () => api.get<PrivacyDoc>('/legal/privacy'),
     staleTime: 60 * 60_000,
@@ -66,7 +67,13 @@ export default function Privacy() {
         everything with one button.
       </p>
 
-      {isLoading || !data ? (
+      {isError && !data ? (
+        <LoadError
+          what="the privacy notice"
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
+      ) : isLoading || !data ? (
         <p className="font-mono text-sm text-ink-faint">loading…</p>
       ) : (
         <div className="space-y-8">
