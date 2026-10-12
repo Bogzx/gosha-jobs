@@ -15,7 +15,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          # The image's Python (Dockerfile: python:3.11-slim). Testing on a
+          # newer one let 3.12-only syntax or stdlib pass CI and crash prod.
+          python-version: "3.11"
           cache: pip
       - name: Install dependencies
         run: |
@@ -107,11 +109,11 @@ jobs:
           cache-to: type=gha,scope=backup
 
       - name: Validate the production compose file
+        # No .env / .env.backup here: both env_files are `required: false`,
+        # so this also proves a host without backup secrets can still start.
         run: docker compose -f docker-compose.prod.yml config --quiet
         env:
           POSTGRES_PASSWORD: ci-placeholder
-          RESTIC_REPOSITORY: ci-placeholder
-          RESTIC_PASSWORD: ci-placeholder
 
       - name: Client IP cannot be forged (Caddyfile + host proxy snippet)
         # Rate limits key on the client IP; only Cloudflare (or the local
@@ -124,6 +126,14 @@ jobs:
           # healthcheck contract.
           docker run --rm gosha-app:ci python -c "
           from gosha.api.app import create_app
+          # The bot's entrypoint (main.py -> gosha.main). The API checks below
+          # never touch it, so a broken bot import used to ship green and
+          # crash-loop in production.
+          import gosha.main
+          # CPU-only VPS: the CUDA build is GBs of wheels it never loads
+          # (Dockerfile installs torch from the PyTorch CPU index).
+          import torch
+          assert torch.version.cuda is None, 'CUDA torch in the image: ' + torch.__version__
           import os
           os.environ.setdefault('SESSION_SECRET', 'x' * 40)
           os.environ.setdefault('DISCORD_CLIENT_ID', '1')

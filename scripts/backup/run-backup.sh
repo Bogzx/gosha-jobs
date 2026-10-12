@@ -8,9 +8,12 @@
 # production remote: an operator still has to run docs/BACKUPS.md Step 6
 # there, because a backup nobody has restored is a hope, not a backup.
 #
-# Environment (set in .env, consumed via docker-compose.prod.yml):
+# Environment (set in .env.backup, which docker-compose.prod.yml gives to
+# this service only; the PG* login comes from .env's POSTGRES_PASSWORD):
 #   RESTIC_REPOSITORY        where snapshots go (s3:/b2:/sftp:/rest:)
 #   RESTIC_PASSWORD          encryption key — LOSING IT LOSES THE BACKUPS
+#   B2_ACCOUNT_ID/B2_ACCOUNT_KEY or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
+#                            remote credentials, read by restic itself
 #   PGHOST/PGUSER/PGDATABASE/PGPASSWORD
 #   BACKUP_INTERVAL_SECONDS  default 86400
 #   BACKUP_KEEP_DAILY        default 30
@@ -29,13 +32,14 @@ log() {
   echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"
 }
 
-# docker-compose.prod.yml passes these through with a plain :- default rather
-# than :?, because Compose interpolates every service at file-parse time —
-# including profile-gated ones — so a :? there would abort `docker compose up`
-# on any host that has no backup remote configured. The check therefore lives
-# here, where it only runs when the backup service actually starts.
+# docker-compose.prod.yml reads these from an optional .env.backup rather
+# than requiring them, because Compose validates every service at file-parse
+# time — including profile-gated ones — so a hard requirement there would
+# abort `docker compose up` on any host that has no backup remote
+# configured. The check therefore lives here, where it only runs when the
+# backup service actually starts.
 if [ -z "${RESTIC_REPOSITORY:-}" ] || [ -z "${RESTIC_PASSWORD:-}" ]; then
-  log "FATAL: RESTIC_REPOSITORY and RESTIC_PASSWORD must both be set in .env."
+  log "FATAL: RESTIC_REPOSITORY and RESTIC_PASSWORD must both be set in .env.backup."
   log "Refusing to run: an unconfigured backup that exits 0 is worse than no"
   log "backup at all, because it looks like it worked. See docs/BACKUPS.md."
   exit 1

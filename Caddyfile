@@ -45,9 +45,33 @@
 		}
 	}
 
-	# SPA: static build with client-side routing fallback
+	# Vite's build output: every file under /assets/ has a content hash in
+	# its name, so a URL never changes meaning and can be cached for a year.
+	# No SPA fallback here: a chunk that no longer exists (a tab left open
+	# across a deploy) must be a 404, not index.html served as JavaScript
+	# with a 200 that a cache could then keep for that year.
+	# ChunkErrorBoundary (web/src) reloads the page on the failed import.
+	# The year applies to files that exist only: a cached 404 (Cloudflare
+	# keeps one too) would outlive a rollback that brings the chunk back.
+	# `respond`, not file_server's own 404: that one is an error response,
+	# which skips the security headers below and puts `Server` back.
+	handle /assets/* {
+		root * /srv
+		@exists file
+		@missing not file
+		header @exists Cache-Control "public, max-age=31536000, immutable"
+		respond @missing 404
+		file_server
+	}
+
+	# SPA: static build with client-side routing fallback. index.html names
+	# the current hashed chunks, so it must never be served from cache
+	# unchecked: after a deploy a cached copy points at deleted files.
+	# no-cache = revalidate every time (cheap: file_server answers
+	# ETag/If-None-Match with 304), not "do not store".
 	handle {
 		root * /srv
+		header Cache-Control "no-cache"
 		try_files {path} /index.html
 		file_server
 	}

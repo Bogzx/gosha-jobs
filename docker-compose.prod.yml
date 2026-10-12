@@ -61,7 +61,10 @@ services:
     # `restart: unless-stopped` only catches exits. The real failure here
     # is a wedged asyncio loop: container up, gateway connected, nothing
     # scraped. The scheduler stamps a heartbeat file; this notices when it
-    # stops (gosha/heartbeat.py).
+    # stops (gosha/heartbeat.py). "unhealthy" is only a label, though:
+    # plain Docker never restarts on it. heartbeat.start_watchdog() exits
+    # the process after GOSHA_WATCHDOG_SECONDS (default 900) without a
+    # stamp, and the restart policy above brings it back.
     healthcheck:
       test: ["CMD", "python", "scripts/healthcheck.py", "bot"]
       interval: 60s
@@ -167,31 +170,31 @@ services:
     restart: unless-stopped
     profiles: ["backup"]
     logging: *default-logging
+    # Backup secrets live in their own file, read by this service only.
+    # In .env they reached bot and api too (env_file passes every key), so
+    # any code-execution bug there also handed out the restic password and
+    # the remote's write credentials: the way to delete the backups.
+    #
+    # .env.backup holds, by restic's own names (docs/BACKUPS.md, Step 3):
+    #   RESTIC_REPOSITORY  e.g. b2:gosha-backups:/ or sftp:user@host:/srv/gosha-backups
+    #   RESTIC_PASSWORD    LOSE THIS AND THE BACKUPS ARE UNREADABLE
+    #   B2_ACCOUNT_ID / B2_ACCOUNT_KEY, or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+    #   BACKUP_INTERVAL_SECONDS, BACKUP_KEEP_DAILY (defaults: 86400, 30)
+    #   BACKUP_HEALTHCHECK_URL  optional dead-man switch (healthchecks.io etc)
+    #
+    # `required: false`: a host without the file still runs `docker compose
+    # up` for everything else; run-backup.sh refuses to start without
+    # RESTIC_REPOSITORY and RESTIC_PASSWORD.
+    env_file:
+      - path: .env.backup
+        required: false
+    # Only the database login comes from .env (interpolated, not env_file:
+    # this service gets none of the app's other secrets).
     environment:
-      # Where the snapshots go, e.g. s3:s3.eu-central-1.amazonaws.com/gosha-backups
-      # or b2:gosha-backups:/ or sftp:user@host:/srv/gosha-backups
-      # NOTE: plain :- default, not :? — Compose interpolates every service at
-      # file-parse time, including profile-gated ones. A :? here aborts
-      # `docker compose up` on any host without these set, even though this
-      # service only runs under --profile backup. run-backup.sh fails loudly
-      # on an empty repository instead.
-      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
-      # Encrypts the snapshots. LOSE THIS AND THE BACKUPS ARE UNREADABLE —
-      # keep a copy somewhere that is not this server.
-      RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
-      AWS_ACCESS_KEY_ID: ${RESTIC_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${RESTIC_SECRET_ACCESS_KEY:-}
-      B2_ACCOUNT_ID: ${B2_ACCOUNT_ID:-}
-      B2_ACCOUNT_KEY: ${B2_ACCOUNT_KEY:-}
       PGHOST: postgres
       PGUSER: gosha
       PGDATABASE: gosha
       PGPASSWORD: ${POSTGRES_PASSWORD}
-      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
-      BACKUP_KEEP_DAILY: ${BACKUP_KEEP_DAILY:-30}
-      # Optional dead-man switch (healthchecks.io etc). Without it, a
-      # backup loop that dies is as invisible as having no backups.
-      BACKUP_HEALTHCHECK_URL: ${BACKUP_HEALTHCHECK_URL:-}
     volumes:
       - ./data:/data:ro                       # CV files, read-only
       - restic_cache:/root/.cache/restic

@@ -1,5 +1,8 @@
-# Never bake secrets or local state into image layers
-.env
+# Never bake secrets or local state into image layers. .env* covers
+# .env.backup (restic password + remote credentials) and any .env.local;
+# the template has no secrets and stays.
+.env*
+!.env.example
 *.env
 keys/
 data/

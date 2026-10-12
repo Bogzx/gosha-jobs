@@ -124,6 +124,47 @@ def test_vps_ssh_port_parsed_and_validated(monkeypatch):
     assert vps[0].user == "gosha-proxy" and vps[0].local_port == 1080
 
 
+def test_bad_vps_port_skips_that_vps_instead_of_crashing(monkeypatch):
+    """A typo in one optional proxy's port used to raise out of
+    load_settings() and crash-loop the whole bot."""
+    from gosha.config import _parse_vps_list
+
+    for i in range(1, 10):
+        monkeypatch.delenv(f"VPS_{i}_HOST", raising=False)
+    monkeypatch.setenv("VPS_1_HOST", "10.0.0.1")
+    monkeypatch.setenv("VPS_1_PORT", "10 80")
+    monkeypatch.setenv("VPS_2_HOST", "10.0.0.2")
+    monkeypatch.setenv("VPS_2_PORT", "1081")
+
+    assert [(v.host, v.local_port) for v in _parse_vps_list()] == [("10.0.0.2", 1081)]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("true", True), ("TRUE", True), ("1", True), ("yes", True), ("on", True),
+        (" On ", True),
+        ("false", False), ("0", False), ("no", False), ("off", False),
+        ("nonsense", False), ("", False),
+    ],
+)
+def test_use_semantic_matching_accepts_the_usual_spellings(monkeypatch, raw, expected):
+    """USE_SEMANTIC_MATCHING=1 used to mean off: only "true" counted."""
+    from gosha.config import load_settings
+
+    monkeypatch.setenv("DISCORD_TOKEN", "t")
+    monkeypatch.setenv("USE_SEMANTIC_MATCHING", raw)
+    assert load_settings().use_semantic_matching is expected
+
+
+def test_use_semantic_matching_defaults_off(monkeypatch):
+    from gosha.config import load_settings
+
+    monkeypatch.setenv("DISCORD_TOKEN", "t")
+    monkeypatch.delenv("USE_SEMANTIC_MATCHING", raising=False)
+    assert load_settings().use_semantic_matching is False
+
+
 def test_tunnel_command_uses_ssh_port_and_never_rewrites_known_hosts():
     from gosha.config import VPSConfig
     from gosha.ssh_tunnels import ssh_command

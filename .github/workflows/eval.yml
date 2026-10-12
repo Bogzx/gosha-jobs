@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.11"   # the image's Python (Dockerfile)
           cache: pip
       - name: Install (CPU torch, pinned versions)
         run: |
@@ -49,6 +49,9 @@ jobs:
           key: hf-${{ hashFiles('gosha/matching.py') }}
       - name: Eval the production model against the committed baseline
         run: |
+          # The default `bash -e` shell has no pipefail, so the pipeline's
+          # status was tee's: a failed --check still went green.
+          set -o pipefail
           python scripts/eval_ranking.py --cache-dir "" \
             --check eval/results/all-mpnet-base-v2.json | tee eval-summary.md
           cat eval-summary.md >> "$GITHUB_STEP_SUMMARY"

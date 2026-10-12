@@ -4,12 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 from dataclasses import dataclass
+from pathlib import Path
 
 from gosha.config import VPSConfig
 
 log = logging.getLogger(__name__)
+
+# Where first-use host keys are pinned. ~/.ssh is the read-only ./keys mount,
+# so with the default known_hosts `accept-new` could never save a key: every
+# connection was a fresh first use, and a changed (MITM) key was accepted as
+# readily as the real one. ./data is the writable, persistent bind mount
+# (/app/data in the container), next to the CVs and the heartbeat.
+DEFAULT_KNOWN_HOSTS_FILE = (
+    Path(__file__).resolve().parent.parent / "data" / "ssh_known_hosts"
+)
+
+
+def known_hosts_file() -> str:
+    return os.getenv("GOSHA_SSH_KNOWN_HOSTS_FILE") or str(DEFAULT_KNOWN_HOSTS_FILE)
 
 
 def ssh_command(ssh_bin: str, vps: VPSConfig) -> list[str]:
@@ -20,8 +35,18 @@ def ssh_command(ssh_bin: str, vps: VPSConfig) -> list[str]:
         "-p", str(vps.ssh_port),
         "-D", str(vps.local_port),
         "-N", "-q",
+        # Never prompt (there is no terminal): a key with a passphrase or a
+        # changed host key fails at once instead of hanging.
+        "-o", "BatchMode=yes",
+        # A dead or firewalled VPS fails in 10s, not the kernel's ~2 min.
+        "-o", "ConnectTimeout=10",
+        # Trust on first use, then pin: new keys go to the first (writable)
+        # file; keys an operator pre-pinned in keys/known_hosts still count.
         "-o", "StrictHostKeyChecking=accept-new",
-        # ~/.ssh is mounted read-only; don't try to rewrite known_hosts.
+        # (ssh splits this value on whitespace; the quotes keep a path with
+        # spaces whole.)
+        "-o", f'UserKnownHostsFile="{known_hosts_file()}" ~/.ssh/known_hosts',
+        # Don't let a server rotate the pinned keys behind our back.
         "-o", "UpdateHostKeys=no",
         "-o", "ServerAliveInterval=30",
         "-o", "ServerAliveCountMax=3",

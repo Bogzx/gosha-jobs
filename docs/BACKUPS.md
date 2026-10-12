@@ -73,12 +73,23 @@ the VPS. A backup on the same failure domain is not a backup.
 openssl rand -base64 48
 ```
 
-Put it in `.env` as `RESTIC_PASSWORD`, **and store a second copy somewhere
-that is not this server** — a password manager, a printed page in a
+Put it in `.env.backup` as `RESTIC_PASSWORD` (Step 3), **and store a
+second copy somewhere that is not this server** — a password manager, a printed page in a
 drawer. If the VPS dies and this password died with it, the backups are
 unreadable ciphertext and you have lost everything anyway.
 
-### Step 3 — fill in `.env`
+### Step 3 — fill in `.env.backup`
+
+The backup secrets go in their **own file**, `.env.backup` next to `.env`,
+not in `.env`. Compose hands `.env.backup` to the `backup` service only;
+every key in `.env` also reaches the bot and the API, and the restic
+password plus the remote's write credentials are exactly what someone who
+broke into either would need to delete the backups.
+
+```bash
+cd ~/gosha
+touch .env.backup && chmod 600 .env.backup && nano .env.backup
+```
 
 ```env
 RESTIC_REPOSITORY=b2:gosha-backups:/
@@ -88,15 +99,22 @@ RESTIC_PASSWORD=<from step 2>
 B2_ACCOUNT_ID=<application key id>
 B2_ACCOUNT_KEY=<application key>
 
-# or S3-compatible
-# RESTIC_ACCESS_KEY_ID=...
-# RESTIC_SECRET_ACCESS_KEY=...
+# or S3-compatible (restic's own variable names)
+# AWS_ACCESS_KEY_ID=...
+# AWS_SECRET_ACCESS_KEY=...
 
 BACKUP_INTERVAL_SECONDS=86400
 BACKUP_KEEP_DAILY=30
 # Optional: https://healthchecks.io ping URL
 BACKUP_HEALTHCHECK_URL=
 ```
+
+The database login is the one exception: the service takes
+`POSTGRES_PASSWORD` from `.env`, so do not copy it here. If an earlier
+version of this guide had you put any of the variables above in `.env`,
+move them: the service no longer reads them from there, and
+`run-backup.sh` refuses to start without `RESTIC_REPOSITORY` and
+`RESTIC_PASSWORD`.
 
 ### Step 4 — initialise and run once by hand
 
@@ -121,8 +139,11 @@ Common failures at this point:
 - `Fatal: unable to open config file` — the repository does not exist yet
   and `restic init` did not run. Run it manually with the same env:
   `docker compose -f docker-compose.prod.yml --profile backup run --rm --entrypoint restic backup init`
+- `FATAL: RESTIC_REPOSITORY and RESTIC_PASSWORD must both be set` —
+  `.env.backup` is missing, misnamed, or not next to
+  `docker-compose.prod.yml`.
 - `pg_dump: error: connection to server ... failed` — check
-  `POSTGRES_PASSWORD` and that `postgres` is healthy.
+  `POSTGRES_PASSWORD` in `.env` and that `postgres` is healthy.
 - `pg_dump: server version mismatch` — the base image major version in
   `Dockerfile.backup` must match the `postgres:` image in
   `docker-compose.prod.yml`. Both are 16 today; change both together.
@@ -191,9 +212,10 @@ Even with this running, these are open:
 - **`CV_ENCRYPTION_KEY` must be backed up too, separately.** CVs are now
   encrypted at rest (`data/cvs/<uid>.enc`, gosha/cv_crypto.py), so a
   restored `data/cvs` is unreadable without the key that wrote it.
-- **No off-site copy of `.env`.** The backups are useless without
-  `RESTIC_PASSWORD`, and the stack will not boot without the Discord and
-  database secrets. Store them separately and deliberately.
+- **No off-site copy of `.env` or `.env.backup`.** The backups are
+  useless without `RESTIC_PASSWORD`, and the stack will not boot without
+  the Discord and database secrets. Store them separately and
+  deliberately.
 - **The drill does not prove the production remote.** It proves the
   scripts and the image. Step 6 against the real repository is still the
   only proof that the data on that remote can be restored.

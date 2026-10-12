@@ -1,5 +1,8 @@
 *.env
 .env
+# .env.backup (restic/B2 secrets, docs/BACKUPS.md), .env.local, ...
+.env.*
+!.env.example
 data/
 keys/
 __pycache__/

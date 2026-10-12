@@ -68,6 +68,20 @@ class WebSettings:
     invite_url: str = ""
 
 
+# The "on" spellings SCRAPE_DIRECT (gosha/scraper.py) accepts, for every
+# plain on/off flag. USE_SEMANTIC_MATCHING used to accept only "true", so
+# USE_SEMANTIC_MATCHING=1 silently meant off.
+TRUTHY = ("1", "true", "yes", "on")
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    """True when env var `name` is one of TRUTHY (any case); default if unset."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in TRUTHY
+
+
 # 32 bytes is the shortest secret that is not brute-forceable offline
 # against a signed cookie; itsdangerous will happily sign with "dev".
 MIN_SESSION_SECRET_LEN = 32
@@ -194,7 +208,13 @@ def _parse_vps_list() -> list[VPSConfig]:
         if not host:
             continue
         user = os.getenv(f"VPS_{i}_USER", "ubuntu")
-        local_port = int(os.getenv(f"VPS_{i}_PORT", str(1079 + i)))
+        # A typo here used to raise ValueError out of load_settings() and
+        # crash-loop the whole bot over one optional proxy.
+        try:
+            local_port = int(os.getenv(f"VPS_{i}_PORT", str(1079 + i)))
+        except ValueError:
+            log.warning("VPS_%d_PORT is not a number — skipping", i)
+            continue
         key_path = os.getenv(f"VPS_{i}_KEY", global_key)
         try:
             ssh_port = int(os.getenv(f"VPS_{i}_SSH_PORT", "22"))
@@ -236,7 +256,7 @@ def load_settings() -> Settings:
     db_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///data/jobs.db")
     alert_channel = int(os.getenv("ALERT_CHANNEL_ID", "0"))
     interval = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "60"))
-    use_semantic = os.getenv("USE_SEMANTIC_MATCHING", "false").lower() == "true"
+    use_semantic = env_flag("USE_SEMANTIC_MATCHING")
     semantic_model = os.getenv("SEMANTIC_MODEL", "all-mpnet-base-v2")
     from gosha.matching import DEFAULT_THRESHOLD
 
