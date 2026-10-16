@@ -14,20 +14,27 @@ process needed) when:
 
 * the site does not answer               (key site:down)
 * no scrape cycle finished for N hours   (key site:scrape_stale)
-* no new job was stored for M hours      (key site:no_new_jobs)
+
+"No new job for a day" is not judged here: the bot's hourly data-quality
+check (data:no_new_jobs) knows whether anyone is searching, and while the
+bot is dead this watchdog's scrape_stale already covers it. Judging it in
+both places paged the owner twice for one problem.
 
 Dedup, reminders and "recovered" messages use the same Alerter as the bot,
 with its state in a JSON file the workflow carries between runs (actions/
-cache). Exit code 1 while anything is failing, so the run also shows red
-(and GitHub mails the workflow's owner) even if the DM cannot be sent.
+cache). Exit code 1 while something is failing that the owner has not
+been told about in a delivered DM within the cooldown (the DM failed, is
+not configured or switched off, or a flap is still inside its window), so
+the run shows red and GitHub mails the workflow's owner as the fallback. Once the DM is out the
+run is green: otherwise a long outage meant a failure email every 30 min.
 
     python scripts/site_watchdog.py --state-file state.json
-    python scripts/site_watchdog.py --dry-run     # print, post nothing
+    python scripts/site_watchdog.py --dry-run     # print; post and save nothing
 
 Env: GOSHA_PUBLIC_URL (default https://gosha.bogdantruta.com),
 DISCORD_TOKEN (the bot token), ALERT_DM_USER_IDS (comma-separated numeric
 user IDs), ALERTS_ENABLED, WATCHDOG_SCRAPE_STALE_HOURS (3),
-WATCHDOG_NEW_JOB_STALE_HOURS (24), WATCHDOG_REMIND_HOURS (6).
+WATCHDOG_REMIND_HOURS (6).
 """
 
 from __future__ import annotations
@@ -57,8 +64,11 @@ TIMEOUT = 20
 
 KEY_DOWN = "site:down"
 KEY_SCRAPE = "site:scrape_stale"
-KEY_NEW_JOBS = "site:no_new_jobs"
 KEY_ENDPOINT = "site:freshness_endpoint"
+KEYS = (KEY_DOWN, KEY_SCRAPE, KEY_ENDPOINT)
+# Two runs of the */30 schedule: a failure back within an hour of its
+# "recovered" waits one run to see whether it is a flap; longer, it pages.
+FLAP_WINDOW_SECONDS = 3600
 
 Fetch = Callable[[str], tuple[int, bytes]]
 
@@ -91,7 +101,6 @@ def evaluate(
     fetch: Fetch = http_get,
     now: datetime | None = None,
     scrape_stale_hours: float = 3.0,
-    new_job_stale_hours: float = 24.0,
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Probe the site → (failing, cleared) condition maps for the Alerter."""
     now = now or datetime.now(timezone.utc)
@@ -151,17 +160,6 @@ def evaluate(
                 + (f", {jobs} jobs" if isinstance(jobs, int) else "") + ")."
             )
 
-    last_new = _parse_time(data.get("last_new_job_at"))
-    if last_new is not None:
-        age = (now - last_new).total_seconds()
-        if age > new_job_stale_hours * 3600:
-            failing[KEY_NEW_JOBS] = (
-                f"**No new job stored for {_hours(age)}** (last: "
-                f"{last_new:%Y-%m-%d %H:%M} UTC, limit {new_job_stale_hours:g}h). "
-                f"Cycles may run but every board is returning nothing new."
-            )
-        else:
-            cleared[KEY_NEW_JOBS] = f"New jobs are arriving again (newest {_hours(age)} old)."
     return failing, cleared
 
 
@@ -176,22 +174,27 @@ def main(argv: list[str] | None = None, fetch: Fetch = http_get) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--url", default=os.getenv("GOSHA_PUBLIC_URL") or DEFAULT_BASE_URL)
     parser.add_argument("--state-file", type=Path, default=Path("site-watchdog-state.json"))
-    parser.add_argument("--dry-run", action="store_true", help="print, post nothing")
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="print what would be said; post nothing, leave the state file alone",
+    )
     args = parser.parse_args(argv)
 
     failing, cleared = evaluate(
         args.url, fetch,
         scrape_stale_hours=_env_float("WATCHDOG_SCRAPE_STALE_HOURS", 3.0),
-        new_job_stale_hours=_env_float("WATCHDOG_NEW_JOB_STALE_HOURS", 24.0),
     )
-    try:
-        previous_state = args.state_file.read_bytes()
-    except OSError:
-        previous_state = None
     alerter = Alerter(
         cooldown_seconds=_env_float("WATCHDOG_REMIND_HOURS", 6.0) * 3600,
         state_path=args.state_file,
+        flap_window_seconds=FLAP_WINDOW_SECONDS,
     )
+    if args.dry_run:
+        alerter.state_path = None  # read the state, never write it
+    # Keys this watchdog no longer judges (site:no_new_jobs) would stay
+    # "active" in the carried state forever; drop them without a word.
+    alerter.forget([k for k in alerter.active if k not in KEYS])
+    snapshot = alerter.snapshot()
     dispatch = alerter.decide(failing, cleared)
 
     for text in failing.values():
@@ -199,29 +202,32 @@ def main(argv: list[str] | None = None, fetch: Fetch = http_get) -> int:
     if not failing:
         print("OK: the site answers and scraping is fresh.")
 
+    delivered = False
     if dispatch:
         message = format_dispatch("site watchdog", dispatch)
         if args.dry_run:
             print(f"--- would post ---\n{message}")
         elif not alerts_enabled():
-            print("Alerts disabled (ALERTS_ENABLED=false); nobody was told.")
+            print("Alerts are switched off (ALERTS_ENABLED); nobody was told.")
         elif not (os.getenv("DISCORD_TOKEN", "").strip()
                   and os.getenv("ALERT_DM_USER_IDS", "").strip()):
             print(
                 "::warning::DISCORD_TOKEN / ALERT_DM_USER_IDS not set; nobody was told.",
                 file=sys.stderr,
             )
+        elif post_dm_sync(message):
+            delivered = True
         else:
-            if not post_dm_sync(message):
-                print("::error::Sending the Discord DM failed.", file=sys.stderr)
-                # Undelivered: forget this run's decisions so the next run
-                # says it again instead of treating it as already sent.
-                if previous_state is None:
-                    args.state_file.unlink(missing_ok=True)
-                else:
-                    args.state_file.write_bytes(previous_state)
-    return 1 if failing else 0
-
+            print("::error::Sending the Discord DM failed.", file=sys.stderr)
+        if not delivered:
+            # Nobody heard it: undo this run's decisions so the next run
+            # says it again instead of treating it as already said.
+            alerter.rollback(snapshot, dispatch.keys)
+    # Red while anything failing has not reached the owner in a delivered
+    # DM within the cooldown: a flap still inside its window, a failed or
+    # unconfigured DM. GitHub's failure email is then the fallback.
+    told = all(alerter.is_told(key) for key in failing)
+    return 1 if failing and not told else 0
 
 if __name__ == "__main__":
     raise SystemExit(main())

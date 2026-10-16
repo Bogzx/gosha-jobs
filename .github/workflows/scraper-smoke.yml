@@ -79,10 +79,15 @@ jobs:
             // Same rules as the issue: only on a state change, never per run.
             // A DM from the bot (Discord REST: open the DM channel, post).
             async function page(text) {
+              // Same off switch as gosha/alerts.py: blank = on, else only
+              // 1/true/yes/on = on. Same ID syntax (alerts.USER_ID_PATTERN):
+              // 123, <@123> or <@!123>.
+              const enabled = (process.env.ALERTS_ENABLED || '').trim().toLowerCase();
+              if (enabled && !['1', 'true', 'yes', 'on'].includes(enabled)) return;
               const token = (process.env.DISCORD_BOT_TOKEN || '').trim();
-              const ids = (process.env.ALERT_DM_USER_IDS || '')
-                .split(',').map((s) => s.trim()).filter((s) => /^\d+$/.test(s));
-              if ((process.env.ALERTS_ENABLED || '').toLowerCase() === 'false') return;
+              const ids = [...new Set((process.env.ALERT_DM_USER_IDS || '')
+                .split(',').map((s) => s.trim().match(/^(?:<@!?(\d+)>|(\d+))$/))
+                .filter(Boolean).map((m) => m[1] || m[2]))];
               if (!token || ids.length === 0) {
                 core.notice('DISCORD_BOT_TOKEN / ALERT_DM_USER_IDS not set; Discord was not told.');
                 return;

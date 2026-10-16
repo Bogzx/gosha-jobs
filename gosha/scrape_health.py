@@ -31,7 +31,7 @@ Database signals, judged hourly (check_data_quality):
 
 Every signal is a keyed *condition* (`conditions` failing, `cleared`
 positively healthy, anything else unknown); gosha/alerts.py turns those
-into a channel post + owner DMs with cooldown and recovery messages.
+into owner DMs with cooldown and recovery messages.
 
 Yields are counted on what each board RETURNED (unique postings), before
 the pipeline's relevance filter. Counting after it made a working board
@@ -50,10 +50,11 @@ one under data/), so streaks and yield baselines survive deploys.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import statistics
-from collections.abc import Iterable, Mapping
+from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -67,6 +68,10 @@ ZERO_STREAK_ALERT = 3
 # Re-log cadence so a source that stays dead isn't silently forgotten in
 # the logs. (The owner's reminders run on the alerter's cooldown instead.)
 ZERO_STREAK_REPEAT = 12
+# Consecutive all-zero cycles before the owner is paged. One empty cycle
+# is often a blip (a proxy reconnecting, a DNS hiccup) and paging on it
+# meant an alert and a "recovered" an hour apart; two in a row is not.
+ZERO_CYCLES_ALERT = 2
 
 # Yield collapse: below COLLAPSE_RATIO × the source's baseline (median of
 # its last BASELINE_WINDOW non-collapsed, non-zero cycles) for
@@ -74,12 +79,25 @@ ZERO_STREAK_REPEAT = 12
 # COLLAPSE_MIN_BASELINE are too small to judge (5 → 1 is noise). After
 # REBASELINE_AFTER collapsed cycles the new level is accepted as normal —
 # e.g. the subscriptions that drove the old volume were deleted.
+# Deleting the subscription that drove a board's volume looks exactly like
+# a collapse. So when a search a board ran last cycle is gone (the pipeline
+# passes the searches), that board gets SEARCH_CHANGE_GRACE cycles in
+# which a drop below the threshold is taken as its new normal instead of
+# an alert. Its baseline is kept otherwise: an edit that does not cut the
+# yield costs nothing, and added searches never reset anything (they can
+# only add postings). Collapse detection is never blind for more than
+# those cycles, however often users edit.
 COLLAPSE_RATIO = 0.25
 COLLAPSE_MIN_BASELINE = 20
 COLLAPSE_CYCLES = 2
 BASELINE_WINDOW = 8
 BASELINE_MIN_SAMPLES = 3
 REBASELINE_AFTER = 24
+SEARCH_CHANGE_GRACE = COLLAPSE_CYCLES
+# A source missing from this many cycles in a row is forgotten (nobody
+# searches where it applies any more). Not after one: a registry that
+# failed to load for one cycle must not wipe every extra source's state.
+RETIRE_AFTER_CYCLES = 24
 
 KEY_ZERO_YIELD = "scrape:zero_yield"
 
@@ -112,13 +130,19 @@ class CycleReport:
     # Keyed conditions for gosha/alerts.py: failing now / known healthy.
     conditions: dict[str, str] = field(default_factory=dict)
     cleared: dict[str, str] = field(default_factory=dict)
+    # Alert keys of sources no longer attempted at all (nobody searches
+    # where they apply): dropped from the alert state without a message.
+    retired: list[str] = field(default_factory=list)
+    # Set once gosha/alerts.py has judged it, so a cycle that records
+    # nothing (no subscriptions) cannot re-send the previous cycle's alerts.
+    published: bool = False
 
     @property
     def should_alert(self) -> bool:
         return bool(self.alerts)
 
     def summary(self) -> str:
-        """One-line human summary for logs and the Discord alert channel."""
+        """This cycle's state transitions, one per line, for the log."""
         return "\n".join(self.alerts)
 
     def breakdown(self) -> str:
@@ -145,8 +169,10 @@ class ScrapeHealth:
         baseline_window: int = BASELINE_WINDOW,
         baseline_min_samples: int = BASELINE_MIN_SAMPLES,
         rebaseline_after: int = REBASELINE_AFTER,
+        zero_cycles_alert: int = ZERO_CYCLES_ALERT,
         state_path: Path | None = None,
     ) -> None:
+        self.zero_cycles_alert = zero_cycles_alert
         self.streak_threshold = streak_threshold
         self.repeat_every = repeat_every
         self.collapse_ratio = collapse_ratio
@@ -160,6 +186,12 @@ class ScrapeHealth:
         # Recent normal yields per source, oldest first.
         self.history: dict[str, list[int]] = {}
         self.collapse_streaks: dict[str, int] = {}
+        # Per source: fingerprints of the searches it ran last cycle, the
+        # cycles of grace left after one was removed, and how many cycles
+        # running it has not been attempted.
+        self.searches: dict[str, list[str]] = {}
+        self.grace: dict[str, int] = {}
+        self.absent: dict[str, int] = {}
         self.last_report: CycleReport | None = None
         self.state_path = state_path
         if state_path is not None:
@@ -184,6 +216,11 @@ class ScrapeHealth:
             self.collapse_streaks = {
                 str(k): int(v) for k, v in raw.get("collapse_streaks", {}).items()
             }
+            self.searches = {
+                str(k): [str(x) for x in v] for k, v in raw.get("searches", {}).items()
+            }
+            self.grace = {str(k): int(v) for k, v in raw.get("grace", {}).items()}
+            self.absent = {str(k): int(v) for k, v in raw.get("absent", {}).items()}
         except FileNotFoundError:
             return
         except (OSError, ValueError, TypeError, AttributeError) as exc:
@@ -197,6 +234,9 @@ class ScrapeHealth:
             "streaks": self.streaks,
             "history": self.history,
             "collapse_streaks": self.collapse_streaks,
+            "searches": self.searches,
+            "grace": self.grace,
+            "absent": self.absent,
         }
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,6 +259,7 @@ class ScrapeHealth:
         attempted: Iterable[str],
         per_source: Mapping[str, int],
         kept: Mapping[str, int] | None = None,
+        searches: Mapping[str, Iterable[Hashable]] | Iterable[Hashable] | None = None,
     ) -> CycleReport:
         """Fold one cycle's yields into the running state.
 
@@ -227,6 +268,10 @@ class ScrapeHealth:
         would simply disappear from the accounting instead of alerting.
         `per_source` is what each source returned; `kept` (optional) what
         survived the relevance filter, reported but not judged.
+        `searches` (optional) identifies the searches this cycle ran, per
+        source ({source: [search, …]}) or for all sources at once (e.g. the
+        (keyword, location, boards, max_age) combos). A source whose
+        searches lost one gets a grace period for a yield drop.
         """
         attempted_list = sorted({s for s in attempted if s})
         counts = {s: int(per_source.get(s, 0)) for s in attempted_list}
@@ -251,9 +296,18 @@ class ScrapeHealth:
             self.zero_cycle_streak = 0
         report.zero_cycle_streak = self.zero_cycle_streak
 
+        if searches is not None:
+            self._track_searches(searches, set(counts))
+        if counts:
+            self._retire_unattempted(report, set(counts))
+
         for source, count in sorted(counts.items()):
             self._judge_dead(report, source, count)
             self._judge_collapse(report, source, count)
+            if self.grace.get(source, 0) > 0:
+                self.grace[source] -= 1
+                if not self.grace[source]:
+                    del self.grace[source]
 
         if report.zero_yield and counts:
             text = (
@@ -262,7 +316,8 @@ class ScrapeHealth:
                 f"Nothing is being delivered to anyone."
             )
             report.alerts.insert(0, text)
-            report.conditions[KEY_ZERO_YIELD] = text
+            if self.zero_cycle_streak >= self.zero_cycles_alert:
+                report.conditions[KEY_ZERO_YIELD] = text
             # Every source is at zero; one line says it better than seven
             # "adapter probably broken" lines.
             for source in counts:
@@ -283,6 +338,47 @@ class ScrapeHealth:
         self.last_report = report
         self._save()
         return report
+
+    def _retire_unattempted(self, report: CycleReport, current: set[str]) -> None:
+        """Forget sources not attempted for RETIRE_AFTER_CYCLES cycles.
+
+        Their streaks and baselines would otherwise sit in the state file
+        forever, and an alert raised while they were attempted would stay
+        "active" with nothing left to clear it.
+        """
+        tracked = set(self.streaks) | set(self.history) | set(self.collapse_streaks)
+        for source in current:
+            self.absent.pop(source, None)
+        for source in sorted(tracked - current):
+            self.absent[source] = self.absent.get(source, 0) + 1
+            if self.absent[source] < RETIRE_AFTER_CYCLES:
+                continue
+            for state in (self.streaks, self.history, self.collapse_streaks,
+                          self.searches, self.grace, self.absent):
+                state.pop(source, None)
+            report.retired.extend([dead_key(source), collapse_key(source)])
+
+    def _track_searches(
+        self, searches: Mapping[str, Iterable[Hashable]] | Iterable[Hashable],
+        current: set[str],
+    ) -> None:
+        def prints(items: Iterable[Hashable]) -> list[str]:
+            return sorted({
+                hashlib.sha256(repr(item).encode("utf-8")).hexdigest()[:12] for item in items
+            })
+
+        if isinstance(searches, Mapping):
+            by_source = {str(k): prints(v) for k, v in searches.items()}
+        else:
+            shared = prints(searches)
+            by_source = {source: shared for source in current}
+        for source, now in by_source.items():
+            before = self.searches.get(source)
+            if before is not None and set(before) - set(now):
+                log.info("Scrape health: %s lost a search; a yield drop in the next "
+                         "%d cycles is taken as its new normal.", source, SEARCH_CHANGE_GRACE)
+                self.grace[source] = SEARCH_CHANGE_GRACE
+            self.searches[source] = now
 
     def _judge_dead(self, report: CycleReport, source: str, count: int) -> None:
         previous = self.streaks.get(source, 0)
@@ -325,6 +421,15 @@ class ScrapeHealth:
             and baseline >= self.collapse_min_baseline
             and count < self.collapse_ratio * baseline
         ):
+            if self.grace.get(source, 0) > 0:
+                # A search this board ran is gone: that explains the drop.
+                hist[:] = [count]
+                self.collapse_streaks[source] = 0
+                report.cleared[key] = (
+                    f"**{source}**: one of its searches was removed, so ~{count} jobs "
+                    f"per cycle (was ~{baseline:.0f}) is taken as its new normal."
+                )
+                return
             streak = self.collapse_streaks.get(source, 0) + 1
             self.collapse_streaks[source] = streak
             if streak >= self.rebaseline_after:
@@ -369,8 +474,9 @@ def get_scrape_health() -> ScrapeHealth:
 
 def reset_scrape_health() -> None:
     """Drop the tracker — tests and manual re-baselining."""
-    global _health
+    global _health, _previous_cohort
     _health = None
+    _previous_cohort = None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -388,10 +494,20 @@ EMPTY_DESC_NORMAL_RATE = 0.5
 # than this without a vector means both are failing.
 EMBED_GRACE = timedelta(hours=3)
 EMBED_BACKLOG_ALERT = 10
-NO_NEW_JOBS_HOURS = 24
+# Two days, not one: a quiet weekend on narrow searches is normal.
+NO_NEW_JOBS_HOURS = 48
 
 KEY_EMBEDDINGS = "data:embeddings"
 KEY_NO_NEW_JOBS = "data:no_new_jobs"
+
+
+# Progress of a backfill (typically re-embedding everything after a model
+# change), measured on a fixed cohort: at each check, how many jobs first
+# seen before the grace cutoff carry a current-model embedding, active or
+# not. If that number grew since the previous check, embedding works and
+# is catching up. (A shrinking backlog was the old measure; jobs going
+# inactive shrink it too.) (cutoff, embedded count) of the last check.
+_previous_cohort: tuple[datetime, int] | None = None
 
 
 def descriptions_key(source: str) -> str:
@@ -443,10 +559,11 @@ def judge_descriptions(
 
 async def check_data_quality(now: datetime | None = None) -> QualityReport:
     """Judge what the scrape cycles stored: descriptions, embeddings, freshness."""
+    global _previous_cohort
     from sqlalchemy import case, func, or_, select
 
     from gosha.database import get_session
-    from gosha.embeddings import stale_model_clause
+    from gosha.embeddings import current_model_clause, stale_model_clause
     from gosha.models import Job, Subscription
 
     now = now or datetime.now(timezone.utc)
@@ -472,13 +589,32 @@ async def check_data_quality(now: datetime | None = None) -> QualityReport:
             .group_by(Job.source)
         )).all()
 
-        backlog = (await session.execute(
-            select(func.count(Job.id)).where(
+        backlog, reembed = (await session.execute(
+            select(
+                func.count(Job.id),
+                # Embedded, but by another model: a model change's backfill.
+                func.sum(case((Job.embedding.isnot(None), 1), else_=0)),
+            ).where(
                 Job.is_active.is_(True),
                 Job.first_seen_at < now - EMBED_GRACE,
                 or_(Job.embedding.is_(None), stale_model_clause(Job.embedding_model)),
             )
-        )).scalar() or 0
+        )).one()
+        backlog, reembed = int(backlog or 0), int(reembed or 0)
+
+        embedded = Job.embedding.isnot(None) & current_model_clause(Job.embedding_model)
+
+        async def embedded_before(cutoff: datetime) -> int:
+            return int((await session.execute(
+                select(func.count(Job.id)).where(Job.first_seen_at < cutoff, embedded)
+            )).scalar() or 0)
+
+        cutoff = now - EMBED_GRACE
+        embedded_now = await embedded_before(cutoff)
+        progressing: bool | None = None
+        if _previous_cohort is not None:
+            then_cutoff, then_count = _previous_cohort
+            progressing = await embedded_before(then_cutoff) > then_count
 
         last_new = (await session.execute(select(func.max(Job.first_seen_at)))).scalar()
         active_subs = (await session.execute(
@@ -491,8 +627,17 @@ async def check_data_quality(now: datetime | None = None) -> QualityReport:
             int(base or 0), int(base_empty or 0),
         )
 
-    report.embedding_backlog = int(backlog)
-    if backlog >= EMBED_BACKLOG_ALERT:
+    _previous_cohort = (cutoff, embedded_now)
+    report.embedding_backlog = backlog
+    if backlog >= EMBED_BACKLOG_ALERT and progressing:
+        log.info("Embedding backlog %d, but older jobs are being embedded: a backfill "
+                 "is progressing.", backlog)
+    elif backlog >= EMBED_BACKLOG_ALERT and progressing is None and reembed:
+        # Just started, mid model change: judge it at the next check, once
+        # it is clear whether the backfill is moving.
+        log.info("Embedding backlog %d (%d from a model change); judging next hour.",
+                 backlog, reembed)
+    elif backlog >= EMBED_BACKLOG_ALERT:
         report.conditions[KEY_EMBEDDINGS] = (
             f"**{backlog} active jobs** first seen over {int(EMBED_GRACE.total_seconds() // 3600)}h "
             f"ago still have no embedding. The embedding step is failing (model "

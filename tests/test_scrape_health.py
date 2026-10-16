@@ -26,6 +26,15 @@ def test_zero_yield_cycle_alerts_immediately():
     assert report.zero_cycle_streak == 1
 
 
+def test_zero_yield_pages_from_the_second_cycle():
+    health = ScrapeHealth()
+    first = health.record_cycle(["ejobs"], {})
+    assert first.conditions == {}  # logged (alerts), not paged
+    assert first.should_alert
+    second = health.record_cycle(["ejobs"], {})
+    assert "scrape:zero_yield" in second.conditions
+
+
 def test_zero_yield_streak_counts_up_and_resets():
     health = ScrapeHealth()
     for expected in (1, 2, 3):
@@ -160,9 +169,11 @@ async def test_cycle_dms_health_alert_when_nothing_is_scraped(
     bot = FakeBot()
 
     total = await pipeline.run_scrape_cycle(bot, None, alert_channel_id=42)
-
     assert total == 0
-    assert bot.dms(OWNER), "a zero-yield cycle must alert, not stay silent"
+    assert bot.dms(OWNER) == []  # one empty cycle can be a blip
+    await pipeline.run_scrape_cycle(bot, None, alert_channel_id=42)
+
+    assert bot.dms(OWNER), "zero-yield cycles must alert, not stay silent"
     assert "Scraper health" in bot.dms(OWNER)[0]
     assert bot.channel.sent == []
     reset_scrape_health()
@@ -200,3 +211,66 @@ def test_breakdown_shows_scraped_and_kept():
     assert report.breakdown() == "ejobs=212→15, indeed=30→0"
     # Zero kept is not zero scraped: nothing alerts.
     assert not report.should_alert
+
+
+def test_sources_no_longer_attempted_are_forgotten(tmp_path):
+    """Nobody searches remote any more: remoteok's state must not linger."""
+    path = tmp_path / "scrape_health.json"
+    health = ScrapeHealth(state_path=path)
+    for _ in range(3):
+        report = health.record_cycle(["ejobs", "remoteok"], {"ejobs": 30})
+    assert "scrape:dead:remoteok" in report.conditions
+
+    from gosha.scrape_health import RETIRE_AFTER_CYCLES
+
+    for _ in range(RETIRE_AFTER_CYCLES - 1):
+        report = health.record_cycle(["ejobs"], {"ejobs": 30})
+        assert report.retired == []
+    assert "remoteok" in ScrapeHealth(state_path=path).streaks  # survives a restart
+    report = health.record_cycle(["ejobs"], {"ejobs": 30})
+    assert set(report.retired) == {"scrape:dead:remoteok", "scrape:collapse:remoteok"}
+    assert "remoteok" not in ScrapeHealth(state_path=path).streaks
+
+
+def test_one_cycle_without_a_source_does_not_forget_it():
+    """Lead review (E): get_extra_scrapers() failing once used to wipe every
+    extra source's baseline and drop its alerts."""
+    health = ScrapeHealth()
+    for _ in range(3):
+        health.record_cycle(["ejobs", "hipo"], {"ejobs": 300, "hipo": 300})
+    report = health.record_cycle(["indeed"], {"indeed": 50})  # extras failed to load
+    assert report.retired == []
+    assert health.baseline("ejobs") == 300
+    health.record_cycle(["ejobs", "hipo"], {"ejobs": 3, "hipo": 300})
+    assert "scrape:collapse:ejobs" in health.record_cycle(
+        ["ejobs", "hipo"], {"ejobs": 3, "hipo": 300}).conditions
+
+
+@pytest.mark.asyncio
+async def test_retired_source_alert_is_dropped_without_a_message(monkeypatch):
+    from gosha import alerts
+    from gosha.alerts import get_alerter, reset_alerter
+    from tests.test_alerts import OWNER, FakeBot
+
+    class Store:
+        async def emit(self, *a, **kw):
+            pass
+
+    monkeypatch.setattr("gosha.events.get_event_store", lambda: Store())
+    reset_alerter()
+    bot = FakeBot()
+    health = ScrapeHealth()
+    for _ in range(3):
+        report = health.record_cycle(["ejobs", "remoteok"], {"ejobs": 30})
+        await alerts.publish_scrape_report(bot, 0, report)
+    assert len(bot.dms(OWNER)) == 1
+    assert "scrape:dead:remoteok" in get_alerter().active
+
+    from gosha.scrape_health import RETIRE_AFTER_CYCLES
+
+    for _ in range(RETIRE_AFTER_CYCLES):
+        await alerts.publish_scrape_report(
+            bot, 0, health.record_cycle(["ejobs"], {"ejobs": 30}))
+    assert "scrape:dead:remoteok" not in get_alerter().active
+    assert len(bot.dms(OWNER)) == 1  # no misleading "recovered"
+    reset_alerter()

@@ -62,3 +62,24 @@ async def test_freshness_is_cached(client, monkeypatch):
     for _ in range(5):
         await client.get("/api/v1/health/freshness")
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_freshness_failure_is_cached_too(monkeypatch):
+    """A database outage must not make every unauthenticated probe a query."""
+    calls = []
+
+    async def failing():
+        calls.append(1)
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(freshness, "_compute", failing)
+    for _ in range(5):
+        with pytest.raises(RuntimeError):
+            await freshness.scrape_freshness()
+    assert len(calls) == 1
+
+    monkeypatch.setattr(freshness.time, "monotonic", lambda: 10**9)  # a minute later
+    with pytest.raises(RuntimeError):
+        await freshness.scrape_freshness()
+    assert len(calls) == 2

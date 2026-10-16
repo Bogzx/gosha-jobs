@@ -43,6 +43,9 @@ def test_bot_check_fails_without_heartbeat(tmp_path):
 def _run_watchdog(tmp_path: Path, body: str, **env_extra: str) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["GOSHA_HEARTBEAT_FILE"] = str(tmp_path / "heartbeat")
+    # The watchdog really pages before exiting; a machine with DISCORD_TOKEN
+    # and ALERT_DM_USER_IDS exported must not get a real DM from a test.
+    env["ALERTS_ENABLED"] = "false"
     env.update(env_extra)
     code = "import time\nfrom gosha import heartbeat\n" + body
     return subprocess.run(
@@ -100,21 +103,64 @@ def test_watchdog_can_be_disabled(tmp_path):
     assert "disabled" in result.stdout
 
 
-def test_watchdog_dms_the_owner_before_exiting(monkeypatch):
+def test_watchdog_subprocess_never_pages_for_real(tmp_path):
+    """The env the watchdog tests run under has alerts off, whatever the
+    developer's shell exports."""
+    result = _run_watchdog(tmp_path, (
+        "from gosha import alerts\n"
+        "print('enabled' if alerts.alerts_enabled() else 'off')\n"
+    ), DISCORD_TOKEN="x", ALERT_DM_USER_IDS="1")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "off"
+
+
+def test_watchdog_dms_the_owner_before_exiting(monkeypatch, tmp_path):
     """(f) A wedged loop cannot use discord.py; the REST DM path is used."""
     from gosha import alerts, heartbeat
 
+    monkeypatch.setenv("GOSHA_HEARTBEAT_FILE", str(tmp_path / "heartbeat"))
     sent: list[str] = []
     monkeypatch.setattr(alerts, "post_dm_sync", lambda text, **kw: sent.append(text) or True)
     heartbeat._page_owner(950, 900)
     assert sent and "no heartbeat for 950s" in sent[0]
 
 
-def test_watchdog_paging_failure_never_blocks_the_exit(monkeypatch):
+def test_watchdog_paging_failure_never_blocks_the_exit(monkeypatch, tmp_path):
     from gosha import alerts, heartbeat
+
+    monkeypatch.setenv("GOSHA_HEARTBEAT_FILE", str(tmp_path / "heartbeat"))
 
     def boom(text, **kw):
         raise RuntimeError("network")
 
     monkeypatch.setattr(alerts, "post_dm_sync", boom)
     heartbeat._page_owner(950, 900)  # must not raise
+
+
+def test_watchdog_pages_at_most_once_an_hour(monkeypatch, tmp_path):
+    """A bot that wedges after every restart must not page on every restart."""
+    from gosha import alerts, heartbeat
+
+    monkeypatch.setenv("GOSHA_HEARTBEAT_FILE", str(tmp_path / "heartbeat"))
+    sent: list[str] = []
+    monkeypatch.setattr(alerts, "post_dm_sync", lambda text, **kw: sent.append(text) or True)
+    heartbeat._page_owner(950, 900)
+    heartbeat._page_owner(950, 900)  # the next process, minutes later
+    assert len(sent) == 1
+    assert (tmp_path / "watchdog_paged_at").exists()
+
+    monkeypatch.setattr(heartbeat.time, "time", lambda: 10**10)  # far later
+    heartbeat._page_owner(950, 900)
+    assert len(sent) == 2
+
+
+def test_watchdog_undelivered_page_is_not_counted(monkeypatch, tmp_path):
+    from gosha import alerts, heartbeat
+
+    monkeypatch.setenv("GOSHA_HEARTBEAT_FILE", str(tmp_path / "heartbeat"))
+    attempts: list[str] = []
+    monkeypatch.setattr(alerts, "post_dm_sync", lambda text, **kw: attempts.append(text) and False)
+    heartbeat._page_owner(950, 900)
+    heartbeat._page_owner(950, 900)
+    assert len(attempts) == 2
+    assert not (tmp_path / "watchdog_paged_at").exists()

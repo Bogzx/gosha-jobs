@@ -42,6 +42,10 @@ HEARTBEAT_STALE_SECONDS = 300
 # 0 turns the watchdog off.
 WATCHDOG_STALE_SECONDS = 900
 WATCHDOG_POLL_SECONDS = 30
+# A bot that wedges again right after every restart would page on every
+# restart. At most one watchdog DM per this many seconds; the stamp lives
+# next to the heartbeat (data/, a volume) so it survives the restart.
+PAGE_MIN_INTERVAL_SECONDS = 3600
 
 # monotonic() of the last touch() in this process. The watchdog reads this
 # rather than the file, so a data directory it cannot write to (a warning
@@ -93,18 +97,35 @@ def watchdog_seconds() -> float:
         return WATCHDOG_STALE_SECONDS
 
 
+def page_stamp_path() -> Path:
+    return heartbeat_path().with_name("watchdog_paged_at")
+
+
+def _paged_recently(now: float) -> bool:
+    try:
+        last = float(page_stamp_path().read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    return 0 <= now - last < PAGE_MIN_INTERVAL_SECONDS
+
+
 def _page_owner(stale: float, limit: float) -> None:
     """DM the owner before exiting, through the one path that works now.
 
     The loop is wedged, so discord.py cannot send anything; a plain-urllib
     call to Discord's REST API with the bot token can (ALERT_DM_USER_IDS,
     off with ALERTS_ENABLED=false). Bounded by a short timeout so a dead
-    network cannot keep the wedged process alive.
+    network cannot keep the wedged process alive. At most one DM per
+    PAGE_MIN_INTERVAL_SECONDS; an undelivered one does not count.
     """
+    now = time.time()
+    if _paged_recently(now):
+        log.error("Watchdog: owner already paged within the last hour; not paging again.")
+        return
     try:
         from gosha.alerts import post_dm_sync
 
-        post_dm_sync(
+        delivered = post_dm_sync(
             f"🚨 **GOSHA bot watchdog**: no heartbeat for {stale:.0f}s (limit "
             f"{limit:.0f}s) — the event loop stopped running scheduled jobs. "
             "Restarting the bot; the thread dump is in its log "
@@ -113,6 +134,12 @@ def _page_owner(stale: float, limit: float) -> None:
         )
     except Exception as exc:  # exiting regardless
         log.error("Watchdog could not page the owner: %s", exc)
+        return
+    if delivered:
+        try:
+            page_stamp_path().write_text(str(now), encoding="utf-8")
+        except OSError as exc:
+            log.warning("Could not record the watchdog page time: %s", exc)
 
 
 def start_watchdog(

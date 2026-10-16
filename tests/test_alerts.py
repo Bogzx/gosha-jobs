@@ -9,6 +9,7 @@ import pytest
 
 from gosha.alerts import (
     Alerter,
+    Dispatch,
     DiscordAlertSink,
     alert_recipients,
     format_dispatch,
@@ -280,6 +281,94 @@ def test_repeated_scheduler_errors_page_once():
     assert not alerter.decide(*scheduler_event_conditions(event, {"scrape_cycle"}))
 
 
+def test_flapping_scheduler_job_is_not_two_dms_per_run():
+    """MAX_INSTANCES → ran → MAX_INSTANCES … used to page on every flip."""
+    from apscheduler.events import (
+        EVENT_JOB_EXECUTED,
+        EVENT_JOB_MAX_INSTANCES,
+        JobExecutionEvent,
+        JobSubmissionEvent,
+    )
+
+    clock = Clock()
+    alerter = Alerter(cooldown_seconds=6 * 3600, clock=clock)  # 2h flap window
+    jobs = {"scrape_cycle"}
+    skipped = JobSubmissionEvent(EVENT_JOB_MAX_INSTANCES, "scrape_cycle", "default", [])
+    ran = JobExecutionEvent(EVENT_JOB_EXECUTED, "scrape_cycle", "default", None)
+    said: list[Dispatch] = []
+    for _ in range(12):  # a day of hourly flips
+        for event in (skipped, ran):
+            dispatch = alerter.decide(*scheduler_event_conditions(event, jobs))
+            if dispatch:
+                said.append(dispatch)
+            clock.t += 3600
+    assert said[0].raised and said[1].recovered
+    assert len(said) <= 12  # was 24 (one per event)
+
+
+def test_failure_back_soon_after_recovery_is_paged_once_it_outlasts_the_window():
+    """Lead review (A): raise, recovered at 30m, failing again at 31m must
+    not stay silent until ~6h after the recovery."""
+    clock = Clock()
+    alerter = Alerter(cooldown_seconds=6 * 3600, flap_window_seconds=3600, clock=clock)
+    assert alerter.decide({"k": "down"}).raised
+    clock.t += 30 * 60
+    assert alerter.decide({}, {"k": "up"}).recovered
+    clock.t += 60
+    assert not alerter.decide({"k": "down"})  # inside the window: maybe a flap
+    assert not alerter.is_told("k")
+    clock.t += 30 * 60
+    assert not alerter.decide({"k": "down"})  # 31m after the recovery
+    clock.t += 30 * 60
+    paged = alerter.decide({"k": "down"})  # 61m: outlasted the window
+    assert len(paged.raised) == 1 and "failing again" in paged.raised[0]
+    assert alerter.is_told("k")
+    clock.t += 60
+    assert alerter.decide({}, {"k": "up"}).recovered  # it was mentioned
+
+
+def test_flap_back_inside_the_window_clears_silently():
+    clock = Clock()
+    alerter = Alerter(cooldown_seconds=3600 * 6, flap_window_seconds=3600, clock=clock)
+    alerter.decide({"k": "broken"})
+    alerter.decide({}, {"k": ""})
+    clock.t += 60
+    alerter.decide({"k": "broken"})
+    clock.t += 60
+    assert not alerter.decide({}, {"k": ""})
+
+
+def test_reraise_after_the_window_is_a_fresh_page():
+    clock = Clock()
+    alerter = Alerter(cooldown_seconds=6 * 3600, flap_window_seconds=3600, clock=clock)
+    alerter.decide({"k": "broken"})
+    alerter.decide({}, {"k": ""})
+    clock.t += 3601
+    assert alerter.decide({"k": "broken"}).raised == ["broken"]
+
+
+def test_failed_delivery_rolls_back_only_its_own_keys():
+    """Lead review (D): a concurrent task's delivered decision survives."""
+    clock = Clock()
+    alerter = Alerter(cooldown_seconds=3600, clock=clock)
+    snapshot = alerter.snapshot()
+    mine = alerter.decide({"mine": "x"})
+    other = alerter.decide({"other": "y"})  # another task, delivered fine
+    assert other.keys == ["other"]
+    alerter.rollback(snapshot, mine.keys)
+    assert "mine" not in alerter.active and "other" in alerter.active
+
+
+def test_flapping_memory_survives_a_restart(tmp_path):
+    clock = Clock()
+    path = tmp_path / "alerts.json"
+    first = Alerter(cooldown_seconds=3600, state_path=path, clock=clock)
+    first.decide({"k": "broken"})
+    first.decide({}, {"k": ""})
+    clock.t += 60
+    assert not Alerter(cooldown_seconds=3600, state_path=path, clock=clock).decide({"k": "x"})
+
+
 # ── Out-of-process DM (REST, no discord.py) ──────────────────────────
 
 
@@ -344,3 +433,120 @@ def test_post_dm_sync_off_switches_and_failures(monkeypatch):
     monkeypatch.delenv("ALERTS_ENABLED")
     monkeypatch.setenv("ALERT_DM_USER_IDS", "")
     assert post_dm_sync("x") is False and calls == []
+
+
+# ── Delivery: closed DMs, deduplicated per user ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_closed_dms_are_said_once_per_user_then_recovered():
+    from gosha.alerts import report_closed_dms
+
+    bot = FakeBot()
+    await report_closed_dms(bot, [7, 8, 7])
+    assert len(bot.dms(OWNER)) == 1
+    assert "`7`" in bot.dms(OWNER)[0] and "`8`" in bot.dms(OWNER)[0]
+
+    # Every later cycle used to repeat the list.
+    for _ in range(5):
+        await report_closed_dms(bot, [7, 8])
+    await report_closed_dms(bot, [7, 8, 9])
+    assert len(bot.dms(OWNER)) == 2 and "`9`" in bot.dms(OWNER)[1]
+    assert "`7`" not in bot.dms(OWNER)[1]
+
+    # Nothing to deliver to 8 this cycle: not a recovery.
+    await report_closed_dms(bot, [], delivered=[])
+    assert len(bot.dms(OWNER)) == 2
+    await report_closed_dms(bot, [], delivered=[8, 12345])
+    assert len(bot.dms(OWNER)) == 3
+    assert "recovered" in bot.dms(OWNER)[2] and "`8`" in bot.dms(OWNER)[2]
+
+
+@pytest.mark.asyncio
+async def test_closed_dms_respect_the_off_switch():
+    from gosha.alerts import report_closed_dms
+
+    bot = FakeBot(enabled=False)
+    await report_closed_dms(bot, [7])
+    assert bot.dms(OWNER) == []
+
+
+# ── Stale report: a cycle that recorded nothing re-sends nothing ─────
+
+
+@pytest.mark.asyncio
+async def test_a_report_is_judged_once(monkeypatch):
+    from gosha import alerts
+    from gosha.scrape_health import ScrapeHealth
+
+    events: list[dict] = []
+
+    class Store:
+        async def emit(self, event_type, payload=None, **kw):
+            events.append(payload)
+
+    monkeypatch.setattr("gosha.events.get_event_store", lambda: Store())
+    health = ScrapeHealth()
+    health.record_cycle(["ejobs"], {})
+    report = health.record_cycle(["ejobs"], {})  # second empty cycle: pages
+    bot = FakeBot()
+    assert await alerts.publish_scrape_report(bot, 0, report)
+    # alerter forgotten (e.g. restart without state) — the stale report
+    # would page again if it were judged a second time.
+    reset_alerter()
+    assert not await alerts.publish_scrape_report(bot, 0, health.last_report)
+    assert len(bot.dms(OWNER)) == 1
+    # Still a finished cycle for the freshness endpoint.
+    assert events[-1] == {"total": 0, "sources": 0, "idle": True}
+    assert events[0] == {"total": 0, "sources": 1}
+
+
+# ── Undelivered alerts are retried, not counted as said ──────────────
+
+
+@pytest.mark.asyncio
+async def test_undelivered_alert_is_raised_again_next_check(tmp_path):
+    bot = FakeBot(closed_dms=(OWNER,))  # every DM to the owner fails
+    alerter = Alerter(cooldown_seconds=3600, state_path=tmp_path / "s.json", clock=Clock())
+    sink = sink_for_bot(bot)
+    assert await sink.send("x") is False
+    await alerter.update(sink, {"k": "broken"})
+    assert "k" not in alerter.active
+    assert "k" not in Alerter(state_path=tmp_path / "s.json").active  # persisted too
+
+    bot.users[OWNER].fail = False
+    await alerter.update(sink, {"k": "broken"})
+    assert len(bot.dms(OWNER)) == 1 and "broken" in bot.dms(OWNER)[0]
+
+
+@pytest.mark.asyncio
+async def test_undelivered_recovery_is_said_again_next_check():
+    bot = FakeBot()
+    alerter = Alerter(cooldown_seconds=3600, clock=Clock())
+    sink = sink_for_bot(bot)
+    await alerter.update(sink, {"k": "broken"})
+    bot.users[OWNER].fail = True
+    await alerter.update(sink, {}, {"k": "fine again"})
+    assert "k" in alerter.active
+    bot.users[OWNER].fail = False
+    await alerter.update(sink, {}, {"k": "fine again"})
+    assert len(bot.dms(OWNER)) == 2 and "fine again" in bot.dms(OWNER)[1]
+
+
+@pytest.mark.asyncio
+async def test_scrape_report_retried_when_the_dm_fails(monkeypatch):
+    from gosha import alerts
+    from gosha.scrape_health import ScrapeHealth
+
+    class Store:
+        async def emit(self, *a, **kw):
+            pass
+
+    monkeypatch.setattr("gosha.events.get_event_store", lambda: Store())
+    bot = FakeBot(closed_dms=(OWNER,))
+    health = ScrapeHealth()
+    health.record_cycle(["ejobs"], {})
+    await alerts.publish_scrape_report(bot, 0, health.record_cycle(["ejobs"], {}))
+    bot.users[OWNER].fail = False
+    await alerts.publish_scrape_report(bot, 0, health.record_cycle(["ejobs"], {}))
+    assert len(bot.dms(OWNER)) == 1 and "0 jobs" in bot.dms(OWNER)[0]

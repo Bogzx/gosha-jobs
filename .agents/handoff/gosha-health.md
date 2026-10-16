@@ -1,12 +1,12 @@
 # Handoff: gosha-health — scrape-failure alerting (DM-only to the owner)
 
-Written: 2026-10-16 ~12:06 UTC · Branch: wip/agents-2026-10-16 · Base commit: 5490d6a
+Written: 2026-10-16 ~12:06 UTC, updated on the server 2026-10-16 (lead review applied, all 12 items) · Branch: wip/agents-2026-10-16 · Base commit: c67e734
 
 ## Mission (one paragraph, self-contained)
 User request: "put one agent to check if the jobs are successfully scraped or not, and if they are not send an alert to me @Bogdanila on discord". Later requirement change from the user: **alerts go ONLY as a Discord DM to the owner** (ALERT_DM_USER_IDS, numeric ID). No channel posts, no @mentions, admins are not paged implicitly, and one off switch (`ALERTS_ENABLED=false` or empty `ALERT_DM_USER_IDS`). Detection must cover all-zero cycles, one dead board, yield collapse, empty descriptions, embedding failure, a hung/crashed bot or server down (out of process), and a failing daily smoke workflow, with dedup/cooldown and "recovered" messages.
 
 ## File ownership
-Mine: gosha/alerts.py (new), gosha/scrape_health.py, gosha/heartbeat.py, scripts/healthcheck.py (unchanged), gosha/main.py, gosha/config.py, .env.example, .github/workflows/scraper-smoke.yml, .github/workflows/site-watchdog.yml (new), scripts/site_watchdog.py (new), gosha/services/freshness.py (new), gosha/api/freshness.py (new), docs/ALERTS.md (new), and their tests: tests/test_alerts.py, tests/test_alert_scenarios.py, tests/test_site_watchdog.py, tests/api/test_freshness_api.py (all new), tests/test_scrape_health.py, tests/test_healthcheck_script.py (appended 2 tests).
+Mine: tests/test_alert_switch.py (new, server session), gosha/alerts.py (new), gosha/scrape_health.py, gosha/heartbeat.py, scripts/healthcheck.py (unchanged), gosha/main.py, gosha/config.py, .env.example, .github/workflows/scraper-smoke.yml, .github/workflows/site-watchdog.yml (new), scripts/site_watchdog.py (new), gosha/services/freshness.py (new), gosha/api/freshness.py (new), docs/ALERTS.md (new), and their tests: tests/test_alerts.py, tests/test_alert_scenarios.py, tests/test_site_watchdog.py, tests/api/test_freshness_api.py (all new), tests/test_scrape_health.py, tests/test_healthcheck_script.py (appended 2 tests).
 Minimal edits outside ownership: gosha/pipeline.py `_post_health_alert` body (~line 1018-1030) now delegates to `gosha.alerts.publish_scrape_report` (gosha-pipe was told). gosha/api/app.py: added `"freshness",` to the router tuple in `_mount_routers` (~line 163). README.md: one paragraph before "Backups are built and tested…" pointing to docs/ALERTS.md.
 Do NOT touch: gosha/scrapers/*, matching.py, recommend.py, filters.py (other agents); the rest of pipeline.py is gosha-pipe's.
 
@@ -24,12 +24,12 @@ Do NOT touch: gosha/scrapers/*, matching.py, recommend.py, filters.py (other age
 - Last full suite run (after all edits above, before this handoff): **874 passed, 9 skipped, 0 failed** (`.venv/bin/python -m pytest -q`). ruff check on all my files: clean.
 
 ## In progress (exact state)
-- Nothing half-applied. The original task's report file (/tmp/claude-1000/-data-Repos/2e9dc50a-…/scratchpad/report-health.md, machine-specific) was NOT written; this handoff replaces it.
+- Nothing half-applied. All 12 lead-review corrections are done (see the last section); nothing uncommitted is waiting on anyone.
 
 ## Remaining TODO (prioritized)
-1. Closed-DM notice (gosha/pipeline.py ~861-872, gosha-pipe's code, now an owner DM through sink_for_bot) is **not deduplicated**: it DMs every cycle while any user has closed DMs. Next step: route it through `get_alerter().update(sink_for_bot(bot), {"delivery:closed_dms": text}, {} if closed_dms else {"delivery:closed_dms": ""}, title="Delivery")`, or drop it to a log line. Coordinate with gosha-pipe or the lead.
-2. Owner setup on the server: set `ALERT_DM_USER_IDS=<@Bogdanila numeric id>` in .env and restart the bot. In GitHub, add the secrets DISCORD_BOT_TOKEN and ALERT_DM_USER_IDS, deploy (so /api/v1/health/freshness exists), then run "Site watchdog" manually once.
-3. Optional: a node-executed behaviour test of the smoke `page()` JS with mocked github/core/fetch (currently only syntax and structure are checked).
+1. Owner setup on the server (owner/lead, not an agent: no prod changes): set `ALERT_DM_USER_IDS=<@Bogdanila numeric id>` in .env and restart the bot. In GitHub, add the secrets DISCORD_BOT_TOKEN and ALERT_DM_USER_IDS, deploy (so /api/v1/health/freshness exists), then run "Site watchdog" manually once. After the deploy, delete nothing: the old data/alerts_state.json loads fine (new fields default).
+2. (resolved in the 2nd review: per-board grace on removed searches, pipe passes the per-source mapping.)
+3. Done earlier but worth knowing: the node-executed page() test now exists (tests/test_alert_switch.py).
 
 ## Open review points from the orchestrator
 - Make alerting reliable and reach @Bogdanila: addressed (DM-only per the later change).
@@ -62,7 +62,7 @@ Do NOT touch: gosha/scrapers/*, matching.py, recommend.py, filters.py (other age
 - New env/secrets: ALERT_DM_USER_IDS, ALERTS_ENABLED, ALERT_COOLDOWN_MINUTES (bot .env). GitHub secrets: DISCORD_BOT_TOKEN, ALERT_DM_USER_IDS. Optional GitHub vars: ALERTS_ENABLED, GOSHA_PUBLIC_URL, WATCHDOG_*_HOURS.
 - herdr agent names used: gosha-pipe.
 
-## Lead review on the server (2026-10-16) — corrections to apply, in this order
+## Lead review on the server (2026-10-16) — corrections (ALL APPLIED, see "Applied" below)
 Verified: no channel/@mention ops path remains; all paths are owner DMs. 69 health tests pass.
 `page()` JS was executed in node with mocks (12 scenarios): REST calls, Bot header, multi-ID, error
 handling and no secret leakage are correct. Fix these (each with a test):
@@ -99,3 +99,28 @@ handling and no secret leakage are correct. Fix these (each with a test):
 12. Low: freshness `_compute` failure is not cached (cache the error for 60s too); prune state keys for
     sources no longer attempted; drop stale "ops channel" wording (pipeline.py:1021 docstring is pipe's
     file — ask; scrape_health.py:34, CycleReport.summary); comment out `ALERT_CHANNEL_ID` in .env.example.
+
+### Applied (server session, 2026-10-16) — each with tests
+Full suite after all of it: **1074 passed, 9 skipped, 0 failed** (includes other agents' new tests). ruff clean on all my files; both workflow YAMLs parse.
+- **10 (first)**: tests/test_healthcheck_script.py `_run_watchdog` sets `ALERTS_ENABLED=false`; `_page_owner` unit tests use a tmp `GOSHA_HEARTBEAT_FILE`. Test: `test_watchdog_subprocess_never_pages_for_real`.
+- **1**: one rule: blank/unset = on, only 1/true/yes/on (trimmed, any case) = on, anything else = off. `alerts.TRUTHY`/`flag_on()`/`alerts_enabled()`; config.env_flag already matched. Mirrored in the smoke JS `page()` and the site-watchdog shell gate (`case`). tests/test_alert_switch.py **executes** the shell gate (bash) and the whole github-script (node, mocked github/core/fetch/fs) for 15 on/off values.
+- **2**: `alerts.parse_user_ids` (renamed from `_parse_ids`) and the JS accept `123`, `<@123>`, `<@!123>`; config `_parse_id_list` also strips `<@!`. Tests in test_alert_switch.py (incl. heartbeat path with `<@123>`).
+- **3**: Alerter keeps `recent` (key → (since, last told)) for one cooldown. A re-raise within a cooldown of its "recovered" is tracked silently (`announced=False, flapping=True`); the reminder (a cooldown after the recovered DM) says "failing on and off"; a silent re-raise that clears again sends no 2nd recovered. Bound: ≤1 raise/recovered pair per cooldown per key. Plus zero-yield pages only from the 2nd consecutive empty cycle (`ZERO_CYCLES_ALERT=2`; first cycle is still logged). State file gains `recent`, `announced`, `flapping` (old files load). Tests: test_alerts.py flapping tests, test_alert_scenarios.py `test_a_single_empty_cycle_is_a_blip_not_a_page`.
+- **4**: `alerts.report_closed_dms(bot, closed, delivered)` — key per user `delivery:closed_dms:<id>`, recovered only when a DM reaches that user. gosha-pipe now calls it every cycle from deliver_pending (their test: tests/test_deliver.py::test_closed_dms_are_reported_once_not_every_cycle).
+- **5**: no pipe change needed: CycleReport has `published`; publish_scrape_report judges a report once, and a re-published (stale) one is an idle cycle that still emits `scrape.cycle {"total":0,"sources":0,"idle":true}` (so the watchdog doesn't call an idle bot dead). Test: `test_a_report_is_judged_once`.
+- **6**: site watchdog no longer judges no-new-jobs (KEY_NEW_JOBS, WATCHDOG_NEW_JOB_STALE_HOURS removed from script, workflow, docs); keys not in `KEYS` are dropped silently from carried state. The in-process `data:no_new_jobs` stays (it knows about subscriptions).
+- **7**: (a) `record_cycle(..., searches=)`; a changed set of searches re-learns every baseline and clears active collapse alerts. gosha-pipe passes `searches=list(scrape_combos)` (their test: tests/test_pipeline_accuracy.py::test_the_scrape_stage_tells_health_which_searches_ran). Signature persisted. (b) `NO_NEW_JOBS_HOURS=48`. (c) `data:embeddings` not raised while the backlog shrank since the previous hourly check, nor on the first check after start when part of the backlog is stale-model (model change); never-embedded backlog still alerts at once. Module state `_previous_backlog`, reset by `reset_scrape_health()`.
+- **8**: `DiscordAlertSink.send` returns delivered; `Alerter.snapshot()/restore()/deliver()`; `update()` and publish_scrape_report roll back the decision when the DM reached nobody (raise and recovered both retried). A sink returning None counts as delivered.
+- **9**: heartbeat `_page_owner` ≤1 DM/hour via `data/watchdog_paged_at` (next to the heartbeat file); an undelivered page is not stamped.
+- **11**: site_watchdog exits 1 only if failing AND the owner wasn't told (DM failed / not configured / switched off / dry-run); `--dry-run` reads but never writes the state file.
+- **12**: freshness caches a `_compute` error for 60s too; sources no longer attempted are pruned from scrape_health state and their alert keys dropped silently (`CycleReport.retired` → `Alerter.forget`); "channel" wording removed (scrape_health docstrings; pipe changed the `_post_health_alert` docstring); `ALERT_CHANNEL_ID` commented out in .env.example (config still parses it); docs/ALERTS.md updated for all of the above.
+- Lead rule noted: this server is prod's scraping IP — no requests to job boards or the production site (so no `site_watchdog.py --dry-run` against prod from here) without asking gosha-lead.
+
+### Second lead review (A–F) — applied, each with tests
+Full suite after: **1159 passed, 9 skipped, 0 failed**; ruff clean; YAML parses. Supersedes the item-3/7/11/12 notes above where they differ.
+- **A (HIGH)**: flap suppression is now a short window, not the cooldown: `Alerter(flap_window_seconds=…)`, default 2h (bot), site watchdog 1h (`FLAP_WINDOW_SECONDS`). A re-raise within the window of its "recovered" is held silently; if still failing once the window has passed it is paged at once ("failing again … after recovering"); if it clears inside the window nothing is sent. `recent` is pruned at the window. Watchdog exit code = 1 while any failing key is not `alerter.is_told(key)` (announced AND last DM within the cooldown). Tests: `test_failure_back_soon_after_recovery_is_paged_once_it_outlasts_the_window`, `test_site_down_again_soon_after_recovery_pages_and_stays_red`.
+- **B (MED)**: watchdog rolls back the decision in every undelivered branch (dry-run, alerts off, secrets missing, DM failed); file-bytes restore replaced by `alerter.rollback`. Tests: `test_alerts_off_is_not_counted_as_told`, `test_missing_secrets_are_not_counted_as_told`.
+- **C (MED)**: no more global baseline reset. `record_cycle(searches=)` takes `{source: searches}` (or one iterable for all). A board that LOST a search gets `SEARCH_CHANGE_GRACE` (=2) cycles in which a below-threshold yield re-baselines instead of alerting (and clears an active collapse); additions and other boards keep their baselines. State: `searches` (12-hex fingerprints), `grace`. gosha-pipe now passes the per-board mapping (`searches_by_source`; their tests in tests/test_pipeline_accuracy.py). Note from pipe: combo keys changed shape, so after the deploy every board's search set changes once — covered by the grace. Limitation: a real breakage within 2 cycles of a removed search on that board is accepted as the new normal (the dead-board alert still catches a drop to 0).
+- **D (LOW-MED)**: `Dispatch.keys` lists the keys a message touched; `Alerter.rollback(snapshot, keys)` restores only those (was: whole snapshot). Test: `test_failed_delivery_rolls_back_only_its_own_keys`.
+- **E (LOW)**: a source is pruned only after `RETIRE_AFTER_CYCLES` (=24) consecutive cycles not attempted (`absent` in state), so one failed `get_extra_scrapers()` changes nothing. Test: `test_one_cycle_without_a_source_does_not_forget_it`.
+- **F (nits)**: shell gate trims only (sed), so `t rue` = off like Python; one ID syntax everywhere: `alerts.USER_ID_PATTERN` `^(?:<@!?(\d+)>|(\d+))$` used by alerts, config (`user_id_from`) and the JS (same regex); `!123`, `<@123`, `123>` rejected everywhere; node test compares JS vs Python per form. Embedding-backfill suppression now measures growth of current-model-embedded jobs in a fixed cohort (first seen before the previous check's cutoff, active or not) — `_previous_cohort`; deactivations no longer look like progress. Test: `test_e_backlog_shrinking_by_deactivation_is_not_progress`.

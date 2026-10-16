@@ -39,7 +39,8 @@ class Settings:
     # Scheduler
     scrape_interval_minutes: int = 60
 
-    # Discord channel where job alerts are posted
+    # ALERT_CHANNEL_ID: unused since ops alerts became owner DMs only
+    # (gosha/alerts.py); still parsed so an old .env loads.
     alert_channel_id: int = 0
 
     # Matching
@@ -250,10 +251,13 @@ def _parse_id_list(name: str) -> set[int]:
     """
     raw = os.getenv(name, "")
     ids: set[int] = set()
+    from gosha.alerts import user_id_from  # stdlib-only; one ID syntax everywhere
+
     for s in raw.split(","):
-        s = s.strip().removeprefix("<@").removesuffix(">")
-        if s.isdigit():
-            ids.add(int(s))
+        s = s.strip()
+        uid = user_id_from(s)
+        if uid is not None:
+            ids.add(uid)
         elif s:
             log.warning(
                 "%s: %r is not a numeric Discord user ID — skipped (Developer "

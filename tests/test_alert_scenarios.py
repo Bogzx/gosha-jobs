@@ -56,7 +56,9 @@ async def test_a_zero_yield_dms_owner_once_then_reports_recovery(patched_db, mon
     bot = FakeBot()
     _stage_returning(monkeypatch, ["ejobs", "hipo"], {})
     await _cycle(bot)
+    assert bot.dms(OWNER) == []  # one empty cycle can be a blip
 
+    await _cycle(bot)
     assert len(bot.dms(OWNER)) == 1
     assert "0 jobs" in bot.dms(OWNER)[0]
     assert bot.channel.sent == []  # DM only, even with a channel configured
@@ -103,6 +105,20 @@ async def test_a_disabled_alerts_stay_silent(patched_db, monkeypatch):
     _stage_returning(monkeypatch, ["ejobs"], {})
     await _cycle(bot)
     assert bot.dms(OWNER) == [] and bot.channel.sent == []
+
+
+@pytest.mark.asyncio
+async def test_a_single_empty_cycle_is_a_blip_not_a_page(patched_db, monkeypatch):
+    """Before: one empty cycle paged, and the next one said "recovered"."""
+    bot = FakeBot()
+    _stage_returning(monkeypatch, ["ejobs"], {"ejobs": 40})
+    await _cycle(bot)
+    for _ in range(3):
+        _stage_returning(monkeypatch, ["ejobs"], {})
+        await _cycle(bot)
+        _stage_returning(monkeypatch, ["ejobs"], {"ejobs": 40})
+        await _cycle(bot)
+    assert bot.dms(OWNER) == []
 
 
 # (b) one board breaks ───────────────────────────────────────────────
@@ -185,6 +201,84 @@ def test_c_baseline_survives_restart(tmp_path):
     assert "scrape:collapse:ejobs" in after.record_cycle(["ejobs"], {"ejobs": 3}).conditions
 
 
+def test_c_changed_searches_rebaseline_instead_of_collapsing():
+    """A subscription that drove most of a board's volume was deleted."""
+    health = ScrapeHealth()
+    both = [("python", "cluj"), ("java", "bucuresti")]
+    for _ in range(3):
+        health.record_cycle(["ejobs"], {"ejobs": 300}, searches=both)
+    one = [("python", "cluj")]
+    for _ in range(3):
+        report = health.record_cycle(["ejobs"], {"ejobs": 30}, searches=one)
+        assert not report.conditions
+    assert health.baseline("ejobs") == 30
+
+
+def test_c_frequent_edits_do_not_blind_collapse_detection():
+    """Lead review (C): every change used to clear every baseline."""
+    health = ScrapeHealth()
+    for _ in range(3):
+        health.record_cycle(["ejobs"], {"ejobs": 300}, searches=["a", "b"])
+    # A user edits a search every few cycles; the yield is unaffected, so
+    # the baseline is kept (it used to be thrown away on every edit).
+    for i in range(4):
+        health.record_cycle(["ejobs"], {"ejobs": 300}, searches=["a", f"edit{i}"])
+        for _ in range(2):
+            health.record_cycle(["ejobs"], {"ejobs": 300}, searches=["a", f"edit{i}"])
+    assert health.baseline("ejobs") == 300
+    # The board then really breaks, outside the 2-cycle grace: paged.
+    health.record_cycle(["ejobs"], {"ejobs": 3}, searches=["a", "edit3"])
+    report = health.record_cycle(["ejobs"], {"ejobs": 3}, searches=["a", "edit3"])
+    assert "scrape:collapse:ejobs" in report.conditions
+
+
+def test_c_added_searches_grant_no_grace():
+    health = ScrapeHealth()
+    for _ in range(3):
+        health.record_cycle(["ejobs"], {"ejobs": 300}, searches=["a"])
+    health.record_cycle(["ejobs"], {"ejobs": 3}, searches=["a", "b"])
+    report = health.record_cycle(["ejobs"], {"ejobs": 3}, searches=["a", "b"])
+    assert "scrape:collapse:ejobs" in report.conditions
+
+
+def test_c_grace_only_for_the_board_that_lost_a_search():
+    health = ScrapeHealth()
+    for _ in range(3):
+        health.record_cycle(["ejobs", "hipo"], {"ejobs": 300, "hipo": 300},
+                            searches={"ejobs": ["a", "b"], "hipo": ["a"]})
+    for _ in range(2):
+        report = health.record_cycle(["ejobs", "hipo"], {"ejobs": 30, "hipo": 30},
+                                     searches={"ejobs": ["a"], "hipo": ["a"]})
+    assert "scrape:collapse:hipo" in report.conditions
+    assert "scrape:collapse:ejobs" not in report.conditions
+    assert health.baseline("ejobs") is None or health.baseline("ejobs") < 100
+
+
+def test_c_grace_expires():
+    health = ScrapeHealth()
+    for _ in range(3):
+        health.record_cycle(["ejobs"], {"ejobs": 300}, searches=["a", "b"])
+    for _ in range(3):  # the removal did not change the yield
+        health.record_cycle(["ejobs"], {"ejobs": 300}, searches=["a"])
+    health.record_cycle(["ejobs"], {"ejobs": 3}, searches=["a"])
+    report = health.record_cycle(["ejobs"], {"ejobs": 3}, searches=["a"])
+    assert "scrape:collapse:ejobs" in report.conditions
+
+
+def test_c_rebaseline_clears_an_active_collapse(tmp_path):
+    path = tmp_path / "scrape_health.json"
+    health = ScrapeHealth(state_path=path)
+    for _ in range(3):
+        health.record_cycle(["ejobs"], {"ejobs": 300}, searches=["a", "b"])
+    health.record_cycle(["ejobs"], {"ejobs": 3}, searches=["a", "b"])
+    assert "scrape:collapse:ejobs" in health.record_cycle(
+        ["ejobs"], {"ejobs": 3}, searches=["b", "a"]).conditions  # same set
+    restarted = ScrapeHealth(state_path=path)  # signature survives a restart
+    report = restarted.record_cycle(["ejobs"], {"ejobs": 3}, searches=["a"])
+    assert "scrape:collapse:ejobs" in report.cleared
+    assert not report.conditions
+
+
 @pytest.mark.asyncio
 async def test_c_collapse_reaches_the_owner(patched_db, monkeypatch):
     bot = FakeBot()
@@ -264,12 +358,8 @@ async def test_e_embedding_backlog_clears(patched_db, session):
 
 
 @pytest.mark.asyncio
-async def test_no_new_job_for_a_day_alerts_when_searches_exist(patched_db, session):
+async def _add_subscription(session):
     from gosha.models import Subscription, User
-
-    await _add_jobs(session, "ejobs", 5, age=timedelta(hours=30), description=LONG)
-    report = await check_data_quality()
-    assert "data:no_new_jobs" not in report.conditions  # nobody is searching
 
     user = User(discord_user_id=1)
     session.add(user)
@@ -278,8 +368,99 @@ async def test_no_new_job_for_a_day_alerts_when_searches_exist(patched_db, sessi
     sub.keywords, sub.locations, sub.boards = ["python"], ["cluj"], ["indeed"]
     session.add(sub)
     await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_no_new_job_for_two_days_alerts_when_searches_exist(patched_db, session):
+    await _add_jobs(session, "ejobs", 5, age=timedelta(hours=50), description=LONG)
+    report = await check_data_quality()
+    assert "data:no_new_jobs" not in report.conditions  # nobody is searching
+
+    await _add_subscription(session)
     report = await check_data_quality()
     assert "data:no_new_jobs" in report.conditions
+
+
+@pytest.mark.asyncio
+async def test_a_quiet_day_is_not_no_new_jobs(patched_db, session):
+    """24h was a false positive on narrow searches over a weekend."""
+    await _add_jobs(session, "ejobs", 5, age=timedelta(hours=30), description=LONG)
+    await _add_subscription(session)
+    report = await check_data_quality()
+    assert "data:no_new_jobs" in report.cleared
+
+
+async def _add_reembed_backlog(session, n, tag):
+    from gosha.models import Job
+
+    now = datetime.now(timezone.utc)
+    for i in range(n):
+        session.add(Job(
+            url=f"https://ejobs.test/old-model/{tag}/{i}", title="Engineer", company="Acme",
+            source="ejobs", description=LONG, first_seen_at=now - timedelta(hours=5),
+            last_seen_at=now, embedding=b"\x00" * 8, embedding_model="some-old-model",
+        ))
+    await session.commit()
+
+
+async def _reembed(session, n):
+    from sqlalchemy import select
+
+    from gosha.embeddings import current_model
+    from gosha.models import Job
+
+    rows = (await session.execute(
+        select(Job).where(Job.embedding_model == "some-old-model").limit(n)
+    )).scalars()
+    for job in rows:
+        job.embedding_model = current_model()
+    await session.commit()
+
+
+async def _deactivate(session, n):
+    from sqlalchemy import select
+
+    from gosha.models import Job
+
+    for job in (await session.execute(select(Job).where(Job.is_active.is_(True)).limit(n))).scalars():
+        job.is_active = False
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_e_model_change_backfill_is_not_an_embedding_failure(patched_db, session):
+    await _add_reembed_backlog(session, 40, "a")
+    first = await check_data_quality()  # right after a restart: wait and see
+    assert first.embedding_backlog == 40
+    assert "data:embeddings" not in first.conditions | first.cleared
+
+    await _reembed(session, 15)  # the backfill re-embedded some
+    progressing = await check_data_quality()
+    assert progressing.embedding_backlog == 25
+    assert "data:embeddings" not in progressing.conditions
+
+    stuck = await check_data_quality()  # no progress for an hour
+    assert "data:embeddings" in stuck.conditions
+
+
+@pytest.mark.asyncio
+async def test_e_backlog_shrinking_by_deactivation_is_not_progress(patched_db, session):
+    """Lead review (F): jobs going inactive shrank the backlog and looked
+    like a working backfill."""
+    await _add_reembed_backlog(session, 40, "a")
+    await check_data_quality()
+    await _deactivate(session, 15)  # dead links pruned; nothing re-embedded
+    report = await check_data_quality()
+    assert report.embedding_backlog == 25
+    assert "data:embeddings" in report.conditions
+
+
+@pytest.mark.asyncio
+async def test_e_unembedded_backlog_alerts_at_once(patched_db, session):
+    """Never-embedded jobs are not a model change: no grace hour."""
+    await _add_jobs(session, "ejobs", 15, age=timedelta(hours=5), description=LONG,
+                    embedded=False)
+    assert "data:embeddings" in (await check_data_quality()).conditions
 
 
 @pytest.mark.asyncio

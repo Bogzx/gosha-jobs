@@ -13,6 +13,16 @@ often*:
   reports it healthy again the owner gets a "recovered" message. A
   condition the detector cannot judge (no baseline yet, right after a
   restart) is neither raised nor cleared.
+* Flapping is not a page per flip. A condition that comes back within a
+  short flap window (about two checks of its detector) of its "recovered"
+  message is tracked silently at first. If it is still failing once that
+  window has passed, it is a real failure and is paged at once ("failing
+  again … after recovering"); if it clears again inside the window, no
+  second "recovered" is sent. So a condition flipping every check costs
+  one raise/recovered pair per couple of windows instead of two DMs per
+  check (scheduler events clear on every run: MAX_INSTANCES → ran →
+  MAX_INSTANCES), while one that fails again and stays failed is never
+  silent for longer than the window.
 * State survives a restart when a state file is attached (main.py does),
   so a deploy in the middle of an outage does not re-page the owner.
 
@@ -26,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -39,10 +50,15 @@ log = logging.getLogger(__name__)
 # Discord rejects messages over 2000 characters.
 DISCORD_LIMIT = 2000
 DEFAULT_COOLDOWN_SECONDS = 6 * 3600
+# Two checks of the bot's hourly detectors. The site watchdog (every 30
+# minutes) uses one hour.
+DEFAULT_FLAP_WINDOW_SECONDS = 2 * 3600
 
 
 class AlertSink(Protocol):
-    async def send(self, text: str) -> None: ...
+    # True when the message reached someone. False makes the Alerter forget
+    # what it just decided, so the next run says it again.
+    async def send(self, text: str) -> bool | None: ...
 
 
 @dataclass
@@ -50,6 +66,11 @@ class _Active:
     since: float
     last_sent: float
     text: str
+    # False while a flapping condition is tracked silently: it has not been
+    # mentioned since its last "recovered" (then last_sent is the time of
+    # that "recovered"), so clearing it again sends nothing.
+    announced: bool = True
+    flapping: bool = False
 
 
 @dataclass
@@ -59,6 +80,9 @@ class Dispatch:
     raised: list[str] = field(default_factory=list)
     reminded: list[str] = field(default_factory=list)
     recovered: list[str] = field(default_factory=list)
+    # Keys whose state changed because of a message above: what to roll
+    # back if that message is never delivered.
+    keys: list[str] = field(default_factory=list)
 
     def __bool__(self) -> bool:
         return bool(self.raised or self.reminded or self.recovered)
@@ -82,11 +106,16 @@ class Alerter:
         cooldown_seconds: float = DEFAULT_COOLDOWN_SECONDS,
         state_path: Path | None = None,
         clock: Callable[[], float] = time.time,
+        flap_window_seconds: float = DEFAULT_FLAP_WINDOW_SECONDS,
     ) -> None:
         self.cooldown_seconds = cooldown_seconds
+        self.flap_window_seconds = flap_window_seconds
         self.clock = clock
         self.state_path = state_path
         self.active: dict[str, _Active] = {}
+        # Recently recovered: key → (first seen, time of its "recovered").
+        # Kept for one flap window, to catch a flapping condition.
+        self.recent: dict[str, tuple[float, float]] = {}
         if state_path is not None:
             self._load()
 
@@ -101,8 +130,14 @@ class Alerter:
         try:
             raw = json.loads(self.state_path.read_text(encoding="utf-8"))
             self.active = {
-                key: _Active(float(v["since"]), float(v["last_sent"]), str(v.get("text", "")))
+                key: _Active(
+                    float(v["since"]), float(v["last_sent"]), str(v.get("text", "")),
+                    bool(v.get("announced", True)), bool(v.get("flapping", False)),
+                )
                 for key, v in raw.get("active", {}).items()
+            }
+            self.recent = {
+                key: (float(v[0]), float(v[1])) for key, v in raw.get("recent", {}).items()
             }
         except FileNotFoundError:
             return
@@ -114,9 +149,13 @@ class Alerter:
             return
         data = {
             "active": {
-                key: {"since": a.since, "last_sent": a.last_sent, "text": a.text}
+                key: {
+                    "since": a.since, "last_sent": a.last_sent, "text": a.text,
+                    "announced": a.announced, "flapping": a.flapping,
+                }
                 for key, a in self.active.items()
-            }
+            },
+            "recent": {key: list(v) for key, v in self.recent.items()},
         }
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +164,59 @@ class Alerter:
             tmp.replace(self.state_path)
         except OSError as exc:
             log.warning("Could not persist alert state to %s: %s", self.state_path, exc)
+
+    def snapshot(self) -> tuple[dict[str, _Active], dict[str, tuple[float, float]]]:
+        return (
+            {key: _Active(**vars(a)) for key, a in self.active.items()},
+            dict(self.recent),
+        )
+
+    def rollback(
+        self,
+        snapshot: tuple[dict[str, _Active], dict[str, tuple[float, float]]],
+        keys: Iterable[str],
+    ) -> None:
+        """Put `keys` back as they were at snapshot(): their message never
+        left. Only those keys — another task may have decided (and
+        delivered) something about other keys in the meantime."""
+        active, recent = snapshot
+        for key in keys:
+            if key in active:
+                self.active[key] = active[key]
+            else:
+                self.active.pop(key, None)
+            if key in recent:
+                self.recent[key] = recent[key]
+            else:
+                self.recent.pop(key, None)
+        self._save()
+
+    def is_told(self, key: str) -> bool:
+        """Has the owner been told about `key`'s current failure, within the
+        cooldown? False for a silently tracked flap or an undelivered DM."""
+        current = self.active.get(key)
+        return (
+            current is not None and current.announced
+            and self.clock() - current.last_sent < self.cooldown_seconds
+        )
+
+    def forget(self, keys: Iterable[str]) -> None:
+        """Drop keys without a message (their detector stopped judging them)."""
+        keys = [k for k in keys if k in self.active or k in self.recent]
+        for key in keys:
+            self.active.pop(key, None)
+            self.recent.pop(key, None)
+        if keys:
+            self._save()
+
+    async def deliver(self, sink: AlertSink, text: str, snapshot, dispatch: Dispatch) -> bool:
+        """Send; if nobody got it, roll its keys back so it is retried."""
+        delivered = await sink.send(text)
+        if delivered is False:
+            log.warning("Alert not delivered; it will be retried on the next check.")
+            self.rollback(snapshot, dispatch.keys)
+            return False
+        return True
 
     # ── decisions ────────────────────────────────────────────────
     def decide(
@@ -139,17 +231,45 @@ class Alerter:
         """
         now = self.clock()
         out = Dispatch()
+        self.recent = {
+            key: (since, said) for key, (since, said) in self.recent.items()
+            if now - said < self.flap_window_seconds
+        }
         for key, text in failing.items():
             current = self.active.get(key)
             if current is None:
+                recent = self.recent.pop(key, None)
+                if recent is not None:
+                    # Back within the flap window of its "recovered": wait
+                    # and see whether it stays (below) or flips back.
+                    since, recovered_at = recent
+                    self.active[key] = _Active(
+                        since=since, last_sent=recovered_at, text=text,
+                        announced=False, flapping=True,
+                    )
+                    continue
                 self.active[key] = _Active(since=now, last_sent=now, text=text)
                 out.raised.append(text)
+                out.keys.append(key)
+            elif not current.announced:
+                current.text = text
+                if now - current.last_sent >= self.flap_window_seconds:
+                    # Outlasted the window: a real failure, page it now.
+                    out.raised.append(
+                        f"{text} _(failing again {_fmt_duration(now - current.last_sent)} "
+                        f"after recovering)_"
+                    )
+                    out.keys.append(key)
+                    current.last_sent = now
+                    current.announced = True
             elif now - current.last_sent >= self.cooldown_seconds:
                 current.last_sent = now
                 current.text = text
+                state = "failing on and off" if current.flapping else "still failing"
                 out.reminded.append(
-                    f"{text} _(still failing, first seen {_fmt_duration(now - current.since)} ago)_"
+                    f"{text} _({state}, first seen {_fmt_duration(now - current.since)} ago)_"
                 )
+                out.keys.append(key)
             else:
                 current.text = text
         cleared_map = cleared if isinstance(cleared, Mapping) else {k: "" for k in cleared}
@@ -159,10 +279,17 @@ class Alerter:
             current = self.active.pop(key, None)
             if current is None:
                 continue
+            if not current.announced:
+                # Flipped back inside the window: the owner's last word on
+                # it is still the earlier "recovered".
+                self.recent[key] = (current.since, current.last_sent)
+                continue
+            self.recent[key] = (current.since, now)
             message = text or f"Recovered: {current.text}"
             out.recovered.append(
                 f"{message} _(was failing for {_fmt_duration(now - current.since)})_"
             )
+            out.keys.append(key)
         self._save()
         return out
 
@@ -173,10 +300,15 @@ class Alerter:
         cleared: Mapping[str, str] | Iterable[str] = (),
         title: str = "Alert",
     ) -> Dispatch:
-        """decide(), then send one combined message for everything new."""
+        """decide(), then send one combined message for everything new.
+
+        If the message reaches nobody, the decision is undone: a raise is
+        raised again next time instead of counting as said.
+        """
+        snapshot = self.snapshot()
         dispatch = self.decide(failing, cleared)
         if dispatch and sink is not None:
-            await sink.send(format_dispatch(title, dispatch))
+            await self.deliver(sink, format_dispatch(title, dispatch), snapshot, dispatch)
         return dispatch
 
 
@@ -201,10 +333,22 @@ def _clip(text: str, limit: int = DISCORD_LIMIT - 50) -> str:
 # ── Transport (DM only) ──────────────────────────────────────────────
 
 
+# The one off-switch rule, shared by every alert path: unset or blank means
+# on; otherwise only these (trimmed, any case) mean on and anything else —
+# "false", "0", "disabled", a typo — means off. config.env_flag uses the same
+# words; the JS in scraper-smoke.yml and the shell gate in site-watchdog.yml
+# mirror it (tests/test_alert_switch.py holds them to it).
+TRUTHY = ("1", "true", "yes", "on")
+
+
+def flag_on(raw: str | None) -> bool:
+    value = (raw or "").strip().lower()
+    return not value or value in TRUTHY
+
+
 def alerts_enabled() -> bool:
     """ALERTS_ENABLED (default on) — the one switch for every alert path."""
-    raw = os.getenv("ALERTS_ENABLED", "").strip().lower()
-    return raw not in ("0", "false", "no", "off")
+    return flag_on(os.getenv("ALERTS_ENABLED"))
 
 
 def alert_recipients(settings: Any) -> list[int]:
@@ -224,13 +368,13 @@ class DiscordAlertSink:
         self.bot = bot
         self.user_ids = list(dict.fromkeys(user_ids))
 
-    async def send(self, text: str) -> None:
+    async def send(self, text: str) -> bool:
         delivered = False
         for uid in self.user_ids:
             delivered |= await self._dm(uid, _clip(text))
         if not delivered:
-            # The alert reached nobody. The log is all that is left.
             log.error("Alert reached no one (every DM failed): %s", text)
+        return delivered
 
     async def _dm(self, user_id: int, text: str) -> bool:
         try:
@@ -284,29 +428,72 @@ async def publish_scrape_report(bot: Any, alert_channel_id: int, report: Any) ->
     endpoint (gosha/api/freshness.py) reads to tell a live scraper from a
     dead one without access to this process.
     """
-    if report is None:
-        return Dispatch()
+    # A cycle with no active subscription returns before it records
+    # anything, which leaves the previous cycle's report in place. Judging
+    # that again would re-send its alerts; it is an idle cycle instead —
+    # still a finished cycle as far as the freshness endpoint is concerned.
+    idle = report is None or getattr(report, "published", False)
     try:
         from gosha.events import get_event_store
 
-        await get_event_store().emit(
-            "scrape.cycle",
-            payload={"total": int(report.total), "sources": len(report.per_source)},
+        payload = (
+            {"total": 0, "sources": 0, "idle": True} if idle
+            else {"total": int(report.total), "sources": len(report.per_source)}
         )
+        await get_event_store().emit("scrape.cycle", payload=payload)
     except Exception as exc:
         log.warning("Could not record the scrape.cycle event: %s", exc)
+    if idle:
+        return Dispatch()
     try:
-        dispatch = get_alerter().decide(report.conditions, report.cleared)
+        report.published = True
+        alerter = get_alerter()
+        alerter.forget(getattr(report, "retired", ()))
+        snapshot = alerter.snapshot()
+        dispatch = alerter.decide(report.conditions, report.cleared)
         sink = sink_for_bot(bot)  # DM only; the channel id is unused
         if dispatch and sink is not None:
             text = format_dispatch("Scraper health", dispatch)
             breakdown = report.breakdown()
             if breakdown:
                 text += f"\nscraped→kept: `{breakdown}`"
-            await sink.send(text)
+            await alerter.deliver(sink, text, snapshot, dispatch)
         return dispatch
     except Exception as exc:
         log.error("Failed to publish scraper-health alert: %s", exc)
+        return Dispatch()
+
+
+def closed_dm_key(discord_user_id: int) -> str:
+    return f"delivery:closed_dms:{discord_user_id}"
+
+
+async def report_closed_dms(
+    bot: Any, closed: Iterable[int], delivered: Iterable[int] = (),
+) -> Dispatch:
+    """Delivery hook: users whose DMs are closed, one condition per user.
+
+    `closed`: Discord IDs whose DM was refused this cycle; `delivered`: IDs
+    a DM reached. A user is mentioned once, reminded once per cooldown while
+    still refused, and "recovered" once a DM reaches them again. A user with
+    nothing to deliver this cycle is neither — before, every cycle repeated
+    the whole list. Never raises.
+    """
+    closed_ids = list(dict.fromkeys(int(u) for u in closed))
+    failing = {
+        closed_dm_key(u): f"User `{u}` has DMs closed — their matches could not be delivered."
+        for u in closed_ids
+    }
+    cleared = {
+        closed_dm_key(int(u)): f"DMs to user `{u}` are delivered again."
+        for u in delivered if int(u) not in closed_ids
+    }
+    if not failing and not cleared:
+        return Dispatch()
+    try:
+        return await get_alerter().update(sink_for_bot(bot), failing, cleared, title="Delivery")
+    except Exception as exc:
+        log.error("Failed to publish the closed-DM alert: %s", exc)
         return Dispatch()
 
 
@@ -348,8 +535,21 @@ def scheduler_event_conditions(
 DISCORD_API = "https://discord.com/api/v10"
 
 
-def _parse_ids(raw: str) -> list[int]:
-    return [int(s) for s in (p.strip() for p in raw.split(",")) if s.isdigit()]
+# One ID syntax for every path (config, this module, the smoke workflow's
+# JS): `123`, `<@123>` or `<@!123>`, surrounding spaces ignored. Anything
+# else — a username, `!123`, `<@123` — is not an ID.
+USER_ID_PATTERN = re.compile(r"^(?:<@!?(\d+)>|(\d+))$")
+
+
+def user_id_from(token: str) -> int | None:
+    match = USER_ID_PATTERN.match(token.strip())
+    return int(match.group(1) or match.group(2)) if match else None
+
+
+def parse_user_ids(raw: str) -> list[int]:
+    """ALERT_DM_USER_IDS → IDs (USER_ID_PATTERN); the rest is skipped."""
+    ids = [user_id_from(part) for part in raw.split(",")]
+    return list(dict.fromkeys(i for i in ids if i is not None))
 
 
 def _discord_post(path: str, token: str, payload: dict, timeout: float) -> dict:
@@ -383,7 +583,7 @@ def post_dm_sync(
     if not alerts_enabled():
         return False
     token = (token if token is not None else os.getenv("DISCORD_TOKEN", "")).strip()
-    ids = list(user_ids) if user_ids is not None else _parse_ids(
+    ids = list(user_ids) if user_ids is not None else parse_user_ids(
         os.getenv("ALERT_DM_USER_IDS", "")
     )
     if not token or not ids:

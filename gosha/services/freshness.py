@@ -26,7 +26,9 @@ from gosha.models import Job
 
 CACHE_SECONDS = 60.0
 
-_cache: tuple[float, dict] | None = None
+# (monotonic time, the answer or the error it raised). A failure is cached
+# too: a database outage must not turn every probe into a fresh query.
+_cache: tuple[float, dict | Exception] | None = None
 _lock = asyncio.Lock()
 
 
@@ -67,11 +69,15 @@ async def _compute() -> dict:
 async def scrape_freshness() -> dict:
     global _cache
     async with _lock:
-        if _cache is not None and time.monotonic() - _cache[0] < CACHE_SECONDS:
-            return _cache[1]
-        data = await _compute()
-        _cache = (time.monotonic(), data)
-        return data
+        if _cache is None or time.monotonic() - _cache[0] >= CACHE_SECONDS:
+            try:
+                result: dict | Exception = await _compute()
+            except Exception as exc:
+                result = exc
+            _cache = (time.monotonic(), result)
+        if isinstance(_cache[1], Exception):
+            raise _cache[1]
+        return _cache[1]
 
 
 def reset_cache() -> None:
