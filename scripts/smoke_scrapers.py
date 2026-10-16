@@ -31,13 +31,24 @@ gets the city-only location production gives it). Indeed gates. LinkedIn
 and Glassdoor are ADVISORY: they throttle or block datacenter IPs such as
 GitHub's, so a failure there is reported but does not fail the run or
 open an issue.
+
+A source that is REFUSED on every probe (HTTP 403 or 429 on each query,
+no job, no exception) is reported as "blocked from CI (advisory)": the
+board turns GitHub's runner away (eJobs and Glassdoor do, 2026-10), which
+says nothing about production, whose own scrape-health alerts
+(gosha/scrape_health.py) cover real outages. It does not fail the run or
+touch the issue. Zero jobs with 200s, bad fields and exceptions still fail.
+The workflow runs with SCRAPE_BROWSER_FALLBACK=true, as production does,
+so a refusal aimed at Python's TLS fingerprint is retried as Chrome first.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import contextvars
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,6 +56,8 @@ from pathlib import Path
 # `python scripts/smoke_scrapers.py` puts scripts/ on sys.path, not the
 # repo root, so `import gosha` failed before a single board was contacted.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import httpx  # noqa: E402
 
 from gosha.scrapers.base import RawJob, SearchQuery  # noqa: E402
 from gosha.scrapers.registry import get_extra_scrapers  # noqa: E402
@@ -69,11 +82,42 @@ JOBSPY_BOARDS = {"indeed": False, "linkedin": True, "glassdoor": True}  # board 
 # How many sampled jobs are validated per query.
 SAMPLE_SIZE = 5
 
+# "Go away" answers: the board refuses this client, not a broken adapter.
+REFUSED_STATUSES = frozenset({403, 429})
+_REFUSED_TEXT = re.compile(r"\b(?:403|429)\b")
+
+# Status codes of the HTTP responses the current probe query received
+# (after redirects and the browser fallback). The adapters swallow HTTP
+# errors and return [], so this is the only way to tell a refusal from a
+# parser that found nothing.
+_statuses: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar(
+    "smoke_statuses", default=None,
+)
+
+
+def _install_status_hook() -> None:
+    """Record every httpx response status into `_statuses` (idempotent)."""
+    if getattr(httpx.AsyncClient.send, "_smoke_hook", False):
+        return
+    original = httpx.AsyncClient.send
+
+    async def send(self, request, **kwargs):
+        response = await original(self, request, **kwargs)
+        seen = _statuses.get()
+        if seen is not None:
+            seen.append(response.status_code)
+        return response
+
+    send._smoke_hook = True  # type: ignore[attr-defined]
+    httpx.AsyncClient.send = send  # type: ignore[method-assign]
+
 
 @dataclass
 class SourceResult:
     name: str
     advisory: bool = False
+    # Refused (403/429) on every probe: reported, never failing (see top).
+    blocked: bool = False
     jobs_found: int = 0
     queries_with_jobs: int = 0
     sampled: int = 0
@@ -158,12 +202,21 @@ def _record_jobs(result: SourceResult, jobs: list[RawJob]) -> None:
         )
 
 
+def _mark_blocked(result: SourceResult, why: str) -> None:
+    result.blocked = True
+    result.problems = [f"{result.name}: blocked from CI (advisory) — {why}"]
+
+
 async def probe(scraper) -> SourceResult:
+    _install_status_hook()
     result = SourceResult(name=scraper.name)
     applies_to = getattr(scraper, "applies_to", lambda _query: True)
     queries = [q for q in PROBE_QUERIES if applies_to(q)]
+    refused: list[int] = []  # the refusal status of each refused query
 
     for query in queries:
+        seen: list[int] = []
+        token = _statuses.set(seen)
         try:
             jobs = await asyncio.wait_for(
                 scraper.search(query), timeout=QUERY_TIMEOUT
@@ -180,21 +233,33 @@ async def probe(scraper) -> SourceResult:
                 f"{type(exc).__name__}: {exc}"
             )
             continue
+        finally:
+            _statuses.reset(token)
 
+        refusal = [code for code in seen if code in REFUSED_STATUSES]
         print(
             f"{scraper.name:10s} {query.keyword!r} @ {query.location!r}: "
             f"{len(jobs)} jobs"
+            + (f" (HTTP {refusal[-1]})" if refusal and not jobs else "")
         )
+        if refusal and not jobs:
+            refused.append(refusal[-1])
         _record_jobs(result, jobs)
 
     company = _company_problem(result)
     if company:
         result.problems.append(company)
     if result.jobs_found == 0:
-        result.problems.append(
-            f"{scraper.name}: returned 0 jobs for all "
-            f"{len(queries)} probe queries — adapter is probably broken"
-        )
+        if queries and not result.problems and len(refused) == len(queries):
+            codes = "/".join(str(c) for c in sorted(set(refused)))
+            _mark_blocked(
+                result, f"HTTP {codes} on all {len(queries)} probe queries",
+            )
+        else:
+            result.problems.append(
+                f"{scraper.name}: returned 0 jobs for all "
+                f"{len(queries)} probe queries — adapter is probably broken"
+            )
     return result
 
 
@@ -249,9 +314,12 @@ async def probe_jobspy(board: str, advisory: bool) -> SourceResult:
             timeout=QUERY_TIMEOUT,
         )
     except Exception as exc:
-        result.problems.append(
-            f"{board}: jobspy raised {type(exc).__name__}: {exc}"
-        )
+        if _REFUSED_TEXT.search(str(exc)):
+            _mark_blocked(result, f"jobspy raised {type(exc).__name__}: {exc}")
+        else:
+            result.problems.append(
+                f"{board}: jobspy raised {type(exc).__name__}: {exc}"
+            )
         return result
 
     jobs = _jobspy_rows_to_raw(df, board)
@@ -274,13 +342,16 @@ def _report(results: list[SourceResult]) -> list[SourceResult]:
     for result in results:
         if result.healthy:
             status = "OK  "
+        elif result.blocked:
+            status = "BLKD"
         else:
             status = "WARN" if result.advisory else "FAIL"
         print(
             f"[{status}] {result.name:10s} "
             f"{result.jobs_found:4d} jobs across "
             f"{result.queries_with_jobs} queries"
-            + ("  (advisory)" if result.advisory else "")
+            + ("  (blocked from CI, advisory)" if result.blocked
+               else "  (advisory)" if result.advisory else "")
         )
         for sample in result.samples[:2]:
             print(sample)
@@ -289,11 +360,15 @@ def _report(results: list[SourceResult]) -> list[SourceResult]:
     if unhealthy:
         print("\nProblems:", file=sys.stderr)
         for result in unhealthy:
-            tag = " (advisory, not failing the run)" if result.advisory else ""
+            tag = (
+                " (not failing the run)" if result.blocked
+                else " (advisory, not failing the run)" if result.advisory
+                else ""
+            )
             for problem in result.problems:
                 print(f"  - {problem}{tag}", file=sys.stderr)
 
-    failures = [r for r in unhealthy if not r.advisory]
+    failures = [r for r in unhealthy if not r.advisory and not r.blocked]
     if failures:
         print(
             f"\n{len(failures)}/{len(results)} sources unhealthy: "
@@ -328,8 +403,10 @@ async def main(
         Path(result_file).write_text(json.dumps({
             "failing": sorted(r.name for r in failures),
             "advisory_failing": sorted(
-                r.name for r in results if r.advisory and not r.healthy
+                r.name for r in results
+                if r.advisory and not r.healthy and not r.blocked
             ),
+            "blocked": sorted(r.name for r in results if r.blocked),
             "probed": [r.name for r in results],
         }))
     return 1 if failures else 0
@@ -348,7 +425,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--result-file",
-        help="write {failing, advisory_failing, probed} JSON here",
+        help="write {failing, advisory_failing, blocked, probed} JSON here",
     )
     args = parser.parse_args()
     raise SystemExit(asyncio.run(

@@ -130,23 +130,34 @@ globalThis.fetch = async (url, opts) => {
 const noop = () => {};
 const core = { notice: noop, warning: noop, info: noop };
 const context = { repo: { owner: 'o', repo: 'r' }, serverUrl: 'https://github.com', runId: 7 };
-const ok = async () => ({ data: {} });
+const ops = [];
+const op = (name) => async (args) => { ops.push(name); return { data: {} }; };
+const openIssues = JSON.parse(process.env.OPEN_ISSUES || '[]');
 const github = {
-  rest: { issues: { listForRepo: async () => ({ data: [] }), create: ok,
-                    createComment: ok, update: ok, listComments: ok } },
+  rest: { issues: { listForRepo: async () => ({ data: openIssues }), create: op('create'),
+                    createComment: op('comment'), update: op('update'),
+                    listComments: op('list') } },
   paginate: async () => [],
 };
 const fakeFs = { readFileSync: (p) => p === 'smoke-result.json'
-  ? JSON.stringify({ failing: ['bestjobs'] }) : 'log' };
+  ? (process.env.SMOKE_RESULT || JSON.stringify({ failing: ['bestjobs'] })) : 'log' };
 const req = (m) => (m === 'fs' ? fakeFs : require(m));
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const fn = new AsyncFunction('require', 'github', 'context', 'core',
                              fs.readFileSync(process.argv[2], 'utf8'));
-fn(req, github, context, core).then(() => console.log(JSON.stringify(calls)));
+fn(req, github, context, core).then(() => {
+  console.log(JSON.stringify(ops));
+  console.log(JSON.stringify(calls));
+});
 """
 
 
 def _run_smoke_script(tmp_path: Path, **env_extra: str) -> list[dict]:
+    return _run_smoke_script_full(tmp_path, **env_extra)[1]
+
+
+def _run_smoke_script_full(tmp_path: Path, **env_extra: str) -> tuple[list[str], list[dict]]:
+    """(issue operations, Discord fetch calls) of one run of the track step."""
     wf = yaml.safe_load((WORKFLOWS / "scraper-smoke.yml").read_text())
     track = next(s for s in wf["jobs"]["smoke"]["steps"] if s.get("id") == "track")
     (tmp_path / "script.js").write_text(track["with"]["script"])
@@ -159,7 +170,8 @@ def _run_smoke_script(tmp_path: Path, **env_extra: str) -> list[dict]:
         env=env, capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout.strip().splitlines()[-1])
+    *_, ops, calls = result.stdout.strip().splitlines()
+    return json.loads(ops), json.loads(calls)
 
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
@@ -194,3 +206,37 @@ def test_smoke_page_accepts_mention_formatted_ids(tmp_path):
     calls = _run_smoke_script(tmp_path, ALERT_DM_USER_IDS="<@123>, <@!456>,123,Bogdanila")
     recipients = [c["body"]["recipient_id"] for c in calls if c["url"].endswith("/channels")]
     assert recipients == ["123", "456"]
+
+
+# A board that refuses GitHub's runner (403/429 on every probe) is blocked,
+# not failing: the smoke exits 0, so no issue is opened and nobody is DMed.
+BLOCKED_ONLY = json.dumps({"failing": [], "advisory_failing": [], "blocked": ["ejobs"],
+                           "probed": ["ejobs", "hipo"]})
+
+
+@needs_node
+def test_blocked_only_run_opens_no_issue_and_pages_nobody(tmp_path):
+    ops, calls = _run_smoke_script_full(tmp_path, OUTCOME="success", SMOKE_RESULT=BLOCKED_ONLY)
+    assert ops == [] and calls == []
+
+
+@needs_node
+def test_blocked_board_does_not_keep_the_issue_open(tmp_path):
+    """An open issue (say bestjobs broke) closes once only blocked boards remain."""
+    ops, calls = _run_smoke_script_full(
+        tmp_path, OUTCOME="success", SMOKE_RESULT=BLOCKED_ONLY,
+        OPEN_ISSUES=json.dumps([{"number": 3, "body": ""}]),
+    )
+    assert ops == ["comment", "update"]
+    [message] = [c["body"]["content"] for c in calls if "messages" in c["url"]]
+    assert "recovered" in message and "Blocked from CI (advisory" in message and "ejobs" in message
+
+
+@needs_node
+def test_a_blocked_board_is_not_part_of_the_failure_signature(tmp_path):
+    result = json.dumps({"failing": ["bestjobs"], "advisory_failing": [], "blocked": ["ejobs"],
+                         "probed": ["bestjobs", "ejobs"]})
+    ops, calls = _run_smoke_script_full(tmp_path, SMOKE_RESULT=result)
+    assert ops == ["create"]
+    [message] = [c["body"]["content"] for c in calls if "messages" in c["url"]]
+    assert "**bestjobs**" in message and "Blocked from CI (advisory" in message

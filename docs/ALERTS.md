@@ -76,6 +76,13 @@ is normally up to ~4h old). If the endpoint does not report it (an older
 deploy) the limit is 9h. `WATCHDOG_SCRAPE_STALE_HOURS` can only raise the
 limit, never lower it below that.
 
+The scraper smoke runs with `SCRAPE_BROWSER_FALLBACK=true`, as production
+does. A board that answers HTTP 403/429 to every probe (eJobs and Glassdoor
+refuse GitHub's runners) is listed as "blocked from CI (advisory)" in the
+run log and summary: it does not fail the run, open the issue or DM you.
+Production's in-process scrape-health alerts (table above) cover those boards. Zero jobs
+with HTTP 200, broken fields and exceptions still fail.
+
 Without both secrets the site watchdog skips itself. Run it once by hand
 (Actions → Site watchdog → Run workflow) to check. It reads the public
 `GET /api/v1/health/freshness` (timestamps of the last scrape cycle and

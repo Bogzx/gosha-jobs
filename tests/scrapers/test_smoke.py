@@ -90,7 +90,8 @@ async def test_result_file_names_failing_sources(tmp_path, monkeypatch):
 
     assert code == 1
     assert json.loads(out.read_text()) == {
-        "failing": ["hipo"], "advisory_failing": [], "probed": ["ejobs", "hipo"],
+        "failing": ["hipo"], "advisory_failing": [], "blocked": [],
+        "probed": ["ejobs", "hipo"],
     }
 
 
@@ -191,3 +192,133 @@ async def test_advisory_jobspy_failure_does_not_fail_the_run(
     body = json.loads(out.read_text())
     assert body["failing"] == []
     assert body["advisory_failing"] == ["linkedin"]
+
+
+
+# ── Refused by the board (403/429 to GitHub's runner) vs really broken ──
+
+import httpx  # noqa: E402
+
+
+class HttpScraper:
+    """An adapter shaped like the real ones: plain httpx, HTTP errors
+    swallowed into an empty list (adapters never raise)."""
+
+    def __init__(self, name: str, statuses: list[int], raise_on: int | None = None):
+        self.name = name
+        self.statuses = list(statuses)  # one per query, in order
+        self.raise_on = raise_on
+        self.calls = 0
+
+    async def search(self, query: SearchQuery) -> list[RawJob]:
+        status = self.statuses[self.calls % len(self.statuses)]
+        self.calls += 1
+        if self.raise_on is not None and self.calls == self.raise_on:
+            raise RuntimeError("parse error: unexpected payload")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(status, json={"jobs": []})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            resp = await client.get("https://api.board.test/search")
+        if resp.status_code != 200:
+            return []  # the adapter logs a warning and gives up
+        return []  # 200 but nothing parsed
+
+
+@pytest.mark.parametrize("status", [403, 429])
+async def test_refused_on_every_probe_is_blocked_not_failing(tmp_path, monkeypatch, status):
+    monkeypatch.setattr(smoke, "get_extra_scrapers", lambda: [HttpScraper("ejobs", [status])])
+    out = tmp_path / "result.json"
+
+    code = await smoke.main([], jobspy=False, result_file=str(out))
+
+    assert code == 0  # not paged, issue not opened (the workflow reads `failing`)
+    body = json.loads(out.read_text())
+    assert body["failing"] == [] and body["blocked"] == ["ejobs"]
+    assert body["advisory_failing"] == []
+
+
+async def test_blocked_source_is_reported_in_the_log(capsys):
+    result = await smoke.probe(HttpScraper("ejobs", [403]))
+    assert result.blocked and not result.healthy
+    smoke._report([result])
+    out = capsys.readouterr()
+    assert "[BLKD] ejobs" in out.out and "blocked from CI" in out.out
+    assert "HTTP 403 on all" in out.err
+
+
+async def test_zero_jobs_with_200s_still_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(smoke, "get_extra_scrapers", lambda: [HttpScraper("ejobs", [200])])
+    out = tmp_path / "result.json"
+    assert await smoke.main([], jobspy=False, result_file=str(out)) == 1
+    body = json.loads(out.read_text())
+    assert body["failing"] == ["ejobs"] and body["blocked"] == []
+
+
+async def test_refused_on_only_some_probes_still_fails():
+    result = await smoke.probe(HttpScraper("ejobs", [403, 200, 403]))
+    assert not result.blocked and not result.healthy
+    assert any("0 jobs" in p for p in result.problems)
+
+
+async def test_an_exception_is_breakage_even_among_refusals():
+    result = await smoke.probe(HttpScraper("ejobs", [403], raise_on=2))
+    assert not result.blocked
+    assert any("parse error" in p for p in result.problems)
+
+
+async def test_jobspy_refusal_is_blocked_other_errors_fail(monkeypatch):
+    jobspy = pytest.importorskip("jobspy")
+
+    def refused(**kwargs):
+        raise Exception("bad response with status code: 403")
+
+    monkeypatch.setattr(jobspy, "scrape_jobs", refused)
+    result = await smoke.probe_jobspy("indeed", advisory=False)
+    assert result.blocked
+
+    def broken(**kwargs):
+        raise KeyError("jobCard")
+
+    monkeypatch.setattr(jobspy, "scrape_jobs", broken)
+    result = await smoke.probe_jobspy("indeed", advisory=False)
+    assert not result.blocked and not result.healthy
+
+
+async def test_browser_fallback_turns_a_tls_refusal_into_jobs(monkeypatch):
+    """With SCRAPE_BROWSER_FALLBACK=true (the workflow sets it), a 403 to
+    Python's handshake is retried as Chrome; the smoke sees the 200."""
+    from gosha.scrapers import base
+
+    monkeypatch.setenv("SCRAPE_BROWSER_FALLBACK", "true")
+    monkeypatch.setattr(base, "_browser_hosts", set())
+    monkeypatch.setattr(
+        base.httpx, "AsyncHTTPTransport",
+        lambda: httpx.MockTransport(lambda r: httpx.Response(403)),
+    )
+
+    async def chrome(request):
+        return httpx.Response(200, json={"title": "Dev"}, request=request)
+
+    monkeypatch.setattr(base, "_browser_get", chrome)
+
+    class Adapter:
+        name = "bestjobs"
+
+        async def search(self, query):
+            async with base.http_client() as client:
+                resp = await client.get("https://api.bestjobs.test/jobs")
+            if resp.status_code != 200:
+                return []
+            return [RawJob(url="https://bestjobs.test/1", title=resp.json()["title"],
+                           company="Acme", source="bestjobs")]
+
+    result = await smoke.probe(Adapter())
+    assert result.healthy and not result.blocked, result.problems
+
+
+def test_workflow_runs_the_smoke_with_the_browser_fallback():
+    workflow = (REPO / ".github/workflows/scraper-smoke.yml").read_text()
+    probe_step = workflow.split("Probe every source", 1)[1].split("- name:", 1)[0]
+    assert 'SCRAPE_BROWSER_FALLBACK: "true"' in probe_step

@@ -158,3 +158,11 @@ Combos are keyed (keyword, canonical place, max_age) with merged boards. The SCR
 - Both job ids are in main.py `alert_jobs` (a crash pages the owner). Docs: .env.example and a docs/ALERTS.md section.
 - views.py hook DONE by gosha-pipe (test: tests/test_dm_embed.py::test_the_apply_button_goes_through_the_click_redirect). Suggested for the lead/PG test owner: add `DROP TABLE apply_clicks`, `DROP TABLE search_nudges` to tests/test_database_pg.py `_PRE_DEPLOY` (PG not available here).
 - Full suite after: 1494 passed, 9 skipped; ruff clean.
+
+## Scraper smoke: blocked from CI (release blocker, 2026-10-16)
+Lead: the daily smoke failed 3 days because eJobs (api.ejobs.ro) and Glassdoor answer 403 to GitHub runners, while prod scrapes eJobs fine; after the release that would DM the owner daily. I own the workflow and took scripts/smoke_scrapers.py for this.
+- Workflow probe step runs with `SCRAPE_BROWSER_FALLBACK: "true"` (prod has it on).
+- Script: an httpx `AsyncClient.send` hook records every response status per probe query (contextvar), because adapters swallow HTTP errors into []. A source with 0 jobs, no exception/timeout, and a 403/429 on EVERY query is `blocked` ("blocked from CI (advisory)", `[BLKD]` in the log); JobSpy exceptions mentioning 403/429 too. Blocked is not in `failing` (exit 0, no issue, no DM); result JSON gains `"blocked"`. 0 jobs with 200s, refusals on only some queries, and exceptions still fail.
+- Workflow JS: a `blockedNote` is appended to the recovery comment/DM and the failure headline; `core.notice` lists blocked boards.
+- Tests: tests/scrapers/test_smoke.py (403/429 blocked, 200 fails, partial refusal fails, exception fails, jobspy 403 vs other, browser fallback turns a TLS 403 into jobs, workflow sets the env); tests/test_alert_switch.py node harness now records issue ops (blocked-only run: no issue, no DM; open issue closes with the note; blocked board not in the signature). docs/ALERTS.md paragraph. No live requests made.
+

@@ -10,6 +10,12 @@ name: Scraper smoke
 # recovery) is also DMed to the owner on Discord, as the bot, when the
 # repository secrets DISCORD_BOT_TOKEN and ALERT_DM_USER_IDS (numeric user
 # IDs) are set and the variable ALERTS_ENABLED is not false — docs/ALERTS.md.
+#
+# A board that refuses this runner outright (HTTP 403/429 on every probe;
+# eJobs and Glassdoor turn GitHub's IPs away while production scrapes them
+# fine) is listed as "blocked from CI (advisory)": it does not fail the
+# run, open or update the issue, or DM anyone. Production's own
+# scrape-health alerts cover real outages of those boards.
 
 on:
   schedule:
@@ -40,6 +46,10 @@ jobs:
 
       - name: Probe every source against the live endpoints
         id: smoke
+        env:
+          # As production runs: a 403 aimed at Python's TLS fingerprint is
+          # retried with Chrome's (gosha/scrapers/base.py).
+          SCRAPE_BROWSER_FALLBACK: "true"
         run: |
           set -o pipefail
           python scripts/smoke_scrapers.py --result-file smoke-result.json \
@@ -127,16 +137,23 @@ jobs:
             })).data;
             const issue = open[0];
 
+            // Refused by the board (403/429 to this runner): advisory only.
+            const blocked = (result && result.blocked) || [];
+            const blockedNote = blocked.length
+              ? ` Blocked from CI (advisory, not checked here): ${blocked.join(', ')}.`
+              : '';
+            if (blocked.length) core.notice(`Blocked from CI (advisory): ${blocked.join(', ')}`);
+
             if (process.env.OUTCOME === 'success') {
               if (issue) {
                 await github.rest.issues.createComment({
                   owner, repo, issue_number: issue.number,
-                  body: `Recovered — every gating source is healthy again (${runUrl}). Closing.`,
+                  body: `Recovered — every gating source is healthy again (${runUrl}).${blockedNote} Closing.`,
                 });
                 await github.rest.issues.update({
                   owner, repo, issue_number: issue.number, state: 'closed',
                 });
-                await page(`✅ **GOSHA scraper smoke recovered** — every gating source is healthy again. ${runUrl}`);
+                await page(`✅ **GOSHA scraper smoke recovered** — every gating source is healthy again.${blockedNote} ${runUrl}`);
               }
               return;
             }
@@ -147,7 +164,7 @@ jobs:
             const marker = `<!-- smoke-signature: ${signature} -->`;
             const headline = harness
               ? 'The smoke script crashed before reporting any source. This is a bug in `scripts/smoke_scrapers.py` or its dependencies, not a job board.'
-              : `Unhealthy: **${failing.join(', ')}**. Production is most likely delivering fewer jobs than it should — check \`gosha/scrapers/\` (or \`gosha/scraper.py\` for Indeed).`;
+              : `Unhealthy: **${failing.join(', ')}**. Production is most likely delivering fewer jobs than it should — check \`gosha/scrapers/\` (or \`gosha/scraper.py\` for Indeed).${blockedNote}`;
             const body = [marker, `Run: ${runUrl}`, '', headline, '', '```', log, '```'].join('\n');
             const discord = `🚨 **GOSHA scraper smoke failing**\n${headline}\n${runUrl}`;
 
