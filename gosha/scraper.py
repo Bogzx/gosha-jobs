@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import random
+import re
 import time
 from functools import partial, wraps
 from typing import TYPE_CHECKING
@@ -232,6 +233,44 @@ def experience_level_from_job_level(job_level: object) -> str | None:
     return _JOB_LEVELS.get(job_level.strip().lower())
 
 
+# Indeed ANDs the words of a search: "junior java" in Bucharest (14 days)
+# found 0 postings while "java" found 45, some of them junior ("Programator
+# Java Junior"), because few postings carry the seniority word at all. So a
+# term with one is also searched on Indeed without it, for at most
+# INDEED_FALLBACK_SEARCHES terms per keyword (a broad keyword expands into
+# 19 terms). The pipeline's filter_dataframe, run with the subscription's
+# own keyword, keeps the entry-level part of the wider result.
+INDEED_FALLBACK_SEARCHES = 2
+_SENIORITY_WORD_RE = re.compile(
+    r"(?i)(?<!\w)(?:junior|jr\.?|entry[\s-]+level|intern(?:ship)?s?|"
+    r"trainee(?:ship)?s?|graduates?|new\s+grads?|stagi[ui]|stagiar\w*|"
+    r"practic[aă]|absolvent\w*)(?!\w)"
+)
+
+
+def without_seniority_words(term: str) -> str | None:
+    """`term` with its seniority words removed; None if it had none or is
+    nothing else ("junior")."""
+    stripped = " ".join(_SENIORITY_WORD_RE.sub(" ", term).split())
+    if not stripped or stripped == " ".join(term.split()):
+        return None
+    return stripped
+
+
+def indeed_fallback_terms(terms: list[str]) -> list[str]:
+    """The extra Indeed searches for a keyword's terms (see above)."""
+    searched = {t.strip().lower() for t in terms}
+    extra: list[str] = []
+    for term in terms:
+        stripped = without_seniority_words(term)
+        if stripped and stripped.lower() not in searched:
+            searched.add(stripped.lower())
+            extra.append(stripped)
+            if len(extra) == INDEED_FALLBACK_SEARCHES:
+                break
+    return extra
+
+
 def scrape_direct_enabled() -> bool:
     """SCRAPE_DIRECT=true lets JobSpy also use the server's own IP."""
     return os.getenv("SCRAPE_DIRECT", "").strip().lower() in ("1", "true", "yes", "on")
@@ -353,6 +392,16 @@ async def scrape_jobs_raw(
         if not df.empty:
             all_frames.append(df)
         await asyncio.sleep(DELAY_BETWEEN_SEARCHES)
+
+    if "indeed" in boards:
+        for term in indeed_fallback_terms(terms):
+            log.info("Indeed fallback: '%s' without its seniority word", term)
+            df = await _scrape_single(
+                tunnel_manager, term, search_location, max_age_days, ["indeed"],
+            )
+            if not df.empty:
+                all_frames.append(df)
+            await asyncio.sleep(DELAY_BETWEEN_SEARCHES)
 
     if not all_frames:
         return pd.DataFrame()

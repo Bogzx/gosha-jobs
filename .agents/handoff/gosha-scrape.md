@@ -374,11 +374,28 @@ All uncommitted, in the working tree. `tests/test_scraper_jobspy.py` 49 passed; 
    decoding (strict tag regex, so "R&D <3" survives), then strips invisibles; `gosha/scraper.py`
    `scrape_jobs_raw` cleans JobSpy's text columns. Held-out set: entities 29 → 0 postings, invisibles 43 → 0.
    Prod (read-only, active rows): eJobs **54/64** watermarked, LinkedIn 18/1373, BestJobs 4/88, Indeed 1/19;
-   Hipo 8/20 with entities. Stored rows are fixed only when re-scraped with a changed description
-   (pipeline.py upsert); a one-off backfill is the pipeline/migrate owner's call.
+   Hipo 8/20 with entities. No backfill (lead, 50be546): pipeline.py:136-149 overwrites a changed
+   description and drops the embedding, and the cleaned text differs from the watermarked one, so active
+   rows heal (and re-embed, ~90 rows) on their next sighting after deploy; expired rows don't matter.
    Tests: `tests/scrapers/test_text_cleaning.py` (18, incl. the exact eJobs string from heldout-ejobs-013).
    Note on 11: Glassdoor's "location '…' not found" returns None in jobspy (log only, no exception), so
    unresolvable locations are NOT retried on later routes.
+
+13. **"junior X" fallback on Indeed (TODO 3)** — `gosha/scraper.py` `_SENIORITY_WORD_RE`,
+   `without_seniority_words`, `indeed_fallback_terms`, `INDEED_FALLBACK_SEARCHES = 2`, used at the end of
+   `scrape_jobs_raw`: a term with a seniority word (junior, jr., entry level, intern/internship, trainee,
+   graduate, new grad, stagiu/stagiar, practică, absolvent) is also searched on **Indeed only** without it,
+   at most 2 extra searches per keyword, skipping stripped terms already searched; only when Indeed is in
+   the boards. No pipeline change: run_scrape_stage's `filter_dataframe(df, keywords)` with the
+   subscription's keyword keeps the entry-level part (junior keyword: intern/junior titles and unmarked
+   ≤2-year postings; intern keyword: intern-titled only). Cost: +1 Indeed search for a 1-term keyword
+   ("junior java"), +2 for "computer science internship" (19 terms) — Indeed has shown no 429s in prod logs.
+   Not measured live (needs lead OK). Tests (offline): `test_without_seniority_words` (15),
+   `test_indeed_fallback_terms_are_capped_and_new`,
+   `test_junior_keyword_also_searches_indeed_without_the_seniority_word`,
+   `test_broad_entry_keyword_adds_at_most_two_indeed_searches`,
+   `test_no_fallback_without_indeed_or_without_a_seniority_word`,
+   `test_fallback_rows_go_through_the_keywords_level_filter`. Full suite 1179 passed, 9 skipped.
 
 Lead decision (e6fdc92): keep the cache, keep LinkedIn at 30; raise to 60 only after a deployed cycle
 shows search-429s down (owner deploys).
@@ -399,3 +416,70 @@ TODO 3 ("junior X" fallback for Indeed): design only so far — expand_keyword g
 "junior java" (Indeed 0) but 19 for "computer science internship"; a stripped variant for every term
 would double searches. Plan: Indeed-only stripped variant, at most 2 per keyword. Not started.
 Lead review points 5 and 6: done (item 12). 7a (baseline catalog, with gosha-pipe) still open.
+
+## Design: baseline catalog scrape (review point 7a) — NOT implemented
+Status: design for lead review. Scraper side (`gosha/scraper.py`) is ours; the pipeline side is
+gosha-pipe's (`run_scrape_stage`), specified below as an interface only.
+
+### Why (prod, read-only, 2026-10-16)
+- What gets scraped = active subscriptions only: **22 searches from 12 users**, keywords all one family
+  ("computer science internship" 13, "… — 19 intern/junior roles" 5, "cs entry level" 2, "computer science
+  intern(1)" 2); locations cluj 11, timisoara 3, romania 3, oradea 2, iasi/bucuresti/cluj-napoca/remote 1
+  each (+3 that name no place). Boards: all `indeed,linkedin,glassdoor`.
+- The web feed (`recommend.py`) ranks every upserted row, and `filter_dataframe` with intern keywords keeps
+  intern-titled rows only. So a CV-only user ("junior python developer", or anyone in Bucharest — the largest
+  market: eJobs ≈246 IT postings/14 d, Hipo 332 cards) sees almost nothing that fits.
+
+### Interface (ours: gosha/scraper.py)
+```python
+@dataclass(frozen=True)
+class BaselineCombo:
+    keyword: str                 # what is searched
+    location: str                # user spelling, as Subscription.locations ("cluj", "remote")
+    boards: tuple[str, ...]      # JobSpy boards; () = native sources only, no JobSpy request
+    max_age_days: int            # 14
+    filter_keywords: tuple[str, ...]  # what filter_dataframe / relevance_predicate get
+
+def baseline_combos(cycle: int) -> list[BaselineCombo]: ...
+```
+Pure (no I/O), deterministic in `cycle` (rotates the JobSpy part). `SCRAPE_BASELINE=false` → `[]`
+(the `.env.example` line goes to gosha-health, its owner).
+
+### Contents
+**Tier A — native only, every cycle (`boards=()`):** keyword `"junior developer"` (wants entry + tech:
+`title_is_relevant` keeps intern, junior and unmarked ≤2-year tech titles — one keyword covers the student
+levels, expands to 1 term) × locations `bucuresti, cluj, timisoara, iasi, oradea, romania` + `remote`.
+eJobs and Hipo ignore the keyword for tech searches (IT-department browse / city catalog, both cached
+10 min, so a city a subscription already searched costs nothing more); BestJobs searches it; Jobicy/RemoteOK
+serve `remote`.
+Requests per cycle, from measured sizes: eJobs ≈7 browse pages (500/page; nationwide 2) + ≤25 detail
+fetches/search, 24 h detail cache → ≤150 the first cycle, then new postings only (≈10–30); Hipo ≈26 list
+pages (Buc 9, Toate-Orasele 12, others 1–2) + ≤20 details/search, cached; BestJobs 6 searches + ≤20 details
+each, cached; Jobicy 0–1 (3 h cache); RemoteOK 1. **≈40 list requests per cycle, details mostly cache hits,
+zero LinkedIn/Indeed/Glassdoor.** All under `details.HOST_BUDGET_PER_HOUR` (250/host/hour).
+**Tier B — LinkedIn rotation (after the LinkedIn-cap decision and lead OK):** 2 LinkedIn-only combos
+per cycle from the eval personas' tech families (python developer, java developer, .net developer, frontend
+developer, mobile developer, machine learning engineer, data analyst, embedded software engineer, devops
+engineer, qa engineer) × (bucuresti, cluj) = 20 combos, full rotation in 10 cycles (≈40 h; the 14-day window
+makes that enough). Searched by family keyword, filtered with `filter_keywords=("junior developer",)`.
+Cost ≈ 2 × (3 list pages + new job pages, cached) ≈ 6 list + ≤40 job pages per cycle, against today's
+≈130–200 searches and 110–372 job-page 429s per cycle: **<5% more LinkedIn traffic**. Indeed and Glassdoor
+are left out (Indeed: 9 rows for python @ Cluj; Glassdoor has no Romanian domain).
+
+### Pipeline side (gosha-pipe implements; spec only)
+1. In `run_scrape_stage`, after `scrape_combos = _scrape_combos(all_subs)`, call
+   `baseline_combos(cycle)` (`cycle`: e.g. an in-process counter, or `int(time.time() // (4 * 3600))`).
+   Run it also when there are no active subscriptions (today the stage returns early).
+2. Merge: a baseline combo whose (keyword, normalized place) group already exists is dropped (the
+   subscription's combo wins); otherwise add `(keyword, location, boards, max_age_days) -> list(filter_keywords)`.
+3. `boards == ()` → skip `scrape_jobs_raw` for it (no JobSpy call, JobSpy boards not counted attempted);
+   `_scrape_extra_sources` runs it as any combo.
+4. Decide whether baseline rows are DM candidates. Recommendation: yes — they still pass each
+   subscription's own filters in the match stage; they only widen the pool.
+5. Health: baseline combos make sources attempted every cycle (steadier yields); `searches_by_source`
+   changes once on rollout, so gosha-health's per-source baselines re-learn — tell gosha-health.
+
+### Acceptance
+- After one deployed cycle: rows upserted per source from baseline combos, and how many are new.
+- Feed: for each eval persona, how many of the feed's top 20 are student-level and in the persona's city,
+  before vs after (gosha-rank's eval harness). No live probe for this without lead OK.

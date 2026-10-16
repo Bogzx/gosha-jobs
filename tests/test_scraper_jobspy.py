@@ -389,3 +389,113 @@ def test_linkedin_detail_cache_is_installed_on_the_pinned_jobspy():
     assert getattr(LinkedIn._fetch_details, "gosha_cached", False)
     scraper.install_linkedin_detail_cache()  # idempotent: never wraps twice
     assert not getattr(LinkedIn._fetch_details.__wrapped__, "gosha_cached", False)
+
+
+# ── "junior X" fallback on Indeed ────────────────────────────────────────
+# Indeed ANDs the words: "junior java" in Bucharest (14 days) found 0 while
+# "java" found 45, some of them junior ("Programator Java Junior").
+
+
+@pytest.mark.parametrize(
+    ("term", "expected"),
+    [
+        ("junior java", "java"),
+        ("Junior React Developer", "React Developer"),
+        ("entry level data analyst", "data analyst"),
+        ("entry-level data analyst", "data analyst"),
+        ("java intern", "java"),
+        ("internship software", "software"),
+        ("software engineer intern", "software engineer"),
+        ("graduate programme software", "programme software"),
+        ("stagiu it", "it"),
+        ("stagiar java", "java"),
+        ("jr. python developer", "python developer"),
+        ("python developer", None),
+        ("junior", None),
+        ("entry level", None),
+        ("international sales", None),  # "intern" only as a whole word
+    ],
+)
+def test_without_seniority_words(term, expected):
+    assert scraper.without_seniority_words(term) == expected
+
+
+def test_indeed_fallback_terms_are_capped_and_new():
+    terms = [
+        "software engineer intern", "software developer intern",
+        "web developer intern", "data scientist intern",
+    ]
+    assert scraper.indeed_fallback_terms(terms) == ["software engineer", "software developer"]
+    # A stripped term already searched as itself is not searched again.
+    assert scraper.indeed_fallback_terms(["junior java", "java"]) == []
+    assert scraper.indeed_fallback_terms(["java intern", "junior java"]) == ["java"]
+    assert scraper.indeed_fallback_terms(["python developer"]) == []
+
+
+def _recording_scrape(calls):
+    def fake_scrape_jobs(**kwargs):
+        calls.append((kwargs["site_name"][0], kwargs["search_term"]))
+        return pd.DataFrame()
+    return fake_scrape_jobs
+
+
+async def test_junior_keyword_also_searches_indeed_without_the_seniority_word(monkeypatch):
+    monkeypatch.setattr(scraper, "DELAY_BETWEEN_SEARCHES", 0)
+    calls: list[tuple] = []
+    monkeypatch.setattr(scraper, "scrape_jobs", _recording_scrape(calls))
+    await scraper.scrape_jobs_raw(
+        _Tunnels(), "junior java", "bucuresti", 14, ["indeed", "linkedin", "glassdoor"],
+    )
+    assert sorted(calls) == [
+        ("glassdoor", "junior java"), ("indeed", "java"),
+        ("indeed", "junior java"), ("linkedin", "junior java"),
+    ]
+
+
+async def test_broad_entry_keyword_adds_at_most_two_indeed_searches(monkeypatch):
+    monkeypatch.setattr(scraper, "DELAY_BETWEEN_SEARCHES", 0)
+    calls: list[tuple] = []
+    monkeypatch.setattr(scraper, "scrape_jobs", _recording_scrape(calls))
+    keyword = "computer science internship"
+    terms = scraper.expand_keyword(keyword)
+    assert len(terms) > scraper.INDEED_FALLBACK_SEARCHES
+    await scraper.scrape_jobs_raw(_Tunnels(), keyword, "cluj", 14, ["indeed", "linkedin"])
+    extra = [t for b, t in calls if t not in terms]
+    assert len(extra) == scraper.INDEED_FALLBACK_SEARCHES
+    assert all(b == "indeed" for b, t in calls if t in extra)
+
+
+async def test_no_fallback_without_indeed_or_without_a_seniority_word(monkeypatch):
+    monkeypatch.setattr(scraper, "DELAY_BETWEEN_SEARCHES", 0)
+    calls: list[tuple] = []
+    monkeypatch.setattr(scraper, "scrape_jobs", _recording_scrape(calls))
+    await scraper.scrape_jobs_raw(_Tunnels(), "junior java", "bucuresti", 14, ["linkedin"])
+    await scraper.scrape_jobs_raw(_Tunnels(), "python developer", "cluj", 14, ["indeed"])
+    assert sorted(calls) == [("indeed", "python developer"), ("linkedin", "junior java")]
+
+
+async def test_fallback_rows_go_through_the_keywords_level_filter(monkeypatch):
+    """The stripped search widens what Indeed returns; filter_dataframe with
+    the subscription's own keyword keeps the entry-level part."""
+    from gosha.filters import filter_dataframe
+
+    monkeypatch.setattr(scraper, "DELAY_BETWEEN_SEARCHES", 0)
+
+    def fake_scrape_jobs(**kwargs):
+        if kwargs["search_term"] != "java":
+            return pd.DataFrame()
+        return pd.DataFrame([
+            {"job_url": "https://in/1", "site": "indeed", "title": "Programator Java Junior",
+             "description": "Cautam un coleg."},
+            {"job_url": "https://in/2", "site": "indeed", "title": "Java Developer",
+             "description": "Minimum 1 year of experience with Spring."},
+            {"job_url": "https://in/3", "site": "indeed", "title": "Senior Java Developer",
+             "description": "7+ years of experience."},
+            {"job_url": "https://in/4", "site": "indeed", "title": "Java Developer",
+             "description": "At least 5 years of experience with Java."},
+        ])
+
+    monkeypatch.setattr(scraper, "scrape_jobs", fake_scrape_jobs)
+    df = await scraper.scrape_jobs_raw(_Tunnels(), "junior java", "bucuresti", 14, ["indeed"])
+    kept = filter_dataframe(df, "junior java")
+    assert sorted(kept["job_url"]) == ["https://in/1", "https://in/2"]
