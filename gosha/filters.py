@@ -204,6 +204,8 @@ LOCATION_ALIASES: dict[str, dict[str, Any]] = {
             "italy", "milan", "rome",
             "belgium", "brussels",
             "luxembourg",
+            "croatia", "bulgaria", "serbia", "greece", "slovakia", "slovenia",
+            "estonia", "latvia", "lithuania", "moldova",
             "europe",
         ],
     },
@@ -229,6 +231,8 @@ LOCATION_ALIASES: dict[str, dict[str, Any]] = {
             "italy", "milan", "rome",
             "belgium", "brussels",
             "luxembourg",
+            "croatia", "bulgaria", "serbia", "greece", "slovakia", "slovenia",
+            "estonia", "latvia", "lithuania", "moldova",
             "europe",
         ],
     },
@@ -244,14 +248,21 @@ LOCATION_ALIASES: dict[str, dict[str, Any]] = {
 ENTRY_LEVEL_RE = re.compile(
     r"(?i)\b(?:intern(?:ship)?s?|junior|jr\.?|graduates?|grad|entry.?level|"
     r"trainees?|traineeship|academy|apprentice(?:ship)?s?|placements?|co.?op|summer|"
+    r"(?:working\s+)?students?|"
     r"stagiar\w*|stagi[ui]|practic(?:ant\w*|[aă])|absolvent\w*|"
     r"[iî]ncep[aă]tor\w*|debutant\w*|f[aă]r[aă]\s+experien[tț][aă])(?!\w)"
 )
 
 # "Șef" is Romanian for head/chief ("Contabil Șef", "Șef de echipă").
+# "Staff" only as the engineering grade ("Staff Accountant" is an entry
+# title); "lead" not in "Lead Generation" (a sales role). "Manager" is a
+# role more than a level, see says_senior.
 SENIOR_RE = re.compile(
-    r"(?i)\b(?:senior|sr\.?|lead(?:er)?|principal|staff|director|"
-    r"manager|head\b|vp|chief|architect|[sșş]ef[aă]?)\b"
+    r"(?i)\b(?:senior|sr\.?|lead(?:er)?(?!\s+gen)|principal|"
+    r"staff(?=\s+(?:software|engineer|developer|data|machine|ml|ai|backend|back.?end|"
+    r"frontend|front.?end|full.?stack|platform|infrastructure|security|site|sre|"
+    r"product|designer|scientist|research|architect|qa|test|mobile|ios|android|cloud|devops))|"
+    r"director|manager|head\b|vp|chief|architect|[sșş]ef[aă]?)\b"
 )
 
 # Prefix stems spell out their endings: "tech(?:nolog)?\b" never matched
@@ -334,12 +345,82 @@ def normalize_location(location: str) -> tuple[str, list[str]]:
     return location, [normalized]
 
 
+def search_location_ok(
+    job_location: str | None, locations: list[str], remote_ok: bool = False,
+) -> bool:
+    """Whether a posting's location fits a search's locations.
+
+    No locations: anywhere. Otherwise any of them (see location_matches),
+    or a remote posting when `remote_ok`. One implementation for the match
+    stage, browse and the feed.
+    """
+    if not locations:
+        return True
+    if any(location_matches(job_location, _match_subs(loc)) for loc in locations):
+        return True
+    return remote_ok and location_matches(job_location, _match_subs("remote"))
+
+
+@functools.lru_cache(maxsize=1024)
+def _match_subs_cached(location: str) -> tuple[str, ...]:
+    return tuple(normalize_location(location)[1])
+
+
+def _match_subs(location: str) -> list[str]:
+    return list(_match_subs_cached(location))
+
+
 def _alias(location: str) -> dict[str, Any] | None:
     return (
         LOCATION_ALIASES.get(location)
         or LOCATION_ALIASES.get(fold(location))
         or LOCATION_ALIASES.get(_place(location))
     )
+
+
+# A slash-command option name pasted into its value: "location:Cluj",
+# "llocation:Cluj" (an active production search matched nothing for it).
+_OPTION_PREFIX_RE = re.compile(r"(?i)^\s*\w*location\s*[:=]\s*")
+# Shorter than this and naming no known place: a fragment ("kra", "mun"),
+# not a town the alias table lacks.
+MIN_UNKNOWN_PLACE_LEN = 4
+
+
+def is_known_place(location: str) -> bool:
+    """Whether the alias table or the country lists name this place."""
+    key = location.lower().strip()
+    if _alias(key) or _alias(city_only(key)):
+        return True
+    place = _place(key)
+    return place in _CITY_COUNTRY or place in _COUNTRY_NAMES or place in _COUNTRY_CODES
+
+
+def clean_location(location: str) -> str | None:
+    """A search location as the scrapers and the matcher can use it.
+
+    Strips a pasted option prefix; None for an empty value or a short
+    token that names no place ("kra"), which matches nothing and costs a
+    failing board request every cycle. A longer unknown name is kept: it
+    is most likely a Romanian town the boards can look up themselves.
+    """
+    text = _OPTION_PREFIX_RE.sub("", str(location)).strip()
+    if not text:
+        return None
+    if len(_place(text)) < MIN_UNKNOWN_PLACE_LEN and not is_known_place(text):
+        return None
+    return text
+
+
+def place_suggestions(fragment: str, limit: int = 3) -> list[str]:
+    """Known places starting with `fragment`: "kra" → ["Krakow"]."""
+    key = _place(fragment)
+    if not key:
+        return []
+    names = sorted({
+        alias["search"].split(",")[0] for name, alias in LOCATION_ALIASES.items()
+        if _place(name).startswith(key)
+    })
+    return names[:limit]
 
 
 def is_romanian_location(location: str) -> bool:
@@ -377,13 +458,115 @@ def location_matches(job_location: str, match_substrings: list[str]) -> bool:
     if not job_location or pd.isna(job_location) or str(job_location).lower() == "nan":
         return False
     loc = _place(job_location)
-    if any(_place_pattern(sub).search(loc) for sub in match_substrings if sub):
+    countries = _named_countries(str(job_location))
+    if any(
+        _place_pattern(sub).search(loc) and _counts_in(_place(sub), countries, loc)
+        for sub in match_substrings if sub
+    ):
         return True
     # "Romania" with no city is a nationwide (usually remote-in-Romania)
     # posting: open to someone searching any Romanian city.
     return _ROMANIA_ONLY_RE.fullmatch(loc) is not None and any(
         _place(sub) in _ROMANIAN_PLACES for sub in match_substrings if sub
     )
+
+
+# Where the cities the aliases name are. A posting that names a country
+# other than a city's own is not in that city: "Arad, Israel", "Slatina,
+# Croatia", "Calarasi, Moldova" all matched Romanian searches.
+_CITY_COUNTRY: dict[str, str] = {
+    **{city: "romania" for city in ROMANIAN_CITIES},
+    **{c: "germany" for c in ("berlin", "munich", "munchen", "hamburg", "frankfurt")},
+    **{c: "netherlands" for c in ("amsterdam", "eindhoven")},
+    "dublin": "ireland",
+    **{c: "united kingdom" for c in ("london", "manchester", "edinburgh")},
+    **{c: "france" for c in ("paris", "lyon")},
+    **{c: "spain" for c in ("barcelona", "madrid")},
+    **{c: "poland" for c in ("warsaw", "warszawa", "krakow", "cracow", "wroclaw")},
+    **{c: "czech" for c in ("prague", "praha", "brno")},
+    "budapest": "hungary",
+    **{c: "austria" for c in ("vienna", "wien")},
+    "zurich": "switzerland",
+    **{c: "sweden" for c in ("stockholm", "gothenburg")},
+    "copenhagen": "denmark", "helsinki": "finland", "oslo": "norway",
+    **{c: "portugal" for c in ("lisbon", "porto")},
+    **{c: "italy" for c in ("milan", "rome")},
+    "brussels": "belgium",
+}
+EUROPEAN_COUNTRIES = frozenset({
+    "romania", "germany", "netherlands", "ireland", "united kingdom", "france",
+    "spain", "poland", "czech", "hungary", "austria", "switzerland", "sweden",
+    "denmark", "finland", "norway", "portugal", "italy", "belgium", "luxembourg",
+    "croatia", "bulgaria", "serbia", "greece", "slovakia", "slovenia", "estonia",
+    "latvia", "lithuania", "moldova", "ukraine", "cyprus", "malta", "iceland",
+    "albania",
+})
+# Country names as postings write them (folded, as _place leaves them).
+_COUNTRY_NAMES: dict[str, str] = {
+    **{c: c for c in EUROPEAN_COUNTRIES},
+    "deutschland": "germany", "holland": "netherlands", "uk": "united kingdom",
+    "england": "united kingdom", "scotland": "united kingdom",
+    "great britain": "united kingdom", "espana": "spain", "polska": "poland",
+    "czechia": "czech", "italia": "italy", "republic of moldova": "moldova",
+    "united states": "united states", "usa": "united states", "us": "united states",
+    "u s": "united states", "u s a": "united states", "america": "united states",
+    "canada": "canada", "brazil": "brazil", "brasil": "brazil", "mexico": "mexico",
+    "argentina": "argentina", "colombia": "colombia", "chile": "chile",
+    "egypt": "egypt", "israel": "israel", "turkey": "turkey", "turkiye": "turkey",
+    "india": "india", "pakistan": "pakistan", "philippines": "philippines",
+    "australia": "australia", "new zealand": "new zealand", "south africa": "south africa",
+    "nigeria": "nigeria", "kenya": "kenya", "japan": "japan", "china": "china",
+    "singapore": "singapore", "vietnam": "vietnam", "indonesia": "indonesia",
+    "malaysia": "malaysia", "russia": "russia", "belarus": "belarus",
+}
+_COUNTRY_NAME_RE = re.compile(
+    r"(?<![a-z0-9])(?:"
+    + "|".join(re.escape(n) for n in sorted(_COUNTRY_NAMES, key=len, reverse=True))
+    + r")(?![a-z0-9])"
+)
+# Indeed's "City, ST, CC": the last of three or more parts is the country
+# code ("Porto Velho, RO, BR" is Rondônia, Brazil). The European ones by
+# name, so a Europe search can take them; any other code is just abroad.
+_COUNTRY_CODES = {
+    "ro": "romania", "de": "germany", "nl": "netherlands", "ie": "ireland",
+    "gb": "united kingdom", "uk": "united kingdom", "fr": "france", "es": "spain",
+    "pl": "poland", "cz": "czech", "hu": "hungary", "at": "austria",
+    "ch": "switzerland", "se": "sweden", "dk": "denmark", "fi": "finland",
+    "no": "norway", "pt": "portugal", "it": "italy", "be": "belgium",
+    "lu": "luxembourg", "hr": "croatia", "bg": "bulgaria", "rs": "serbia",
+    "gr": "greece", "sk": "slovakia", "si": "slovenia", "ee": "estonia",
+    "lv": "latvia", "lt": "lithuania", "md": "moldova", "ua": "ukraine",
+    "us": "united states",
+}
+# A remote posting open to anyone, or to someone in Europe.
+_REMOTE_REGION_RE = re.compile(
+    r"(?<![a-z0-9])(?:europe|european|eu|emea|cet|worldwide|anywhere|global)(?![a-z0-9])"
+)
+
+
+@functools.lru_cache(maxsize=4096)
+def _named_countries(job_location: str) -> frozenset[str]:
+    """The countries a posting's location names; empty if none."""
+    found = {_COUNTRY_NAMES[m.group(0)] for m in _COUNTRY_NAME_RE.finditer(_place(job_location))}
+    parts = [part.strip() for part in fold(job_location).split(",")]
+    if len(parts) >= 3 and re.fullmatch(r"[a-z]{2}", parts[-1]):
+        found.add(_COUNTRY_CODES.get(parts[-1], parts[-1]))
+    return frozenset(found)
+
+
+def _counts_in(sub: str, countries: frozenset[str], loc: str) -> bool:
+    """Whether a match on `sub` holds for a posting at `loc` naming `countries`."""
+    if not countries:
+        return True
+    if sub == "ro":  # a country code, but not when another country is named
+        return "romania" in countries
+    city_country = _CITY_COUNTRY.get(sub)
+    if city_country is not None:
+        return city_country in countries
+    if sub in _REMOTE_PLACES:
+        # "Remote - US only", "Remote (USA)": remote for someone elsewhere.
+        return bool(countries & EUROPEAN_COUNTRIES) or bool(_REMOTE_REGION_RE.search(loc))
+    return True
 
 
 def _place(text: str) -> str:
@@ -400,6 +583,7 @@ def _place_pattern(sub: str) -> re.Pattern[str]:
 
 
 _ROMANIAN_PLACES = frozenset(_place(city) for city in ROMANIAN_CITIES)
+_REMOTE_PLACES = frozenset(_place(w) for w in LOCATION_ALIASES["remote"]["match"])
 # A location naming the country and nothing more specific: "Romania",
 # "România (Remote)", "Remote, RO", "Hybrid - Romania".
 _ROMANIA_ONLY_RE = re.compile(
@@ -413,7 +597,7 @@ _ROMANIA_ONLY_RE = re.compile(
 # "training" and "supply chain" as AI ones ("ai" inside the word), and so
 # held them to tech titles, which none of their postings had.
 _ENTRY_KEYWORD_RE = re.compile(
-    r"(?i)\b(?:intern(?:ship)?s?\b|entry|junior|graduate|trainee|stagi|"
+    r"(?i)\b(?:intern(?:ship)?s?\b|entry|junior|graduate|trainee|students?\b|stagi|"
     r"practic|absolvent|[iî]ncep[aă]tor)"
 )
 _TECH_KEYWORD_RE = re.compile(
@@ -423,7 +607,18 @@ _TECH_KEYWORD_RE = re.compile(
 
 
 # The internship subset of _ENTRY_KEYWORD_RE (see title_is_relevant).
-_INTERN_KEYWORD_RE = re.compile(r"(?i)\b(?:intern(?:ship)?s?\b|trainee|stagi|practic)")
+_INTERN_KEYWORD_RE = re.compile(
+    r"(?i)\b(?:intern(?:ship)?s?\b|trainee|students?\b|stagi|practic)"
+)
+
+
+def says_senior(title: str) -> bool:
+    """A senior title. "Manager" alone is the role, not the level, when the
+    title also says junior or intern ("Junior IT Project Manager")."""
+    words = {m.group(0).lower() for m in SENIOR_RE.finditer(title)}
+    if not words:
+        return False
+    return not (words == {"manager"} and ENTRY_LEVEL_RE.search(title))
 
 
 def keyword_wants_entry_level(keyword: str) -> bool:
@@ -479,7 +674,7 @@ def title_is_relevant(
         board_says_entry = experience_level in ("intern", "entry")
         says_entry = (
             (board_says_entry or ENTRY_LEVEL_RE.search(title))
-            and not SENIOR_RE.search(title)
+            and not says_senior(title)
         )
         if not says_entry and not (
             not _INTERN_KEYWORD_RE.search(keyword)
@@ -530,8 +725,13 @@ def matches_excluded_keywords(text: str, excluded: list[str]) -> bool:
 @functools.lru_cache(maxsize=1024)
 def _excluded_pattern(keyword: str) -> re.Pattern[str]:
     # A phrase matches across any whitespace (a line break in a description).
-    words = [re.escape(word) for word in fold(keyword).split()]
-    return re.compile(r"(?<!\w)" + r"\s+".join(words) + r"(?!\w)")
+    # The boundary only on a side that ends in a word character: ".NET" is
+    # in "ASP.NET Core" and "C++" in "C++17", but "java" not in "JavaScript".
+    folded = fold(keyword).strip()
+    body = r"\s+".join(re.escape(word) for word in folded.split())
+    before = r"(?<!\w)" if re.match(r"\w", folded) else ""
+    after = r"(?!\w)" if re.search(r"\w$", folded) else ""
+    return re.compile(before + body + after)
 
 
 def matches_company_blacklist(company: str, blacklist: list[str]) -> bool:
@@ -553,8 +753,8 @@ def matches_company_blacklist(company: str, blacklist: list[str]) -> bool:
 # Ends on a word boundary for the same reason as ENTRY_LEVEL_RE.
 INTERN_RE = re.compile(
     r"(?i)\b(?:intern(?:ship)?s?|trainees?|traineeship|apprentice(?:ship)?s?|"
-    r"placements?|co.?op|summer|academy|stagiar\w*|stagi[ui]|practicant\w*|"
-    r"practic[aă])(?!\w)"
+    r"placements?|co.?op|summer|academy|(?:working\s+)?students?|"
+    r"stagiar\w*|stagi[ui]|practicant\w*|practic[aă])(?!\w)"
 )
 
 # Entry-level titles that are not internships: the "junior" level. The
@@ -583,7 +783,7 @@ _NUMBER_WORDS = {
 _YEARS_RE = re.compile(
     r"(?<![\w.,])(\d{1,2}|" + "|".join(_NUMBER_WORDS) + r")"
     r"(?:\s*\(\d{1,2}\))?\s*\+?\s*"
-    r"(?:(?:-|–|to|la|sau|or)\s*\d{1,2}\s*\+?\s*)?"
+    r"(?:(?:-|–|to|la|sau|or|si|and)\s*\d{1,2}\s*\+?\s*)?"
     r"(?:years?|yrs?|ani|an)\b"
 )
 # A posting asking for this many years is not one a student can apply to.
@@ -613,38 +813,106 @@ def canonical_level(level: str) -> str | None:
 
 
 # A mention that is a wish, not a requirement: "1 year of Kafka is a plus".
+# Not a bare "plus": "5+ years of Java plus Spring Boot" is a requirement.
 _NICE_TO_HAVE_RE = re.compile(
-    r"\b(?:a plus|plus\b|nice to have|preferred|preferably|advantage|bonus|"
-    r"ideally|avantaj|constituie un plus|reprezinta un plus|de preferat)"
+    r"\b(?:a plus|un plus|nice to have|preferred|preferably|advantage|bonus|"
+    r"ideally|avantaj|de preferat)"
+)
+# The same wish written before the number: "Nice to have: 3 years of ...".
+_NICE_TO_HAVE_BEFORE_RE = re.compile(
+    r"\b(?:nice to have|preferred|preferably|ideally|bonus|de preferat|optional)\W*$"
+)
+# Sentences and bullets ("min." is not an end). A line ending in ":" is a
+# heading for the next one ("Experience:\n- 3+ years"), so it stays attached.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<!\bmin)(?<!\bnr)[.;!?](?=\s|$)|(?<!:)\n|•")
+# Between the years and "experience": "3+ years of professional
+# experience", "5+ years of backend software development experience", "3
+# ani de experiență". A few words, none of them saying the years are
+# something else ("4 years old", "5 years on the market"). "4+ years of
+# Swift development" names the experience without the word.
+_GAP_WORD = r"(?!old\b|ago\b|on\b|in\s+business\b|pe\b|we\b|our\b|you\b|will\b)\S+\s+"
+_YEARS_THEN_EXPERIENCE_RE = re.compile(
+    r"^[\s'’)]*(?:"
+    r"(?:" + _GAP_WORD + r"){0,8}(?:experien|practic[ae]\b)|"
+    r"(?:of|de)\s+(?:" + _GAP_WORD + r"){0,7}"
+    r"(?:development|programming|engineering|dezvoltare|programare)\b)"
+)
+# Years the posting says it does not want: "we are not looking for a
+# senior with 10 years of experience", "no need for 5 years".
+_NOT_WANTED_RE = re.compile(
+    r"\b(?:not looking for|nu cautam|we don't need|we do not need|no need for|"
+    r"nu avem nevoie de)\b"
+)
+# "Experience: at least 3 years", "experiență în domeniul ... de minim 2
+# ani", "experiență minimă în contabilitate, 1-2 ani": the number right
+# after a requirement word, with "experience" earlier in the sentence.
+_EXPERIENCE_THEN_YEARS_RE = re.compile(
+    r"experien\w*\b.{0,80}?(?:min(?:im(?:um|al)?)?\.?|at least|cel putin|of|de|"
+    r"over|peste|more than|mai mult de|:|-|,|\()\s*$",
+    re.S,
+)
+# A company's age, not the candidate's experience: "on the market", "pe
+# piață", "10 ani de activitate", and for ten years and more "we have 15
+# years of experience", "a company with over 10 years of experience". Nor
+# the candidate's age ("vârsta recomandată: 18–40 ani").
+_COMPANY_AGE_RE = re.compile(
+    r"\b(?:on the market|pe piata|in business|founded|since|de activitate|"
+    r"of activity|of history|varsta|age|aged)\b"
+)
+_COMPANY_SUBJECT_RE = re.compile(
+    r"\b(?:we have|we've|we bring|avem|are peste|has over|have over|has more than|"
+    r"with over|with more than|cu peste|in peste|company|compania|companie|firma)\b"
 )
 
 
+@functools.lru_cache(maxsize=4096)
 def required_years(description: str | None) -> int | None:
     """The years of experience a posting requires; None if unstated.
 
-    Only numbers next to "experience"/"experiență" count, and only 1-9:
-    "a company with 20 years on the market" and "a 1-year contract" are
-    not requirements. Nice-to-haves in the same sentence are skipped, and
-    of the rest the largest wins: "5+ years of experience overall, 2 years
-    with Docker" asks for five.
+    A number counts only when "experience"/"experiență" names it in the
+    same sentence: a few words after it ("3+ years of professional
+    experience") or just before it after a requirement word ("experience:
+    at least 3 years"). "A company with 20 years on the market", "a 1-year
+    contract", "Within 3 years you will grow into a lead" are not
+    requirements. A range counts as its lower bound ("3-5 years" is 3).
+    Nice-to-haves are skipped, and of the rest the largest wins: "5+ years
+    of experience overall, 2 years with Docker" asks for five.
+
+    Cached: the match stage asks for every subscription and keyword.
     """
     if not description:
         return None
-    text = fold(description)
     found: list[int] = []
-    for m in _YEARS_RE.finditer(text):
-        window = text[max(0, m.start() - 80) : m.end() + 60]
-        if "experien" not in window:
-            continue
-        # The rest of this mention's sentence (or bullet).
-        tail = re.split(r"[.;\n•]|,\s", text[m.end() : m.end() + 120], maxsplit=1)[0]
-        if _NICE_TO_HAVE_RE.search(tail):
-            continue
-        raw = m.group(1)
-        years = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
-        if 1 <= years <= 9:
-            found.append(years)
+    for sentence in _SENTENCE_SPLIT_RE.split(fold(description)):
+        for m in _YEARS_RE.finditer(sentence):
+            years = _requirement(sentence, m)
+            if years is not None:
+                found.append(years)
     return max(found) if found else None
+
+
+def _requirement(sentence: str, m: re.Match[str]) -> int | None:
+    head, rest = sentence[: m.start()], sentence[m.end() :]
+    if not (
+        _YEARS_THEN_EXPERIENCE_RE.match(rest) or _EXPERIENCE_THEN_YEARS_RE.search(head)
+    ):
+        return None
+    # This mention's own tail: up to a bracket, the next clause or the
+    # next number ("At least 4 years (5 years is a plus)" asks for four).
+    tail = re.split(r"[(\d]|,\s", rest, maxsplit=1)[0]
+    if (
+        _NICE_TO_HAVE_RE.search(tail)
+        or _NICE_TO_HAVE_BEFORE_RE.search(head)
+        or _NOT_WANTED_RE.search(head)
+    ):
+        return None
+    raw = m.group(1)
+    years = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
+    if not 1 <= years <= 30 or _COMPANY_AGE_RE.search(sentence):
+        return None
+    if years >= 10 and _COMPANY_SUBJECT_RE.search(head):
+        return None
+    return years
 
 
 def _is_junior(title: str, experience_level: str | None, description: str | None) -> bool:
@@ -660,7 +928,7 @@ def _is_junior(title: str, experience_level: str | None, description: str | None
         return True
     # An explicit senior title outranks the board's label, which keeps the
     # most junior of the levels the employer ticked.
-    if SENIOR_RE.search(title) or INTERN_RE.search(title) or MID_TITLE_RE.search(title):
+    if says_senior(title) or INTERN_RE.search(title) or MID_TITLE_RE.search(title):
         return False
     if experience_level == "entry":
         return True
@@ -701,7 +969,7 @@ def matches_experience_level(
 
     if "intern" in wanted:
         if INTERN_RE.search(title_lower) or (
-            experience_level == "intern" and not SENIOR_RE.search(title_lower)
+            experience_level == "intern" and not says_senior(title_lower)
         ):
             return True
     if "junior" in wanted and _is_junior(title_lower, experience_level, description):
@@ -709,11 +977,11 @@ def matches_experience_level(
     if "mid" in wanted:
         # Mid-level: not entry-level and not senior
         if experience_level == "mid" or (
-            not ENTRY_LEVEL_RE.search(title_lower) and not SENIOR_RE.search(title_lower)
+            not ENTRY_LEVEL_RE.search(title_lower) and not says_senior(title_lower)
         ):
             return True
     if "senior" in wanted:
-        if SENIOR_RE.search(title_lower) or experience_level == "senior":
+        if says_senior(title_lower) or experience_level == "senior":
             return True
     return False
 

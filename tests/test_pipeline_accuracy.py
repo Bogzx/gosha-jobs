@@ -136,6 +136,26 @@ def test_freshness_handles_naive_datetimes_and_missing_dates():
     assert pipeline.is_fresh_enough(job, 3)  # nothing known: not held against it
 
 
+def test_freshness_counts_days_in_the_postings_own_time_zone(monkeypatch):
+    """A date-only board posting at local midnight (+03:00) is 21:00 the
+    day before in UTC: the 7th day was a day short."""
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc).astimezone(tz)
+
+    monkeypatch.setattr(pipeline, "datetime", _Clock)
+    bucharest = timezone(timedelta(hours=3))
+    job = make_job("Python Developer")
+    job.posted_at = datetime(2026, 10, 9, 0, 0, tzinfo=bucharest)
+    assert pipeline.is_fresh_enough(job, 7)
+    job.posted_at = datetime(2026, 10, 8, 23, 30, tzinfo=bucharest)
+    assert not pipeline.is_fresh_enough(job, 7)
+    job.posted_at = datetime(2026, 10, 9, 0, 0)  # naive: UTC
+    assert pipeline.is_fresh_enough(job, 7)
+
+
 # ── Deliver stage ─────────────────────────────────────────────────────
 
 
@@ -200,6 +220,29 @@ async def test_of_two_board_copies_the_better_match_is_sent_first(
     ])
     sent = _record_dms(monkeypatch)
 
+    assert await pipeline.deliver_pending(_Bot()) == 2
+    assert ["Python" in sent[0], "Django" in sent[1]] == [True, True]
+    statuses = await _statuses(session)
+    assert statuses[ids[2]] == UserJob.DM_SENT
+    assert statuses[ids[0]] == UserJob.DM_SKIPPED
+
+
+async def test_regex_fallback_matches_do_not_outrank_scored_ones(
+    patched_db, session, monkeypatch,
+):
+    """A cycle without the model stored every match as 1.0, above any
+    cosine: its copy beat the better-scored one, and its DMs went first."""
+    regex_matches = await pipeline.match_jobs_for_subscription(
+        make_sub("python developer"), [make_job("Python Developer")],
+    )
+    assert [score for _job, score in regex_matches] == [None]
+
+    _sub, ids = await _pending(session, [
+        ("Python Developer", "Acme", None),   # matched in a regex cycle
+        ("Django Developer", "Beta", 0.50),
+        ("Python Developer", "Acme", 0.60),
+    ])
+    sent = _record_dms(monkeypatch)
     assert await pipeline.deliver_pending(_Bot()) == 2
     assert ["Python" in sent[0], "Django" in sent[1]] == [True, True]
     statuses = await _statuses(session)
@@ -278,3 +321,122 @@ async def test_jobspy_boards_not_asked_are_not_counted_as_attempted(
 
     assert "indeed" not in health.last_report.per_source
     assert "linkedin" not in health.last_report.per_source
+
+
+async def test_the_scrape_stage_tells_health_which_searches_ran(
+    patched_db, session, monkeypatch,
+):
+    """Deleting a big search used to read as a yield collapse; health
+    re-learns its baselines when the set of searches changes."""
+    from gosha.scrape_health import ScrapeHealth
+
+    user = User(discord_user_id=7102)
+    session.add(user)
+    await session.flush()
+    sub = Subscription(user_id=user.id, max_age_days=7)
+    sub.keywords = ["python developer"]
+    sub.locations = ["cluj"]
+    sub.boards = ["linkedin"]
+    session.add(sub)
+    await session.commit()
+
+    async def no_jobspy(*_a, **_kw):
+        return pd.DataFrame()
+
+    monkeypatch.setattr("gosha.scraper.scrape_jobs_raw", no_jobspy)
+    monkeypatch.setattr("gosha.scrapers.registry.get_extra_scrapers", lambda: [])
+    health = ScrapeHealth()
+    seen: list = []
+    real = health.record_cycle
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("searches"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(health, "record_cycle", spy)
+    await pipeline.run_scrape_stage(_NoTunnels(), health)
+
+    # Per board: removing a search only Indeed served re-learns Indeed's
+    # baseline, not every board's.
+    assert seen == [{"linkedin": {("python developer", "cluj", ("linkedin",), 7)}}]
+
+
+async def test_searches_are_reported_per_board_that_ran_them(patched_db, session, monkeypatch):
+    from gosha.scrape_health import ScrapeHealth
+    from gosha.scrapers.base import SearchQuery
+
+    user = User(discord_user_id=7103)
+    session.add(user)
+    await session.flush()
+    for location in ("cluj", "remote"):
+        sub = Subscription(user_id=user.id, max_age_days=7)
+        sub.keywords = ["python developer"]
+        sub.locations = [location]
+        sub.boards = ["indeed"]
+        session.add(sub)
+    await session.commit()
+
+    class _RomaniaOnly:
+        name = "ejobs"
+
+        def applies_to(self, query: SearchQuery) -> bool:
+            return query.location != "remote"
+
+        async def search(self, query):
+            return []
+
+    async def no_jobspy(*_a, **_kw):
+        return pd.DataFrame()
+
+    monkeypatch.setattr("gosha.scraper.scrape_jobs_raw", no_jobspy)
+    monkeypatch.setattr("gosha.scrapers.registry.get_extra_scrapers", lambda: [_RomaniaOnly()])
+    health = ScrapeHealth()
+    seen: list = []
+    real = health.record_cycle
+    monkeypatch.setattr(
+        health, "record_cycle",
+        lambda *a, **k: seen.append(k.get("searches")) or real(*a, **k),
+    )
+    await pipeline.run_scrape_stage(_NoTunnels(), health)
+
+    cluj = ("python developer", "cluj", ("indeed",), 7)
+    # JobSpy sends Indeed no remote search, and eJobs serves Romania only.
+    assert seen == [{"indeed": {cluj}, "ejobs": {cluj}}]
+
+
+# ── Match-stage cost: subscriptions × jobs × keywords, on the event loop ──
+
+
+def test_place_and_age_are_checked_before_the_description_is_read(monkeypatch):
+    read: list[str] = []
+    for name in ("matches_experience_level", "matches_excluded_keywords"):
+        real = getattr(pipeline, name)
+        monkeypatch.setattr(
+            pipeline, name, lambda *a, _real=real, _n=name, **k: read.append(_n) or _real(*a, **k),
+        )
+    sub = make_sub("java developer", ["junior"])
+    sub.excluded_keywords = ["sales"]
+    far = make_job("Java Developer", location="Berlin, Germany", description="2 years")
+    stale = make_job("Java Developer II", posted_at=NOW - timedelta(days=30))
+
+    assert not pipeline.job_matches_subscription(far, sub)
+    assert not pipeline.job_matches_subscription(stale, sub)
+    assert read == []
+    assert pipeline.job_matches_subscription(make_job("Java Developer"), sub)
+    assert set(read) == {"matches_experience_level", "matches_excluded_keywords"}
+
+
+def test_a_description_is_read_for_its_years_once_per_cycle_not_per_search():
+    from gosha.filters import required_years
+
+    required_years.cache_clear()
+    job = make_job(
+        "Java Developer", description="Minimum 2 years of experience with Java. (cache test)",
+    )
+    subs = [make_sub(kw, ["junior"]) for kw in ("junior java", "java developer", "junior dev")]
+    for sub in subs * 20:
+        assert pipeline.job_matches_subscription(job, sub)
+        assert pipeline._title_relevant_for_any_keyword(
+            job.title, sub.keywords, None, job.description,
+        )
+    assert required_years.cache_info().misses == 1

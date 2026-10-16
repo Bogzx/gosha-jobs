@@ -60,6 +60,34 @@ async def test_a_location_filter_finds_the_copy_in_that_city(patched_db, session
     assert [job.url for job in found] == ["https://b.test/cluj"] and total == 1
 
 
+async def test_a_group_whose_canonical_expired_is_listed_with_or_without_filters(
+    patched_db, session,
+):
+    """Unfiltered browse kept canonical rows only, so a group whose
+    canonical posting had expired vanished; a filtered browse showed its
+    live copy."""
+    user = await _user(session)
+    cluj = _job("https://b.test/cluj", is_active=False)
+    session.add(cluj)
+    await session.flush()
+    cluj.dedup_group_id = cluj.id
+    session.add_all([
+        _job("https://b.test/iasi", location="Iasi", dedup_group_id=cluj.id),
+        _job("https://b.test/brasov", location="Brasov", dedup_group_id=cluj.id,
+             first_seen_at=NOW - timedelta(hours=1)),
+        _job("https://b.test/solo", title="Solo"),
+    ])
+    await session.commit()
+
+    unfiltered = await jobs_service.list_jobs(user.id, jobs_service.JobFilters(), 1, 50)
+    filtered = await jobs_service.list_jobs(
+        user.id, jobs_service.JobFilters(experience=["junior"]), 1, 50,
+    )
+    for found, total in (unfiltered, filtered):
+        assert sorted(job.url for job in found) == ["https://b.test/iasi", "https://b.test/solo"]
+        assert total == 2
+
+
 async def test_posted_within_reads_the_boards_date(patched_db, session):
     """first_seen_at alone called a month-old posting "posted today" the
     first time a scrape returned it."""

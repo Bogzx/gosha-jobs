@@ -13,6 +13,7 @@ from discord.ext import commands
 from sqlalchemy import func, select, update
 
 from gosha.database import get_session
+from gosha.domain.errors import ValidationError
 from gosha.models import Subscription, User, get_tier_limits, plan_lines
 
 if TYPE_CHECKING:
@@ -208,9 +209,18 @@ class SubscriptionCog(commands.Cog):
         try:
             # Cap individual values to prevent abuse
             keywords = [k.strip()[:100] for k in keyword.split(",") if k.strip()][:20]
-            locations = [loc.strip()[:100] for loc in location.split(",") if loc.strip()][:20]
             excluded = [e.strip()[:100] for e in exclude.split(",") if e.strip()][:20] if exclude else []
-            exp_levels = [e.strip().lower()[:20] for e in experience.split(",") if e.strip()][:5]
+            # As the website saves them: "llocation:Cluj" is Cluj, "kra" and
+            # "fresher" are refused instead of stored to match nothing.
+            from gosha.services.subscriptions import clean_levels, clean_locations
+            try:
+                locations = clean_locations(
+                    [loc[:100] for loc in location.split(",")][:20]
+                )
+                exp_levels = clean_levels([e[:20] for e in experience.split(",")][:5])
+            except ValidationError as exc:
+                await interaction.response.send_message(exc.message, ephemeral=True)
+                return
 
             if not keywords or not locations:
                 await interaction.response.send_message(
@@ -451,14 +461,25 @@ class SubscriptionCog(commands.Cog):
                 if keyword:
                     sub.keywords = [k.strip()[:100] for k in keyword.split(",") if k.strip()][:20]
                     changes.append(f"keywords={sub.keywords}")
-                if location:
-                    sub.locations = [loc.strip()[:100] for loc in location.split(",") if loc.strip()][:20]
+                from gosha.services.subscriptions import clean_levels, clean_locations
+                try:
+                    new_locations = clean_locations(
+                        [loc[:100] for loc in location.split(",")][:20]
+                    ) if location else None
+                    new_levels = clean_levels(
+                        [e[:20] for e in experience.split(",")][:5]
+                    ) if experience else None
+                except ValidationError as exc:  # nothing is committed
+                    await interaction.response.send_message(exc.message, ephemeral=True)
+                    return
+                if new_locations:
+                    sub.locations = new_locations
                     changes.append(f"locations={sub.locations}")
                 if max_age_days > 0:
                     sub.max_age_days = max_age_days
                     changes.append(f"max_age_days={max_age_days}")
-                if experience:
-                    sub.experience_levels = [e.strip().lower()[:20] for e in experience.split(",") if e.strip()][:5]
+                if new_levels:
+                    sub.experience_levels = new_levels
                     changes.append(f"experience={sub.experience_levels}")
                 if exclude:
                     sub.excluded_keywords = [e.strip()[:100] for e in exclude.split(",") if e.strip()][:20]
@@ -863,6 +884,12 @@ class SubscriptionCog(commands.Cog):
         location: str = "romania",
     ) -> None:
         try:
+            from gosha.services.subscriptions import clean_locations
+            try:
+                locations = clean_locations([location[:100]]) or ["romania"]
+            except ValidationError as exc:
+                await interaction.response.send_message(exc.message, ephemeral=True)
+                return
             async with get_session() as session:
                 user = await self._get_or_create_user(session, interaction.user.id)
 
@@ -886,7 +913,7 @@ class SubscriptionCog(commands.Cog):
                     remote_ok=False,
                 )
                 sub.keywords = ["computer science internship"]
-                sub.locations = [location.strip()]
+                sub.locations = locations
                 sub.excluded_keywords = []
                 sub.company_blacklist = []
                 sub.experience_levels = ["intern", "junior"]
@@ -901,7 +928,7 @@ class SubscriptionCog(commands.Cog):
 
             from gosha.filters import normalize_location
 
-            _search_loc, _ = normalize_location(location.strip())
+            _search_loc, _ = normalize_location(locations[0])
             interval = self.bot.settings.scrape_interval_minutes if self.bot.settings else 60
 
             embed = discord.Embed(

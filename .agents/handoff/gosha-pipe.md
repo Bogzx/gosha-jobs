@@ -1,13 +1,14 @@
 # Handoff: gosha-pipe — filtering, matching flow and delivery
 
-Written: 2026-10-16 12:03 UTC · Branch: wip/agents-2026-10-16 · Base commit: 5490d6a
-(Changes are uncommitted in the working tree; the lead commits them. At writing time `git branch` still showed `main`.)
+Written: 2026-10-16 12:03 UTC (laptop); updated on the server 2026-10-16 after the lead review · Branch: wip/agents-2026-10-16 · Base commit: c67e734
+(Changes are uncommitted in the working tree; the lead commits them.)
 
 ## Mission (one paragraph, self-contained)
 The user's goal is the most accurate job finder: given the scraped jobs, each user gets exactly the right ones, once, best first. This agent covers the hard filters (location, experience level, excluded words, salary, freshness), the match stage, Discord DM delivery, the web browse filters and the dead-link checker. Known gap at the start: the web feed (`gosha/recommend.py`, owned by the lead) applies only blacklist and excluded words, with no location or level filter. Everything is checked against real postings: `eval/postings.jsonl` has 202 labelled postings, `eval/personas.jsonl` has 14 personas.
 
 ## File ownership
-May edit: gosha/pipeline.py (except the body of `_post_health_alert`, owned by gosha-health), gosha/filters.py, gosha/delivery.py, gosha/deadlinks.py, gosha/outbox.py, gosha/queue.py, gosha/feedback.py, gosha/services/jobs.py, gosha/services/subscriptions.py, their tests, and new test files.
+May edit: gosha/pipeline.py (except the body of `_post_health_alert`, owned by gosha-health), gosha/filters.py,
+gosha/bot.py for search input only (/subscribe, /edit, /quickstart location+level cleaning; lead's grant for review item 10), gosha/delivery.py, gosha/deadlinks.py, gosha/outbox.py, gosha/queue.py, gosha/feedback.py, gosha/services/jobs.py, gosha/services/subscriptions.py, their tests, and new test files.
 Must not edit (read-only): gosha/matching.py, gosha/recommend.py, gosha/embeddings.py, gosha/evaluation.py, scripts/eval_ranking.py (lead); gosha/scraper.py, gosha/scrapers/* (gosha-scrape); gosha/alerts.py (gosha-health); gosha/seniority.py (gosha-rank).
 
 ## Done (verified, all tests pass)
@@ -63,20 +64,64 @@ Each fix below has a test that fails on the base-commit code (checked by loading
 - A malformed URL (ValueError) is inconclusive; before, it aborted the whole daily run.
 - Tests: tests/test_browse_accuracy.py `test_a_head_404_*`, `test_hipo_*`, `test_a_malformed_*`.
 
+## Done on the server (after the lead review): all 11 corrections, each with a test that fails on HEAD c67e734
+Old-code checks were made by loading HEAD's files from a `git archive` copy in the scratchpad, never by swapping files in the shared tree.
+1. **`required_years` rewrite** (filters.py `required_years`, `_requirement`, `_YEARS_THEN_EXPERIENCE_RE`, `_EXPERIENCE_THEN_YEARS_RE`, `_COMPANY_AGE_RE`, `_COMPANY_SUBJECT_RE`, `_NOT_WANTED_RE`; review items 1–3).
+   - Works per sentence or bullet ("min." is not a sentence end; a line ending in ":" stays attached to the next).
+   - A number counts if "experience" (or "practică") follows within 8 words, with no stop word (old, ago, on, pe, we, our, you, will) in between. It also counts in "N years of <...> development/programming/engineering", or right after a requirement word (min/at least/de/of/over/:/,/-/( ) when "experience" came up to 80 chars earlier.
+   - Accepts 1–30. Skips: company age (on the market, pe piață, de activitate, founded, since); candidate age (vârsta, age); for ≥10, company subjects (we have, with over, compania...); nice-to-haves in the mention's own tail, cut at "(", ", " or the next digit; "Nice to have:"-style heads; "not looking for / nu căutăm".
+   - Bare "plus" dropped. A range gives its lower bound, "intre 1 si 5" included.
+   - `@lru_cache(4096)`.
+   - Tests: tests/test_filters_accuracy.py `test_required_years` and `test_required_years_as_postings_write_it`. Several are real eval wordings found by diffing old against new: Xebia's "with over 25 years of experience" boilerplate, "varsta 18–40 ani", "permis categoria B de minim 2 ani".
+   - Effect: eval split unchanged (intern 6/6, junior 20/20, any 79/86, mid 4/20, senior 6/70); held-out unchanged too.
+   - **Held-out caveat:** two generic fixes (gap up to 8 words; negation) came from looking at two held-out postings, though not their text verbatim. The lead should know this for the held-out's purity.
+2. **Excluded words, attached forms** (`_excluded_pattern`): a boundary only on a side ending in \w. ".NET" now excludes ASP.NET and VB.NET, "C++" excludes C++17; "Network" is not ".net".
+3. **Closed-DM notice deduplicated**: `deliver_pending` calls `gosha.alerts.report_closed_dms(bot, closed_dms, delivered_discord_ids)` every cycle (gosha-health's helper; one key per user). Test: tests/test_deliver.py `test_closed_dms_are_reported_once_not_every_cycle`. Stale `last_report`: gosha-health handles it in `publish_scrape_report` (the published flag), so no pipeline change. The `_post_health_alert` docstring now says owner DM.
+4. **Match-stage cost**: `job_matches_subscription` runs freshness → blacklist → salary → location → excluded words → level, and `required_years` is cached. Bench, 40 searches × 455 eval postings: 7.6 s → 0.43 s, same 604 matches. Tests: `test_place_and_age_are_checked_before_the_description_is_read`, `test_a_description_is_read_for_its_years_once_per_cycle_not_per_search`.
+5. **Location collisions** (filters.py `_named_countries`, `_counts_in`, `_CITY_COUNTRY`, `_COUNTRY_NAMES`, `_COUNTRY_CODES`, `EUROPEAN_COUNTRIES`, `_REMOTE_REGION_RE`):
+   - A posting's countries are country names anywhere, plus the last part of a 3+-part "City, ST, CC".
+   - A known city counts only if its country is among them. "ro" counts only if Romania is.
+   - Remote words count only if a European country or a region word (europe/eu/emea/worldwide/anywhere/global) is named, or no country at all. "Remote - US only" and "Remote (USA)" fail.
+   - The europe/eu lists gained croatia, bulgaria, serbia, greece, slovakia, slovenia, estonia, latvia, lithuania and moldova.
+   - Prod check (read-only SELECT of 1350 distinct `jobs.location`): no Romanian search changed. remote −17 ("Remote, US"); europe −8 (Vienna VA, Warsaw IN, Porto Alegre) and +14 (Belgrade, Vilnius, Sofia, Athens, Žilina).
+   - Tests: `test_a_romanian_name_in_another_country_is_not_romania`, `test_named_countries`, `test_remote_restricted_to_another_continent_is_not_remote`.
+6. **Freshness tz**: dates are compared in the posting's own tz. Test: `test_freshness_counts_days_in_the_postings_own_time_zone`.
+7. **Search input** (filters.py `clean_location`, `is_known_place`, `place_suggestions`; services/subscriptions.py public `clean_locations` and `clean_levels`, both with `stored=`; bot.py /subscribe, /edit and /quickstart):
+   - A leading `*location:` / `=` prefix is stripped.
+   - A token under 4 chars that names no known place is refused, with suggestions ("kra" → "did you mean Krakow?"). Longer unknown names are kept.
+   - Duplicates are folded.
+   - On a web update, unknown values already stored are dropped with a log line instead of refused (fixes "fresher" making a search unsaveable). New unknown values are still refused.
+   - The bot refuses with the same message and commits nothing.
+   - Tests: tests/test_search_input.py. Prod rows #24/#25 untouched.
+8. **Scrape combos** (pipeline.py `_scrape_combos`):
+   - Grouped per (keyword, canonical place), with the union of boards and the max window, so "cluj"/"Cluj-Napoca"/"Cluj" or differing windows are one query. Each search's own window still applies at match time.
+   - Unresolvable tokens are skipped, logged once per process (`_skipped_locations`). "llocation:Cluj" is scraped as cluj.
+   - Subscriptions are read `order_by(id)`.
+   - Tests: `test_unusable_location_tokens_never_reach_the_scrapers`, `test_searches_sharing_a_place_are_scraped_once`.
+9. **Health searches**: `record_cycle(..., searches=searches_by_source)`, a {source: set(combo)} filled for JobSpy boards (`jobspy_boards_for`) and for extra scrapers when `_applies`. Tests: `test_the_scrape_stage_tells_health_which_searches_ran`, `test_searches_are_reported_per_board_that_ran_them`.
+10. **Regex-fallback score is None** (not 1.0): it sorts below cosines in best-first dedup, and the DM shows no "Strong match" label. Test: `test_regex_fallback_matches_do_not_outrank_scored_ones`.
+11. **Browse fast path**: one row per dedup group via `row_number() over (partition by coalesce(dedup_group_id,id) order by is-canonical, newest)`, the same rule as `_one_per_group`. A group whose canonical expired is no longer hidden when no filters are set. Test: `test_a_group_whose_canonical_expired_is_listed_with_or_without_filters`. Only tested on SQLite (window functions are standard SQL; PG supports them).
+12. **For gosha-rank:**
+    - `filters.search_location_ok(job_location, locations, remote_ok)` replaces `pipeline._location_ok`; browse uses it too.
+    - `says_senior(title)`: "manager" plus an entry word is not senior.
+    - `SENIOR_RE`: "staff" only before an engineering word, "lead" not before "gen".
+    - `INTERN_RE`, `ENTRY_LEVEL_RE` and the keyword regexes take "(working) student(s)".
+    - Told gosha-rank these names are stable. Tests: `test_titles_that_are_not_senior`, `test_titles_that_are_senior`, `test_working_students_are_internships`, `test_search_location_ok_is_one_rule_for_match_browse_and_feed`.
+
 ## In progress (exact state)
-Nothing half-applied. All edits are complete and the full suite passes.
+Nothing half-applied. Full suite: 1159 passed, 9 skipped; ruff clean (2026-10-16, server).
 
 ## Remaining TODO (prioritized)
-1. **Web feed hard filters.** `gosha/recommend.get_feed` (lead's file) applies only blacklist and excluded words: no location, no level. Ranking is pure CV cosine, and docs/EVAL.md shows it can't see seniority. Recommendation: hard-filter the feed by the union of the user's active searches' locations (plus remote_ok) and levels, using `filters.matches_experience_level(title, levels, label, description)`, or offer an "only my searches" toggle.
-2. **One `required_years` / level implementation.** The lead said gosha-rank's gosha/seniority.py has its own `required_years` / `posting_level` and will be told to import from gosha/filters.py. Check that happened.
-3. **JobSpy's `job_level` is dropped** (gosha/scraper.py, gosha-scrape's file). LinkedIn returns "internship" / "entry level" / "mid-senior level". Map it to `experience_level` (intern/entry/mid/senior) so the board-label path works for LinkedIn.
-4. **eJobs soft-404.** Pages are 200 for expired postings, and the page carries an `expirationDate` in its Nuxt payload. A detector should use the eJobs `/jobs/{id}` API (the adapter already fetches details) rather than HTML. Also, 429s after about 8 rapid requests are fine (inconclusive), but the checks should be paced.
-5. **BestJobs `www` pages answer 403 to this machine's IP**, so from here BestJobs checks are always inconclusive and waste sample budget. Either add `bestjobs` to `UNCHECKABLE_SOURCES` or check through the adapter's detail API, which already detects `expired` (gosha/scrapers/bestjobs.py). Re-test from the production server's IP first.
-6. **Regex fallback path floods users** (used when the semantic model fails to load). For generic keywords ("accountant"), `title_is_relevant` returns True for every job, so a user gets every job in their city that any other search scraped. Fix: track which combo scraped each job and match only those in regex mode, or require a keyword token in the title.
-7. **"Remote - US only" / "Remote (USA)"** pass a remote search. Add a negative list (us only, usa, united states, canada only) for RemoteOK.
-8. **Excluded words also match descriptions.** Excluding "senior" removed 4 of the 26 intern/junior eval postings ("mentored by senior engineers"). Consider title-only matching for level-type words, or a UI hint.
-9. `title_is_relevant` rejects "Junior IT Project Manager" for entry keywords, because SENIOR_RE matches "manager". Minor.
-10. `gosha/delivery.py` (the channel classes) is unused by the pipeline: only tests import it. The pipeline DMs directly through `_dm_user`. Either wire it in or delete it.
+1. **Web feed hard filters**: owned and being implemented by gosha-rank in recommend.py (their handoff "Feed hard filters"). Rule agreed: per active search, `search_location_ok` AND `matches_experience_level`, OR'ed; candidates only, never the window. Nothing for me unless they ask.
+2. **One seniority implementation**: gosha-rank will import the filters names (signalled stable). Check that seniority.py no longer has its own `required_years`.
+3. **JobSpy `job_level` → `experience_level`**: gosha-scrape's file. Check whether it's done.
+4. **eJobs soft-404** through the `/jobs/{id}` API, with paced checks.
+5. **BestJobs 403**: add it to `UNCHECKABLE_SOURCES` or check through the adapter API. **No live probing from this server** (lead rule: it is prod's scraping IP); ask gosha-lead first.
+6. **Regex fallback floods** generic keywords: match in regex mode only jobs that the search's own combo scraped, or require a keyword token in the title.
+7. **Excluded words also match descriptions** ("senior" removed "mentored by senior engineers" postings). Consider title-only for level words, or a UI hint.
+8. `gosha/delivery.py` is unused by the pipeline: wire it in or delete it (ask the lead).
+9. Browse `posted_within_days` still floors in UTC (SQL), the same off-by-one as review item 8. Low.
+10. "Ro-Ro Logistics, Hamburg" still matches romania (no country named). Accepted.
 
 ## Open review points from the orchestrator
 1. **Keyword gate inconsistent with `_is_junior`:** addressed. The gate now accepts unmarked titles with ≤2 years required for junior keywords; internship keywords stay strict. Tests: `test_unmarked_posting_reaches_a_junior_keyword_search` in both test_filters_accuracy.py and test_pipeline_accuracy.py. Measured over the 14 personas × eval postings, family-matched grade-2 postings passing the gate:
@@ -101,19 +146,21 @@ See Remaining TODO. Measurements behind them:
   - Hipo: 200, with the notice text on expired postings.
 
 ## How to verify
-- `.venv/bin/python -m pytest -q tests/test_filters_accuracy.py tests/test_pipeline_accuracy.py tests/test_browse_accuracy.py`: expected 121 passed.
-- `.venv/bin/python -m pytest -q`: expected 858 passed, 9 skipped (2026-10-16 12:00 UTC).
+- On this aarch64 server prefix with `LD_PRELOAD=$PWD/.venv/lib/python3.11/site-packages/scikit_learn.libs/libgomp-a49a47f9.so.1.0.0`.
+- `.venv/bin/python -m pytest -q tests/test_filters_accuracy.py tests/test_pipeline_accuracy.py tests/test_browse_accuracy.py tests/test_search_input.py tests/test_deliver.py`: 241 passed.
+- `.venv/bin/python -m pytest -q`: 1159 passed, 9 skipped (server, after the corrections; other agents' tests are included).
+- Old-vs-new measurement on both eval sets: `git show HEAD:gosha/filters.py > <scratch>/filters_old.py`, then for each posting compare `required_years` and `matches_experience_level(title, ["intern","junior"], None, description)` per level, using the old module loaded via importlib from that path.
 - Measurement scripts are in `.agents/handoff/gosha-pipe-probes/`; run them from the repo root with `PYTHONPATH=.`:
   - `measure4.py`: level-filter split on the eval set.
   - `gate.py <path-to-old-filters.py>`: gate before/after. Create the old copy with `git show 5490d6a:gosha/filters.py > /tmp/filters_old.py`.
-  - `probe_dead.py`: live HTTP to eJobs, BestJobs and Hipo; about 36 requests, safe to run.
+  - `probe_dead.py`: live HTTP to eJobs, BestJobs and Hipo; about 36 requests. **Do not run from the server** (prod's scraping IP) without asking gosha-lead.
 
 ## Environment notes
-- venv: `/data/Repos/gosha-jobs/.venv` (machine-specific path; Python 3.11, CPU torch). Run tests with `PYTHONPATH=.` when invoking scripts directly.
-- External services touched: read-only GET/HEAD requests to public posting pages on ejobs.ro, bestjobs.eu and hipo.ro (about 40 requests). No production server, no Discord.
+- venv: `/home/ubuntu/gosha-agents/.venv` on the server (Python 3.11, CPU torch, aarch64: needs the LD_PRELOAD above). Run tests with `PYTHONPATH=.` when invoking scripts directly.
+- External services touched: laptop session, about 40 read-only GET/HEAD to ejobs.ro, bestjobs.eu and hipo.ro. Server session: none. Production: one read-only SELECT (distinct jobs.location, active subscriptions.locations) via `docker exec gosha-postgres psql` in a READ ONLY transaction. No Discord, no prod writes.
 - The original report path `/tmp/claude-1000/-data-Repos/2e9dc50a-.../scratchpad/report-pipe.md` is machine-specific; this handoff replaces it.
 
-## Lead review on the server (2026-10-16) — corrections to apply, in this order
+## Lead review on the server (2026-10-16) — corrections to apply, in this order (ALL DONE, see "Done on the server")
 Review point 1 addressed; 3 mostly; 2 only for the exact tested case. Suite 874/9; your 4 files 134 pass.
 Each fix needs a test that fails on current code. (Run tests on this aarch64 server with
 `LD_PRELOAD=$PWD/.venv/lib/python3.11/site-packages/scikit_learn.libs/libgomp-a49a47f9.so.1.0.0`.)

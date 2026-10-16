@@ -7,17 +7,16 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from gosha.database import get_session
 from gosha.domain.errors import NotFoundError
 from gosha.filters import (
-    location_matches,
     matches_company_blacklist,
     matches_excluded_keywords,
     matches_experience_level,
-    normalize_location,
+    search_location_ok,
 )
 from gosha.models import Application, Job, Subscription, UserJob
 from gosha.services.applications import track_application
@@ -78,23 +77,18 @@ class JobFilters:
 
 
 def _location_predicate(filters: JobFilters) -> Callable[[str | None], bool] | None:
-    """location_matches for the requested places, memoised per location
-    string (a scan sees the same few hundred strings thousands of times)."""
+    """filters.search_location_ok for the requested places (remote alone
+    when only "remote" is ticked), memoised per location string (a scan
+    sees the same few hundred strings thousands of times)."""
     if not (filters.locations or filters.remote):
         return None
-    match_subs: list[str] = []
-    for loc in filters.locations:
-        _search, subs = normalize_location(loc)
-        match_subs.extend(subs)
-    if filters.remote:
-        _search, remote_subs = normalize_location("remote")
-        match_subs.extend(remote_subs)
+    locations = list(filters.locations) or ["remote"]
 
     seen: dict[str | None, bool] = {}
 
     def matches(location: str | None) -> bool:
         if location not in seen:
-            seen[location] = location_matches(location, match_subs)
+            seen[location] = search_location_ok(location, locations, filters.remote)
         return seen[location]
 
     return matches
@@ -145,8 +139,6 @@ async def list_jobs(
     loaded for the requested page only.
     """
     conditions = [Job.is_active.is_(True)]
-    # Hide non-canonical cross-board duplicates
-    canonical_only = or_(Job.dedup_group_id.is_(None), Job.dedup_group_id == Job.id)
     if filters.q.strip():
         needle = f"%{filters.q.strip()}%"
         conditions.append(or_(Job.title.ilike(needle), Job.company.ilike(needle)))
@@ -185,13 +177,23 @@ async def list_jobs(
     levels = [e.lower() for e in filters.experience]
 
     if not (blacklist or excluded or location_ok or levels):
-        # Nothing for Python to decide: count and page in SQL.
+        # Nothing for Python to decide: count and page in SQL, one row per
+        # duplicate group as _one_per_group picks it (the canonical row if
+        # it qualifies, else the group's newest). Keeping canonical rows
+        # only hid a whole group once its canonical posting expired.
+        group = func.coalesce(Job.dedup_group_id, Job.id)
+        rank = func.row_number().over(
+            partition_by=group,
+            order_by=(case((Job.id == group, 0), else_=1), *newest_first),
+        )
+        ranked = select(Job.id.label("id"), rank.label("rank")).where(*conditions).subquery()
+        shown = select(ranked.c.id).where(ranked.c.rank == 1)
         async with get_session() as session:
             total = (await session.execute(
-                select(func.count(Job.id)).where(*conditions, canonical_only)
+                select(func.count()).select_from(shown.subquery())
             )).scalar_one()
             jobs = (await session.execute(
-                select(Job).where(*conditions, canonical_only).order_by(*newest_first)
+                select(Job).where(Job.id.in_(shown)).order_by(*newest_first)
                 .offset(start).limit(per_page)
             )).scalars().all()
         return list(jobs), total

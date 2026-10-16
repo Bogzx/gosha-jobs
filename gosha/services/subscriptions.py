@@ -10,7 +10,13 @@ from sqlalchemy import func, select, update
 from gosha.config import load_web_settings
 from gosha.database import get_session
 from gosha.domain.errors import NotFoundError, TierLimitError, ValidationError
-from gosha.filters import EXPERIENCE_LEVEL_CHOICES, canonical_level
+from gosha.filters import (
+    EXPERIENCE_LEVEL_CHOICES,
+    canonical_level,
+    clean_location,
+    fold,
+    place_suggestions,
+)
 from gosha.models import Subscription, User, UserJob
 
 log = logging.getLogger(__name__)
@@ -34,16 +40,22 @@ def _clean_list(values: list[str], cap: int = 50) -> list[str]:
     return [v.strip() for v in values if v and v.strip()][:cap]
 
 
-def _clean_levels(values: list[str]) -> list[str]:
+def clean_levels(values: list[str], stored: list[str] | None = None) -> list[str]:
     """Experience levels as the matcher spells them; ["any"] when empty.
 
     An unknown level ("entry", say) used to be stored as typed and then
-    matched no posting at all, silently.
+    matched no posting at all, silently. One already in `stored` (what the
+    search has now: the bot's /edit used to save levels as typed) is
+    dropped instead of refused, since the website sends the stored levels
+    back with every edit and the search could not be saved at all.
     """
     levels: list[str] = []
     for value in _clean_list(values):
         level = canonical_level(value)
         if level is None:
+            if value in (stored or ()):
+                log.info("Dropping stored experience level %r: no such level", value)
+                continue
             raise ValidationError(
                 f"Unknown experience level {value!r}: use one of "
                 f"{', '.join(EXPERIENCE_LEVEL_CHOICES)}."
@@ -51,6 +63,35 @@ def _clean_levels(values: list[str]) -> list[str]:
         if level not in levels:
             levels.append(level)
     return levels or ["any"]
+
+
+def clean_locations(values: list[str], stored: list[str] | None = None) -> list[str]:
+    """Locations as the scrapers can look them up (filters.clean_location).
+
+    "llocation:Cluj" is saved as "Cluj"; a short token naming no place
+    ("kra") is refused, with the places it might be the start of. As for
+    levels, one already in `stored` is dropped rather than refused.
+    Duplicates ("iasi", "Iasi") are kept once.
+    """
+    locations: list[str] = []
+    seen: set[str] = set()
+    for value in _clean_list(values):
+        location = clean_location(value)
+        if location is None:
+            if value in (stored or ()):
+                log.info("Dropping stored location %r: names no place", value)
+                continue
+            hint = place_suggestions(value)
+            raise ValidationError(
+                f"Unknown location {value!r}"
+                + (f" — did you mean {' or '.join(hint)}?" if hint else
+                   ": type a city, a country, \"remote\" or \"europe\".")
+            )
+        key = fold(location)
+        if key not in seen:
+            seen.add(key)
+            locations.append(location)
+    return locations
 
 
 def _check_tier_lists(user: User, keywords: list[str], locations: list[str]) -> None:
@@ -77,11 +118,11 @@ async def list_subscriptions(user_id: int) -> list[Subscription]:
 
 async def create_subscription(user: User, data: SubscriptionInput) -> Subscription:
     keywords = _clean_list(data.keywords)
-    locations = _clean_list(data.locations)
+    locations = clean_locations(data.locations)
     if not keywords or not locations:
         raise ValidationError("At least one keyword and one location are required.")
     _check_tier_lists(user, keywords, locations)
-    levels = _clean_levels(data.experience_levels)
+    levels = clean_levels(data.experience_levels)
 
     async with get_session() as session:
         # Count under a lock on the user row, or two concurrent creates both
@@ -173,14 +214,14 @@ async def update_subscription(
         else sub.keywords
     )
     locations = (
-        _clean_list(patch["locations"]) if patch.get("locations") is not None
-        else sub.locations
+        clean_locations(patch["locations"], stored=sub.locations)
+        if patch.get("locations") is not None else sub.locations
     )
     if not keywords or not locations:
         raise ValidationError("At least one keyword and one location are required.")
     _check_tier_lists(user, keywords, locations)
     levels = (
-        _clean_levels(patch["experience_levels"])
+        clean_levels(patch["experience_levels"], stored=sub.experience_levels)
         if patch.get("experience_levels") is not None else None
     )
 

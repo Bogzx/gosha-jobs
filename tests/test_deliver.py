@@ -97,6 +97,9 @@ async def test_a_transient_failure_is_retried_next_cycle(patched_db, session, mo
 
 @pytest.mark.asyncio
 async def test_closed_dms_are_given_up_and_reported(patched_db, session, monkeypatch):
+    from gosha.alerts import reset_alerter
+
+    reset_alerter()  # the alerter is process-wide; start without known keys
     await _setup(session, n_jobs=3, discord_id=4242)
     calls = _fake_dm(monkeypatch, [pipeline.DM_CLOSED])
     bot = _Bot()
@@ -116,6 +119,44 @@ async def test_closed_dms_are_given_up_and_reported(patched_db, session, monkeyp
     assert bot.channel.sent == []
     assert await pipeline.deliver_pending(bot) == 0
     assert len(calls) == 1  # not retried
+
+
+@pytest.mark.asyncio
+async def test_closed_dms_are_reported_once_not_every_cycle(patched_db, session, monkeypatch):
+    from gosha import alerts
+
+    alerts.reset_alerter()
+    user, sub, _jobs, _rows = await _setup(session, n_jobs=1, discord_id=4242)
+    user_id, sub_id = user.id, sub.id
+    owner_dms: list[str] = []
+
+    class _Sink:
+        async def send(self, text):
+            owner_dms.append(text)
+
+    monkeypatch.setattr("gosha.alerts.sink_for_bot", lambda _bot: _Sink())
+
+    async def new_match(n):
+        job = Job(url=f"https://d.test/later/{n}", title=f"Later {n}", company="L",
+                  source="ejobs")
+        session.add(job)
+        await session.flush()
+        session.add(UserJob(user_id=user_id, job_id=job.id, subscription_id=sub_id,
+                            relevance_score=0.5, dm_status=UserJob.DM_PENDING))
+        await session.commit()
+
+    _fake_dm(monkeypatch, [pipeline.DM_CLOSED, pipeline.DM_CLOSED])
+    await pipeline.deliver_pending(_Bot())
+    await new_match(1)
+    await pipeline.deliver_pending(_Bot())  # still closed: no second notice
+    assert len(owner_dms) == 1 and "4242" in owner_dms[0]
+
+    await new_match(2)
+    assert await pipeline.deliver_pending(_Bot()) == 1  # DMs open again
+    assert len(owner_dms) == 2 and "4242" in owner_dms[1]
+    await pipeline.deliver_pending(_Bot())  # nothing to deliver: silent
+    assert len(owner_dms) == 2
+    alerts.reset_alerter()
 
 
 @pytest.mark.asyncio

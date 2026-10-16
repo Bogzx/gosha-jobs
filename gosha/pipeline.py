@@ -13,7 +13,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -22,12 +22,13 @@ from sqlalchemy import select, update
 from gosha.database import get_session
 from gosha.dedup import normalize_key
 from gosha.filters import (
+    clean_location,
     filter_dataframe,
-    location_matches,
     matches_company_blacklist,
     matches_excluded_keywords,
     matches_experience_level,
     normalize_location,
+    search_location_ok,
     title_is_relevant,
 )
 from gosha.matching import SemanticMatcher
@@ -225,10 +226,14 @@ async def run_scrape_stage(
     health = health or get_scrape_health()
     attempted: set[str] = set()
     scraped: dict[str, set[str]] = {}
+    # Which searches each board ran: a board that lost one re-learns its
+    # yield baseline (gosha/scrape_health.py) without the others doing so.
+    searches_by_source: dict[str, set[tuple]] = {}
 
     async with get_session() as session:
         result = await session.execute(
             select(Subscription).where(Subscription.is_active.is_(True))
+            .order_by(Subscription.id)
         )
         all_subs = result.scalars().all()
 
@@ -237,21 +242,18 @@ async def run_scrape_stage(
         log.info("No active subscriptions — nothing to scrape.")
         return []
 
-    # Group by scrape parameters to avoid duplicate scraping
-    scrape_combos: dict[tuple, list[str]] = {}  # key -> list of primary keywords (for filtering)
-    for sub in all_subs:
-        for keyword in sub.keywords:
-            for location in sub.locations:
-                key = (keyword.lower(), location.lower(), tuple(sorted(sub.boards)), sub.max_age_days)
-                scrape_combos.setdefault(key, []).append(keyword)
+    scrape_combos = _scrape_combos(all_subs)
 
     all_jobs: list[Job] = []
-    for (keyword, location, boards, max_age_days), keywords in scrape_combos.items():
+    for combo, keywords in scrape_combos.items():
+        keyword, location, boards, max_age_days = combo
         # Only the boards JobSpy actually asks for this location: none for
         # "remote", LinkedIn alone for "europe". Counting the rest as
         # attempted raised "indeed returned nothing" alerts for searches
         # Indeed was never sent.
-        attempted.update(jobspy_boards_for(location, list(boards)))
+        for board in jobspy_boards_for(location, list(boards)):
+            attempted.add(board)
+            searches_by_source.setdefault(board, set()).add(combo)
         try:
             df = await scrape_jobs_raw(
                 tunnel_manager, keyword, location, max_age_days, boards=list(boards),
@@ -268,7 +270,9 @@ async def run_scrape_stage(
     # Extra sources (Romanian boards + remote feeds): direct APIs, no
     # proxies. Additive for every subscription regardless of its boards
     # list, wherever the source can serve the location.
-    all_jobs.extend(await _scrape_extra_sources(scrape_combos, attempted, scraped))
+    all_jobs.extend(
+        await _scrape_extra_sources(scrape_combos, attempted, scraped, searches_by_source)
+    )
 
     # Deduplicate by ID
     seen_ids: set[int] = set()
@@ -280,12 +284,58 @@ async def run_scrape_stage(
             unique.append(j)
             kept[j.source] = kept.get(j.source, 0) + 1
 
+    # The searches too, per board: a board that lost one re-learns its
+    # yield baseline instead of a deleted big search reading as a collapse.
     health.record_cycle(
         attempted, {source: len(urls) for source, urls in scraped.items()}, kept,
+        searches=searches_by_source,
     )
 
     log.info("Scrape stage complete: %d unique jobs", len(unique))
     return unique
+
+
+# Locations of active searches that name no place ("kra"), logged once per
+# process rather than every cycle.
+_skipped_locations: set[str] = set()
+
+
+def _scrape_combos(subs: list[Subscription]) -> dict[tuple, list[str]]:
+    """(keyword, location, boards, max_age_days) -> the searches' keywords.
+
+    One query per keyword and place: searches differing only in window or
+    boards, or naming one city two ways ("cluj", "Cluj-Napoca"), each sent
+    the same query again. The widest window and every board asked for are
+    used; each search's own window and filters still apply at the match
+    stage. Locations that name no place (saved before validation, see
+    filters.clean_location) are not sent to the boards at all: each one
+    cost a failing request per board per cycle.
+    """
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for sub in subs:
+        for raw_location in sub.locations:
+            location = clean_location(raw_location)
+            if location is None:
+                if raw_location not in _skipped_locations:
+                    _skipped_locations.add(raw_location)
+                    log.warning(
+                        "Not scraping location %r (search #%s): it names no place",
+                        raw_location, sub.id,
+                    )
+                continue
+            place = normalize_location(location)[0].lower()
+            for keyword in sub.keywords:
+                group = groups.setdefault((keyword.lower().strip(), place), {
+                    "location": location.lower(), "boards": set(), "max_age": 0,
+                    "keywords": [],
+                })
+                group["boards"].update(sub.boards or ())
+                group["max_age"] = max(group["max_age"], sub.max_age_days or 0)
+                group["keywords"].append(keyword)
+    return {
+        (keyword, g["location"], tuple(sorted(g["boards"])), g["max_age"]): g["keywords"]
+        for (keyword, _place), g in groups.items()
+    }
 
 
 def _count_scraped(scraped: dict[str, set[str]], df: pd.DataFrame) -> None:
@@ -323,6 +373,7 @@ async def _scrape_extra_sources(
     scrape_combos: dict[tuple, list[str]],
     attempted: set[str] | None = None,
     scraped: dict[str, set[str]] | None = None,
+    searches_by_source: dict[str, set[tuple]] | None = None,
 ) -> list[Job]:
     """Run the plugin scrapers for every (keyword, location) combo.
 
@@ -343,7 +394,8 @@ async def _scrape_extra_sources(
         return []
 
     collected: list[Job] = []
-    for (keyword, location, _boards, max_age_days), keywords in scrape_combos.items():
+    for combo, keywords in scrape_combos.items():
+        keyword, location, _boards, max_age_days = combo
         terms = expand_keyword(keyword)[:MAX_EXTRA_TERMS]
         relevant = relevance_predicate(keywords)
         for scraper in scrapers:
@@ -352,6 +404,8 @@ async def _scrape_extra_sources(
                 continue
             if attempted is not None:
                 attempted.add(scraper.name)
+            if searches_by_source is not None:
+                searches_by_source.setdefault(scraper.name, set()).add(combo)
             frames: list[pd.DataFrame] = []
             for term in terms:
                 query = SearchQuery(
@@ -399,9 +453,14 @@ def _applies(scraper: object, query: object) -> bool:
 
 
 def job_matches_subscription(job: Job, sub: Subscription) -> bool:
-    """Check if a stored Job matches a Subscription's criteria."""
-    combined_text = f"{job.title} {job.description or ''}"
-    if matches_excluded_keywords(combined_text, sub.excluded_keywords):
+    """Check if a stored Job matches a Subscription's criteria.
+
+    Cheapest first: this runs for every subscription × job on the event
+    loop, and the checks that read the description (excluded words, the
+    years a junior posting asks for) cost far more than a date or place
+    comparison. Most jobs fail on place or age.
+    """
+    if not is_fresh_enough(job, sub.max_age_days):
         return False
     if matches_company_blacklist(job.company, sub.company_blacklist):
         return False
@@ -412,30 +471,14 @@ def job_matches_subscription(job: Job, sub: Subscription) -> bool:
         sub.salary_min, job.salary_monthly_min_ron, job.salary_monthly_max_ron,
     ):
         return False
-    if not matches_experience_level(
+    if not search_location_ok(job.location, sub.locations, sub.remote_ok):
+        return False
+    combined_text = f"{job.title} {job.description or ''}"
+    if matches_excluded_keywords(combined_text, sub.excluded_keywords):
+        return False
+    return matches_experience_level(
         job.title, sub.experience_levels, job.experience_level, job.description,
-    ):
-        return False
-    if not is_fresh_enough(job, sub.max_age_days):
-        return False
-
-    # Location matching — job must match at least one subscription location
-    if not sub.locations:
-        # No location filter → all locations match (user didn't restrict)
-        return True
-
-    for loc in sub.locations:
-        _search_loc, match_subs = normalize_location(loc)
-        if location_matches(job.location, match_subs):
-            return True
-
-    # Also include remote jobs when remote_ok is enabled
-    if sub.remote_ok:
-        _, remote_subs = normalize_location("remote")
-        if location_matches(job.location, remote_subs):
-            return True
-
-    return False
+    )
 
 
 def is_fresh_enough(job: Job, max_age_days: int | None) -> bool:
@@ -445,7 +488,9 @@ def is_fresh_enough(job: Job, max_age_days: int | None) -> bool:
     scores every job the cycle scraped, for anyone: a search with a 30-day
     window brought in postings that a 3-day search was then sent. Judged
     on the board's posted date, else on when the posting was first seen.
-    Compared by calendar day, since most boards give a date and no time.
+    Compared by calendar day, since most boards give a date and no time,
+    in the posting's own time zone: a date at local midnight (+03:00) is the
+    day before in UTC, which made the last day of the window a day short.
     """
     if not max_age_days:
         return True
@@ -454,8 +499,8 @@ def is_fresh_enough(job: Job, max_age_days: int | None) -> bool:
         return True
     if when.tzinfo is None:  # SQLite hands back naive UTC
         when = when.replace(tzinfo=timezone.utc)
-    oldest = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).date()
-    return when.astimezone(timezone.utc).date() >= oldest
+    oldest = (datetime.now(when.tzinfo) - timedelta(days=max_age_days)).date()
+    return when.date() >= oldest
 
 
 def _title_relevant_for_any_keyword(
@@ -515,13 +560,13 @@ async def match_jobs_for_subscription(
     jobs: list[Job],
     semantic_matcher: SemanticMatcher | None = None,
     user_vector: np.ndarray | None = None,
-) -> list[tuple[Job, float]]:
+) -> list[tuple[Job, float | None]]:
     """Return (job, score) pairs for jobs matching a subscription.
 
     If a SemanticMatcher is provided and available, uses cosine similarity
     for scoring — against the subscription blended with `user_vector` (the
     user's CV, refined by feedback) when there is one. Otherwise falls back
-    to regex with score=1.0.
+    to regex with score None (no similarity was measured).
     """
     # Pre-filter: hard filters that must pass regardless of matching mode
     candidates: list[Job] = []
@@ -575,8 +620,10 @@ async def match_jobs_for_subscription(
             matches.sort(key=lambda x: x[1], reverse=True)
             return matches
 
-    # Regex fallback path: title relevance (applied above) decides.
-    return [(job, 1.0) for job in candidates]
+    # Regex fallback path: title relevance (applied above) decides. No
+    # score: a stored 1.0 sorted above every cosine at delivery (and read
+    # as a "Strong match").
+    return [(job, None) for job in candidates]
 
 
 async def _cv_vector_for(user: User) -> np.ndarray | None:
@@ -790,6 +837,7 @@ async def deliver_pending(bot: JobBot) -> int:
 
     sent = 0
     closed_dms: list[int] = []  # discord ids whose DMs are closed
+    delivered_discord_ids: set[int] = set()  # ... and those a DM reached
     for items in by_user.values():
         statuses: dict[int, str] = {}
         sendable: list[tuple[UserJob, Job, User, Subscription]] = []
@@ -825,6 +873,7 @@ async def deliver_pending(bot: JobBot) -> int:
             )
             outcome = await _dm_user(bot, user.discord_user_id, embed, view)
             if outcome == DM_SENT:
+                delivered_discord_ids.add(user.discord_user_id)
                 statuses[uj.id] = UserJob.DM_SENT
                 sent_at[uj.id] = datetime.now(timezone.utc)
                 sent += 1
@@ -859,17 +908,12 @@ async def deliver_pending(bot: JobBot) -> int:
         await _record_dm_statuses(statuses, sent_at)
 
     # Ops alerts are owner DMs only (gosha/alerts.py): no channel posts, no
-    # mentions of the users concerned.
-    if closed_dms:
-        from gosha.alerts import sink_for_bot
+    # mentions of the users concerned. One alert key per user: said once,
+    # reminded per cooldown, "recovered" when a DM reaches them again —
+    # before, every cycle repeated the whole list. Never raises.
+    from gosha.alerts import report_closed_dms
 
-        sink = sink_for_bot(bot)
-        if sink is not None:  # send() never raises
-            await sink.send(
-                f"**{len(set(closed_dms))} user(s) have DMs closed** — matches "
-                "could not be delivered: "
-                + ", ".join(str(u) for u in dict.fromkeys(closed_dms))
-            )
+    await report_closed_dms(bot, closed_dms, delivered_discord_ids)
 
     return sent
 
@@ -1018,7 +1062,7 @@ async def _reload_jobs(job_ids: list[int]) -> list[Job]:
 async def _post_health_alert(
     bot: JobBot, alert_channel_id: int, report: CycleReport | None,
 ) -> None:
-    """Push scraper-health alerts to the ops channel and the owners' DMs.
+    """Push scraper-health alerts to the owner by DM (gosha/alerts.py).
 
     Deliberately silent on success. The previous behaviour — a message only
     when deliveries went out — meant a dead scraper looked exactly like a
