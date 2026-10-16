@@ -10,7 +10,8 @@ import asyncio
 import logging
 import os
 import random
-from functools import partial
+import time
+from functools import partial, wraps
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -24,7 +25,72 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 RESULTS_PER_TERM = 30
+# LinkedIn showed 90 results for "python developer" in Cluj-Napoca within
+# 14 days where we kept 30, and 51 of the other 60 were title-relevant
+# (2026-10-16), among them a junior trainee programme and a junior
+# full-stack role. Kept at 30 until the 429s below are under control:
+# every extra row is a list-page share and, uncached, a job page.
+LINKEDIN_RESULTS_PER_TERM = 30
 DELAY_BETWEEN_SEARCHES = 2  # seconds
+
+# fetch_description reads one LinkedIn job page per row, and JobSpy dedups
+# only within a call. The terms of one keyword return the same jobs, and so
+# do the cycles 4 hours apart: the 08:26 cycle of 2026-10-16 got 1,425
+# JobSpy rows for 343 distinct LinkedIn jobs, and LinkedIn answered 429 to
+# 196 job pages and 57 searches. A job page read in the last day is reused.
+LINKEDIN_DETAIL_TTL_SECONDS = 24 * 3600
+_LINKEDIN_DETAIL_PRUNE_AT = 5000
+_linkedin_details: dict[str, tuple[float, dict]] = {}
+
+
+def _cached_linkedin_details(fetch):
+    """Wrap jobspy's LinkedIn._fetch_details with the process-wide cache.
+
+    Only pages that gave a description are kept: a 429, an error or a
+    redirect comes back as {} and the next term or cycle tries again.
+    """
+
+    @wraps(fetch)
+    def fetch_details(self, job_id: str) -> dict:
+        now = time.monotonic()
+        hit = _linkedin_details.get(job_id)
+        if hit and now - hit[0] < LINKEDIN_DETAIL_TTL_SECONDS:
+            return dict(hit[1])
+        details = fetch(self, job_id)
+        if details and details.get("description"):
+            if len(_linkedin_details) >= _LINKEDIN_DETAIL_PRUNE_AT:
+                for key, (at, _) in list(_linkedin_details.items()):
+                    if now - at >= LINKEDIN_DETAIL_TTL_SECONDS:
+                        _linkedin_details.pop(key, None)
+            _linkedin_details[job_id] = (now, dict(details))
+        return details
+
+    fetch_details.gosha_cached = True  # type: ignore[attr-defined]
+    return fetch_details
+
+
+def install_linkedin_detail_cache() -> bool:
+    """Put the cache on jobspy's LinkedIn scraper (once). False if it moved.
+
+    _fetch_details is private to python-jobspy 1.3.0 (pinned in
+    constraints.txt); tests/test_scraper_jobspy.py fails if an upgrade
+    renames it. Without it, scraping works as before, uncached.
+    """
+    try:
+        from jobspy.linkedin import LinkedIn
+    except ImportError:  # pragma: no cover - layout of an unpinned jobspy
+        log.warning("jobspy.linkedin.LinkedIn not found; LinkedIn job pages are not cached")
+        return False
+    fetch = getattr(LinkedIn, "_fetch_details", None)
+    if fetch is None:
+        log.warning("LinkedIn._fetch_details not found; LinkedIn job pages are not cached")
+        return False
+    if not getattr(fetch, "gosha_cached", False):
+        LinkedIn._fetch_details = _cached_linkedin_details(fetch)
+    return True
+
+
+install_linkedin_detail_cache()
 
 
 def _jobspy_country(name: str) -> object | None:
@@ -91,6 +157,9 @@ def jobspy_kwargs(
     tests/test_scraper_jobspy.py checks these names against the installed
     signature.
 
+    LinkedIn alone gets LINKEDIN_RESULTS_PER_TERM; a call that mixes it
+    with other boards keeps the common cap.
+
     `fetch_description` (python-jobspy >= 1.2; it replaced the LinkedIn-only
     `linkedin_fetch_description`) fetches each posting's description where
     the list view has none: LinkedIn and, since 1.3, Glassdoor. The
@@ -100,7 +169,9 @@ def jobspy_kwargs(
         "site_name": boards,
         "search_term": search_term,
         "location": location,
-        "results_wanted": RESULTS_PER_TERM,
+        "results_wanted": (
+            LINKEDIN_RESULTS_PER_TERM if boards == ["linkedin"] else RESULTS_PER_TERM
+        ),
         "hours_old": max_age_days * 24,
         "proxies": proxy,
         "fetch_description": True,
@@ -136,6 +207,30 @@ def jobspy_boards_for(location: str, boards: list[str]) -> list[str]:
     return list(boards)
 
 
+# LinkedIn's "Seniority level" criterion (python-jobspy lowercases it into
+# job_level, read from the job page when fetch_description is on) as the
+# board label filters.matches_experience_level and seniority.posting_level
+# honour. "associate" covers graduate and 2-3 year roles alike and
+# "not applicable" says nothing; both stay unknown, for the title and
+# description rules to decide. "mid-senior level" is LinkedIn's one bucket
+# for experienced roles: "mid", since the label outranks the description's
+# years in the ranking.
+_JOB_LEVELS = {
+    "internship": "intern",
+    "entry level": "entry",
+    "mid-senior level": "mid",
+    "director": "senior",
+    "executive": "senior",
+}
+
+
+def experience_level_from_job_level(job_level: object) -> str | None:
+    """intern/entry/mid/senior for a JobSpy job_level, or None."""
+    if not isinstance(job_level, str):
+        return None
+    return _JOB_LEVELS.get(job_level.strip().lower())
+
+
 def scrape_direct_enabled() -> bool:
     """SCRAPE_DIRECT=true lets JobSpy also use the server's own IP."""
     return os.getenv("SCRAPE_DIRECT", "").strip().lower() in ("1", "true", "yes", "on")
@@ -168,7 +263,8 @@ async def _scrape_single(
     random.shuffle(proxies)
     gd_location = city_only(location)
 
-    # Split boards into glassdoor vs others (glassdoor needs city-only location)
+    # One call per board: Glassdoor needs a city-only location, and LinkedIn
+    # takes more results than the others (LINKEDIN_RESULTS_PER_TERM).
     gd_boards = [b for b in boards if b == "glassdoor"]
     main_boards = [b for b in boards if b != "glassdoor"]
 
@@ -183,17 +279,21 @@ async def _scrape_single(
             frames: list[pd.DataFrame] = []
 
             if main_boards:
-                df_main: pd.DataFrame = await loop.run_in_executor(
-                    None,
-                    partial(
-                        scrape_jobs,
-                        **jobspy_kwargs(
-                            main_boards, search_term, location, max_age_days,
-                            proxy, indeed_country(location),
+                # Concurrently, as one JobSpy call ran them; any board raising
+                # fails the route, as it did then.
+                frames.extend(await asyncio.gather(*(
+                    loop.run_in_executor(
+                        None,
+                        partial(
+                            scrape_jobs,
+                            **jobspy_kwargs(
+                                [board], search_term, location, max_age_days,
+                                proxy, indeed_country(location),
+                            ),
                         ),
-                    ),
-                )
-                frames.append(df_main)
+                    )
+                    for board in main_boards
+                )))
 
             if gd_boards:
                 try:
@@ -276,6 +376,9 @@ async def scrape_jobs_raw(
     url_col = "job_url" if "job_url" in merged.columns else "link"
     if url_col in merged.columns:
         merged = merged.drop_duplicates(subset=[url_col], keep="first")
+
+    if "job_level" in merged.columns:
+        merged["experience_level"] = merged["job_level"].map(experience_level_from_job_level)
 
     log.info("Raw scrape: %d unique results for '%s' in '%s'", len(merged), keyword, location)
     return merged

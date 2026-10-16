@@ -87,13 +87,17 @@ async def test_scrape_single_routes_through_proxy_with_country(monkeypatch):
         ["indeed", "linkedin", "glassdoor"],
     )
 
-    assert len(df) == 2
-    main, gd = calls
-    assert main["site_name"] == ["indeed", "linkedin"]
-    assert main["proxies"] == "socks5://127.0.0.1:1080"
-    assert main["country_indeed"] == "romania"
-    assert main["location"] == "Cluj-Napoca, Romania"
-    assert "proxy" not in main
+    assert len(df) == 3
+    by_board = {c["site_name"][0]: c for c in calls}
+    assert sorted(by_board) == ["glassdoor", "indeed", "linkedin"]
+    assert all(len(c["site_name"]) == 1 for c in calls)
+    for board in ("indeed", "linkedin"):
+        main = by_board[board]
+        assert main["proxies"] == "socks5://127.0.0.1:1080"
+        assert main["country_indeed"] == "romania"
+        assert main["location"] == "Cluj-Napoca, Romania"
+        assert "proxy" not in main
+    gd = by_board["glassdoor"]
     assert gd["site_name"] == ["glassdoor"]
     assert gd["location"] == "Cluj-Napoca"
     assert gd["proxies"] == "socks5://127.0.0.1:1080"
@@ -196,3 +200,166 @@ async def test_europe_search_only_asks_linkedin(monkeypatch):
     assert len(df) == 1
     assert [c["site_name"] for c in calls] == [["linkedin"]]
     assert calls[0]["location"] == "Europe"
+
+
+# LinkedIn's "Seniority level" criterion, as python-jobspy 1.3.0 lowercases it
+# into job_level (only when fetch_description reads the job page).
+@pytest.mark.parametrize(
+    ("job_level", "expected"),
+    [
+        ("internship", "intern"),
+        ("entry level", "entry"),
+        ("Entry level", "entry"),
+        # LinkedIn's one bucket for every experienced role; "mid" because the
+        # label outranks the description's years in seniority.posting_level.
+        ("mid-senior level", "mid"),
+        ("director", "senior"),
+        ("executive", "senior"),
+        # "Associate" is used for both graduate and 2-3 year roles; the title
+        # and description rules decide those.
+        ("associate", None),
+        ("not applicable", None),
+        (None, None),
+        (float("nan"), None),
+        ("", None),
+    ],
+)
+def test_experience_level_from_job_level(job_level, expected):
+    assert scraper.experience_level_from_job_level(job_level) == expected
+
+
+async def test_scrape_jobs_raw_carries_linkedin_seniority_as_experience_level(monkeypatch):
+    monkeypatch.setattr(scraper, "DELAY_BETWEEN_SEARCHES", 0)
+
+    def fake_scrape_jobs(**kwargs):
+        return pd.DataFrame([
+            {"job_url": "https://li/1", "site": "linkedin", "job_level": "internship"},
+            {"job_url": "https://li/2", "site": "linkedin", "job_level": "mid-senior level"},
+            {"job_url": "https://in/3", "site": "indeed", "job_level": None},
+        ])
+
+    monkeypatch.setattr(scraper, "scrape_jobs", fake_scrape_jobs)
+    df = await scraper.scrape_jobs_raw(_Tunnels(), "python developer", "cluj", 14, ["linkedin"])
+    levels = dict(zip(df["job_url"], df["experience_level"]))
+    assert levels["https://li/1"] == "intern"
+    assert levels["https://li/2"] == "mid"
+    assert levels["https://in/3"] is None
+
+
+async def test_scrape_jobs_raw_without_job_level_column(monkeypatch):
+    monkeypatch.setattr(scraper, "DELAY_BETWEEN_SEARCHES", 0)
+    monkeypatch.setattr(
+        scraper, "scrape_jobs",
+        lambda **_: pd.DataFrame([{"job_url": "https://in/1", "site": "indeed"}]),
+    )
+    df = await scraper.scrape_jobs_raw(_Tunnels(), "python developer", "cluj", 14, ["indeed"])
+    assert "experience_level" not in df.columns or df["experience_level"].isna().all()
+
+
+async def test_linkedin_internship_label_is_stored_on_the_job(patched_db, monkeypatch):
+    """End to end: the label reaches Job.experience_level through upsert_jobs."""
+    from gosha.pipeline import upsert_jobs
+
+    monkeypatch.setattr(scraper, "DELAY_BETWEEN_SEARCHES", 0)
+    monkeypatch.setattr(
+        scraper, "scrape_jobs",
+        lambda **_: pd.DataFrame([{
+            "job_url": "https://www.linkedin.com/jobs/view/1", "site": "linkedin",
+            "title": "Software Engineer", "company": "Acme",
+            "location": "Cluj-Napoca, Romania", "job_level": "internship",
+        }]),
+    )
+    df = await scraper.scrape_jobs_raw(_Tunnels(), "software engineer", "cluj", 14, ["linkedin"])
+    (job,) = await upsert_jobs(df)
+    assert job.experience_level == "intern"
+
+
+def test_linkedin_alone_asks_for_more_results():
+    """LinkedIn showed 90 results for "python developer" in Cluj (14 days)
+    where we kept 30; 51 of the other 60 were title-relevant (2026-10-16)."""
+    linkedin = jobspy_kwargs(["linkedin"], "python developer", "Cluj", 14, None, None)
+    indeed = jobspy_kwargs(["indeed"], "python developer", "Cluj", 14, None, None)
+    assert linkedin["results_wanted"] == scraper.LINKEDIN_RESULTS_PER_TERM
+    assert indeed["results_wanted"] == scraper.RESULTS_PER_TERM
+    mixed = jobspy_kwargs(["indeed", "linkedin"], "python developer", "Cluj", 14, None, None)
+    assert mixed["results_wanted"] == scraper.RESULTS_PER_TERM
+
+
+async def test_one_failing_board_fails_the_route(monkeypatch):
+    """Indeed and LinkedIn are separate calls now; either raising still moves
+    the search to the next route, as the single combined call did."""
+    monkeypatch.setenv("SCRAPE_DIRECT", "1")
+    monkeypatch.setattr(scraper.random, "shuffle", lambda routes: None)
+    seen: list[tuple] = []
+
+    def fake_scrape_jobs(**kwargs):
+        seen.append((kwargs["site_name"][0], kwargs["proxies"]))
+        if kwargs["proxies"] and kwargs["site_name"] == ["linkedin"]:
+            raise ConnectionError("tunnel blocked")
+        return pd.DataFrame([{"job_url": f"https://x/{kwargs['site_name'][0]}"}])
+
+    monkeypatch.setattr(scraper, "scrape_jobs", fake_scrape_jobs)
+    df = await scraper._scrape_single(
+        _Tunnels(), "python", "Cluj-Napoca, Romania", 7, ["indeed", "linkedin"],
+    )
+    assert sorted(df["job_url"]) == ["https://x/indeed", "https://x/linkedin"]
+    assert ("linkedin", None) in seen
+
+
+class _FakeLinkedIn:
+    """Stands in for jobspy.linkedin.LinkedIn: counts page fetches."""
+
+    def __init__(self, details: dict[str, dict]):
+        self.details = details
+        self.fetched: list[str] = []
+
+    def _fetch_details(self, job_id: str) -> dict:
+        self.fetched.append(job_id)
+        return dict(self.details.get(job_id, {}))
+
+
+def test_linkedin_detail_pages_are_fetched_once_per_day(monkeypatch):
+    """A broad keyword's terms return the same LinkedIn jobs: the 08:26 cycle on
+    2026-10-16 got 1,425 JobSpy rows for 343 distinct LinkedIn jobs, each row a
+    job-page request, and LinkedIn answered 429 to 196 of them."""
+    monkeypatch.setattr(scraper, "_linkedin_details", {})
+    clock = [1000.0]
+    monkeypatch.setattr(scraper.time, "monotonic", lambda: clock[0])
+    li = _FakeLinkedIn({"1": {"description": "Build things", "job_level": "internship"}})
+    fetch = scraper._cached_linkedin_details(_FakeLinkedIn._fetch_details)
+
+    assert fetch(li, "1")["description"] == "Build things"
+    assert fetch(li, "1")["job_level"] == "internship"
+    assert li.fetched == ["1"]
+
+    clock[0] += scraper.LINKEDIN_DETAIL_TTL_SECONDS + 1
+    fetch(li, "1")
+    assert li.fetched == ["1", "1"]
+
+
+def test_failed_linkedin_detail_pages_are_retried(monkeypatch):
+    """A 429 or redirect comes back as {}: not cached, so the next term retries."""
+    monkeypatch.setattr(scraper, "_linkedin_details", {})
+    li = _FakeLinkedIn({})
+    fetch = scraper._cached_linkedin_details(_FakeLinkedIn._fetch_details)
+    assert fetch(li, "2") == {}
+    assert fetch(li, "2") == {}
+    assert li.fetched == ["2", "2"]
+
+
+def test_cached_linkedin_details_are_copies(monkeypatch):
+    monkeypatch.setattr(scraper, "_linkedin_details", {})
+    li = _FakeLinkedIn({"3": {"description": "x"}})
+    fetch = scraper._cached_linkedin_details(_FakeLinkedIn._fetch_details)
+    fetch(li, "3")["description"] = "changed"
+    assert fetch(li, "3")["description"] == "x"
+
+
+def test_linkedin_detail_cache_is_installed_on_the_pinned_jobspy():
+    """The cache wraps a private jobspy method; fail loudly if 1.3.0's name moves."""
+    from jobspy.linkedin import LinkedIn
+
+    assert scraper.install_linkedin_detail_cache() is True
+    assert getattr(LinkedIn._fetch_details, "gosha_cached", False)
+    scraper.install_linkedin_detail_cache()  # idempotent: never wraps twice
+    assert not getattr(LinkedIn._fetch_details.__wrapped__, "gosha_cached", False)
