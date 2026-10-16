@@ -36,13 +36,13 @@ change moves up or down, or it stops being a test set.
 - **IDs** are `heldout-<source>-NNN`, so they never collide with the main
   set's `<source>-NNN`.
 
-### Searches (keyword, location): 56 in total
+### Searches (keyword, location): 57 in total
 
 | Group | Searches |
 |---|---|
 | Role searches (33) | python developer (Cluj), java developer (Bucuresti), c# developer (Iasi), frontend developer (Timisoara), node.js, php developer, full stack (Cluj), mobile developer, kotlin, react native, data engineer (Bucuresti), business intelligence, power bi, data scientist, ai engineer, c++ (Iasi), firmware, automotive software (Timisoara), cloud engineer, site reliability, kubernetes, qa automation (Cluj), tester manual, cyber security, helpdesk, suport it, business analyst, project manager, contabil (Cluj), economist, agent vanzari, call center (Iasi), operator date |
 | Entry level (16) | intern (Bucuresti), internship it (Cluj), practica, absolvent, entry level, junior software (Timisoara), junior .net, junior frontend (Iasi), junior data analyst, junior tester, junior android, trainee, graduate program, junior machine learning, junior c++, stagiu (Bucuresti) |
-| Remote (7) | python, developer, data, devops, frontend, qa, machine learning, support, all with location `remote` (this is what turns on RemoteOK and Jobicy) |
+| Remote (8) | python, developer, data, devops, frontend, qa, machine learning, support, all with location `remote` (this is what turns on RemoteOK and Jobicy) |
 
 A search with no city named used `romania`.
 
