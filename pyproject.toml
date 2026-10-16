@@ -33,7 +33,7 @@ Issues = "https://github.com/Bogzx/gosha-jobs/issues"
 # the code base is written against; CI runs it (.github/workflows/ci.yml).
 [tool.ruff]
 target-version = "py311"
-extend-exclude = ["web", "migration"]
+extend-exclude = ["web", "migration", ".agents"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]

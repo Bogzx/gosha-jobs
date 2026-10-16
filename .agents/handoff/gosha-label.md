@@ -106,3 +106,8 @@ For an embedding model, pass the encoder that `scripts/eval_ranking.py` builds, 
 - No env vars needed.
 - External services touched: one collection run on 2026-10-16 against ejobs.ro, bestjobs.eu, hipo.ro, remoteok.com and jobicy.com, from this workstation's IP, with 6 detail fetches per search. JobSpy was not used.
 - Machine-specific: the scratchpad under `/tmp/claude-1000/...` (not transferred, not needed). No other absolute paths remain in repo files.
+
+## Lead note on the server (2026-10-16)
+CI runs `ruff check .`; eval/heldout/collect.py has 12 findings (E401/E402/E702). Reformat it so
+`.venv/bin/ruff check eval/heldout` is clean (no behaviour change). Then continue with TODO 1 and 3.
+TODO 2 is now done by gosha-rank (held-out run: production 0.625 vs cosine 0.543).

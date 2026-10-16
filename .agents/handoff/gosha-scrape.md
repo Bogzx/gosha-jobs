@@ -295,3 +295,11 @@ current directory (that 1,345-row dataset was in /tmp and did not travel; regene
 - Module-level caches (process-wide, reset on restart): ejobs `_browse_cache` (10 min),
   hipo `_cache` (10 min), details `_cache` (24 h, 250 fetches/host/hour), remoteok (10 min),
   jobicy (3 h), and base `_browser_hosts`.
+
+## Lead note on the server (2026-10-16)
+- Production logs (read-only, last 7 days): BestJobs returns ~271–281 raw / ~52 kept per cycle, no 403s.
+  The prod IP is not blocked → keep `SCRAPE_BROWSER_FALLBACK` off (recommendation to owner: never enable).
+- New item from gosha-pipe's TODO 3: map JobSpy `job_level` (LinkedIn "internship"/"entry level"/
+  "mid-senior level") to `experience_level` (intern/entry/mid/senior) in gosha/scraper.py, with tests.
+- Then continue Remaining TODO 2 (LinkedIn cap — measure from this server, gently; it 429s) and 3.
+- Run tests here with `LD_PRELOAD=$PWD/.venv/lib/python3.11/site-packages/scikit_learn.libs/libgomp-a49a47f9.so.1.0.0`.

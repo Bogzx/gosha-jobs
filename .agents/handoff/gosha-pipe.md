@@ -112,3 +112,46 @@ See Remaining TODO. Measurements behind them:
 - venv: `/data/Repos/gosha-jobs/.venv` (machine-specific path; Python 3.11, CPU torch). Run tests with `PYTHONPATH=.` when invoking scripts directly.
 - External services touched: read-only GET/HEAD requests to public posting pages on ejobs.ro, bestjobs.eu and hipo.ro (about 40 requests). No production server, no Discord.
 - The original report path `/tmp/claude-1000/-data-Repos/2e9dc50a-.../scratchpad/report-pipe.md` is machine-specific; this handoff replaces it.
+
+## Lead review on the server (2026-10-16) — corrections to apply, in this order
+Review point 1 addressed; 3 mostly; 2 only for the exact tested case. Suite 874/9; your 4 files 134 pass.
+Each fix needs a test that fails on current code. (Run tests on this aarch64 server with
+`LD_PRELOAD=$PWD/.venv/lib/python3.11/site-packages/scikit_learn.libs/libgomp-a49a47f9.so.1.0.0`.)
+1. **HIGH `required_years` drops ≥10** (filters.py:645, `1 <= years <= 9`): "10+ years of professional
+   experience required" → None → unmarked title passes intern+junior. Accept 10–30 when "experience" is
+   adjacent; keep company-age exclusion separately.
+2. **Nice-to-have skip too broad** (filters.py:616/:640): "At least 4 years of experience (5 years is a
+   plus)" → None; "5+ years of experience in Java plus Spring Boot" → None (bare `plus\b`). Drop bare
+   `plus`; cut the tail at "(" / only test text after the next number.
+3. **False requirements from ±80-char "experien" window** (filters.py:636): "over 5 years on the market.
+   No prior experience required" → 5; "Within 3 years you will grow into a lead. Experience with
+   Selenium a plus" → 3; "Bachelor degree (4 years). Some experience with SQL" → 4; "We're 4 years old …
+   experience in sales" → 4. Require "experience" in the same sentence, after the number or after a
+   requirement verb (min/at least/minim/de). Document range → lower bound.
+4. **Excluded words miss attached forms** (filters.py:534): ".NET" ∌ "ASP.NET Core"/"VB.NET", "C++" ∌
+   "C++17". Apply the lookbehind only if keyword[0] is \w, the lookahead only if keyword[-1] is \w.
+5. **Closed-DM notice repeats every cycle** (pipeline.py:863, direct `sink.send`). Route through the
+   Alerter with key `delivery:closed_dms` (coordinate with gosha-health, who provides the helper).
+   Also: on the no-subscriptions early return (pipeline.py:234) health re-publishes a stale
+   `last_report` (pipeline.py:956) — clear it/return the report (gosha-health owns `_post_health_alert`).
+6. **Match-stage cost** (pipeline.py:528): level check runs before location/freshness and `_is_junior`
+   → `required_years(description)` ≈234 µs per call, per subscription × job × keyword, sync in the
+   event loop. Order cheap checks first; cache `required_years` per job/description.
+7. **Location collisions** (filters.py:116/:162): "Porto Velho, RO, BR", "Ro, Emilia-Romagna, Italy",
+   "Calarasi, Moldova", "Floresti, Moldova", "Slatina, Croatia", "Alexandria, Egypt", "Arad, Israel" all
+   match romania/europe. Add a negative country check when a non-Romanian country is named. Do TODO 7
+   ("Remote - US only"/"Remote (USA)") now.
+8. **Freshness tz off-by-one** (`is_fresh_enough`): aware posted_at at local midnight (+03:00) shifts a
+   day in UTC. Compare dates in the posting's own tz (or allow one day margin).
+9. **Location validation (found in prod, read-only)**: real active subscriptions have locations
+   `["iasi","kra","mun"]` (#24) and `["llocation:Cluj"]` (#25, matches nothing). Normalise at create/
+   update like `_clean_levels`: strip a leading `location:`/`llocation:`-style option prefix, and warn
+   or reject tokens that resolve to no known place and are <4 chars. Do NOT touch prod rows (owner).
+10. `_clean_levels` vs legacy values: bot `/edit` (bot.py:461) stores typed levels raw, and SearchForm.tsx
+    sends stored levels back → a bot-saved "fresher" makes the search unsaveable from the web. Drop
+    unknown stored values on update (log) and canonicalise in the bot path too (ask the lead if bot.py
+    needs an owner — treat it as yours for this change).
+11. Low: regex-fallback scores (1.0) sort above cosine scores in best-first dedup — normalise or sort
+    within mode; `list_jobs` canonical_only fast path vs slow path inconsistency for inactive canonicals.
+Remaining TODO items 1 (feed hard filters — now coordinate with gosha-rank, who owns recommend.py),
+3 (job_level → gosha-scrape), 4–6, 8–10 stay as listed above.

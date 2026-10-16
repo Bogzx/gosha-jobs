@@ -52,6 +52,8 @@ uv pip install --python .venv/bin/python -c constraints.txt \
   "torch==2.14.0+cpu"
 uv pip install --python .venv/bin/python -r requirements-dev.txt -c constraints.txt scikit-learn
 .venv/bin/python -m pytest -q        # baseline: see handoff/gosha-lead.md
+# aarch64 server: sklearn's libgomp needs preloading or 4 semantic tests skip
+# export LD_PRELOAD=$PWD/.venv/lib/python3.11/site-packages/scikit_learn.libs/libgomp-a49a47f9.so.1.0.0
 
 # 3. Inside herdr on the server: start the lead, which starts the rest
 .agents/resume.sh            # or: .agents/resume.sh gosha-rank gosha-pipe  (a subset)

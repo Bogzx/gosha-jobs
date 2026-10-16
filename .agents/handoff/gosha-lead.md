@@ -80,3 +80,22 @@ work to the WIP branch. Owner's Discord: @Bogdanila.
 - Laptop paths (/data/Repos/gosha-jobs, /tmp/claude-1000/...) do not exist on the server.
 - Embedding cache for experiments lived in the laptop scratchpad; re-runs re-download the
   model (~420 MB for all-mpnet-base-v2) and re-encode (~2 min on CPU).
+
+## Server session (2026-10-16, ~13:00 UTC) — state
+- Clone: /home/ubuntu/gosha-agents (live deployment is /home/ubuntu/gosha — never touch).
+- Baseline reproduced: 874 passed, 9 skipped — only with
+  `LD_PRELOAD=$PWD/.venv/lib/python3.11/site-packages/scikit_learn.libs/libgomp-a49a47f9.so.1.0.0`
+  (aarch64 static-TLS bug; without it 4 semantic tests skip silently). Prod container unaffected.
+- ruff: excluded `.agents` in pyproject; 12 findings remain in eval/heldout/collect.py → gosha-label.
+- Reviews of pipe/rank/health done (by read-only reviewer subagents, checked against code); corrections
+  appended to each handoff under "Lead review on the server". Key items:
+  pipe: required_years drops ≥10 years (HIGH), over-broad nice-to-have, ±80-char window false positives,
+  excluded ".NET" misses "ASP.NET", location collisions, location validation.
+  rank: stale caches keyed by id only (HIGH), the "failing" test passes only via test-order leakage,
+  clear-all eviction mid-build, clip z, one seniority detector AFTER pipe fixes required_years, CI eval gate
+  baseline stale.
+  health: off-switch semantics differ per path, `<@id>` dropped outside the bot, flapping, closed-DM
+  notice dedup (with pipe), test that can send a real DM (fix first), DM retry.
+- Prod findings (read-only): BestJobs not blocked from prod IP (fallback unnecessary). Subscriptions #24
+  `["iasi","kra","mun"]` and #25 `["llocation:Cluj"]` have malformed locations → owner decision to fix rows.
+- Next: respawn workers with `.agents/resume.sh`, then review each unit as they report.

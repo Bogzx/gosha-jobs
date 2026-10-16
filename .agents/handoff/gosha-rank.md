@@ -175,3 +175,38 @@ Lead's sweep on the main set only (scratch script, TF-IDF IDF fitted on postings
   /tmp/claude-1000/-data-Repos/2e9dc50a-94ea-4281-8198-f5d45a207a0f/scratchpad/ (exp.py, models.log, cache/) —
   numbers copied above; a background `exp.py` (e5-large) was still running on the old machine.
 - `herdr` is the multi-agent CLI used to talk to gosha-pipe / the lead.
+
+## Lead review on the server (2026-10-16) — corrections to apply, in this order
+Main-set eval reproduces (production 0.731 vs cosine 0.546). Run tests on this aarch64 server with
+`LD_PRELOAD=$PWD/.venv/lib/python3.11/site-packages/scikit_learn.libs/libgomp-a49a47f9.so.1.0.0`.
+1. **The "known failing" test only passes by test-order leakage.** tests/api/test_demo.py fills module-level
+   `lexical._counts` / `recommend._level_cache` for ids 1..N; later tests reuse ids on fresh SQLite. Run alone,
+   `test_feed_reads_descriptions_only_for_the_page[True]` still fails. Add the autouse cache-clearing
+   fixture (in tests/conftest.py scope that covers tests/api too — ask the lead if conftest needs touching;
+   you may add it) and fix the bug: `_needs_text(job, keyword=bool(cv_text.strip()))` (recommend.py:400).
+2. **HIGH stale caches**: key `_level_cache` and lexical counts on `(id, hash(embedding bytes))`
+   (recommend.py:378, :609-616). Scenario: title-only first sighting → counts cached → description arrives
+   and re-embeds → never reloaded until restart. Fix the lexical.py:17-19 docstring that claims this already.
+3. **Deferred vs NULL + clear-all eviction**: `_cached_counts` clears all `_counts` at 20k mid-build
+   (lexical.py:78-79) → later keys get empty Counters → broken index cached and reused for everyone.
+   Sentinel for "deferred"; real LRU (or snapshot); never cache an index built with a miss; cache genuinely
+   NULL descriptions in `_level_cache` (recommend.py:393).
+4. Thread-safety: `posting_level` `in` then `[]` (recommend.py:389) → KeyError under concurrent clear;
+   use `.get()` + lock.
+5. **Clip z-scores to ±3** in hybrid_scores (sparse keyword z can reach √N ≈ 44 and dominate).
+6. **One seniority detector (TODO 2)** — sequencing: gosha-pipe is now fixing `filters.required_years`
+   (≥10 years dropped, over-broad nice-to-have skip, ±80-char window false positives). Do items 1–5 first,
+   then import from filters once pipe reports done. 13/202 main and 22/253 held-out titles disagree today
+   (comparison script: /tmp/claude-1001/-home-ubuntu-gosha-jobs/3f714841-0998-4735-a06e-3fd5c1335b14/scratchpad/cmp_seniority.py).
+   Decisions: exactly 2 years = ENTRY (matches filters and gold labels 6/8); "expert" = MID; II/III/IV = MID;
+   cedilla "Şef"/"Șefă" via fold; keep your `student\w*` (filters lacks "Working Student" — tell gosha-pipe);
+   "Staff Accountant"/"Lead Generation" false SENIOR → tell gosha-pipe to fix SENIOR_RE, not locally.
+   Empty/undecryptable CV text → UNKNOWN level (no penalty), not JUNIOR.
+7. **CI gate is toothless**: eval/results/*.json still hold the 0.546 baseline, so a 0.18 regression passes;
+   add gosha/lexical.py and gosha/seniority.py to eval.yml `paths:`. Regenerate results (TODO 5) only after
+   items 1–6, commit code + baseline together (via the lead).
+8. Lexical superset-index reuse changes IDF (top-10 overlap 8–10/10): prefer exact-key reuse unless the
+   rebuild cost is measured to matter; otherwise document it.
+9. Held-out gain (+0.08) vs main (+0.19) suggests main-set overfitting: choose weights on main, report
+   held-out, prefer round values; no regex/penalty tweaks justified only by main-set failures.
+10. Coordinate with gosha-pipe on feed hard filters (their TODO 1: location/level in get_feed — your file).

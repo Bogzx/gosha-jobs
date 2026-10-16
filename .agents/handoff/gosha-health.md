@@ -61,3 +61,41 @@ Do NOT touch: gosha/scrapers/*, matching.py, recommend.py, filters.py (other age
 - Runtime state files created by the bot in prod: data/alerts_state.json and data/scrape_health.json. Delete them to re-baseline.
 - New env/secrets: ALERT_DM_USER_IDS, ALERTS_ENABLED, ALERT_COOLDOWN_MINUTES (bot .env). GitHub secrets: DISCORD_BOT_TOKEN, ALERT_DM_USER_IDS. Optional GitHub vars: ALERTS_ENABLED, GOSHA_PUBLIC_URL, WATCHDOG_*_HOURS.
 - herdr agent names used: gosha-pipe.
+
+## Lead review on the server (2026-10-16) — corrections to apply, in this order
+Verified: no channel/@mention ops path remains; all paths are owner DMs. 69 health tests pass.
+`page()` JS was executed in node with mocks (12 scenarios): REST calls, Bot header, multi-ID, error
+handling and no secret leakage are correct. Fix these (each with a test):
+1. **One off-switch rule everywhere.** Today `config.env_flag` (only 1/true/yes/on = on),
+   `alerts.alerts_enabled()` (alerts.py:206, only 0/false/no/off = off), `page()`
+   (scraper-smoke.yml:85, `=== 'false'`, no trim) and site-watchdog.yml:46 (only `false`) disagree:
+   `ALERTS_ENABLED=disabled` silences the bot but not the heartbeat; `0` still DMs from the smoke
+   workflow. Rule: anything not truthy (1/true/yes/on, trimmed, case-insensitive) = off. Mirror it in
+   the JS and the shell gate.
+2. **`<@id>` parsing everywhere.** `alerts._parse_ids` (alerts.py:351) and the JS regex
+   (scraper-smoke.yml:84) drop `<@123>` that config accepts → heartbeat silently sends nothing.
+3. **Flapping.** Scheduler keys clear on every EVENT_JOB_EXECUTED (MAX_INSTANCES → alert → recovered,
+   forever; cooldown doesn't apply). Single transient zero-yield cycle also alerts+recovers. Add
+   hysteresis: suppress a re-raise within the cooldown of a recovery, or require N clean runs to clear.
+4. **Closed-DM notice dedup** (pipeline.py:861-870, gosha-pipe's code): agree the hook with gosha-pipe —
+   route through `get_alerter().update(..., {"delivery:closed_dms": text})`. You provide the helper;
+   gosha-pipe calls it.
+5. **Stale report re-published** when there are no subscriptions: run_scrape_stage returns early
+   (pipeline.py:234) and pipeline.py:956 re-publishes `health.last_report`. Ask gosha-pipe to clear it /
+   return the report; you own `_post_health_alert`.
+6. **Duplicate "no new jobs" alert**: `data:no_new_jobs` (in-process) and `site:no_new_jobs` (watchdog)
+   both fire. Keep the watchdog's only for "scrape stale"; drop its no-new-jobs, or the in-process one.
+7. **False positives**: collapse baseline should be normalised by searches attempted (or reset when the
+   set of subscription searches changes); `data:no_new_jobs` → 48h; suppress `data:embeddings` while a
+   model-change backfill is progressing.
+8. **Retry on failed DM**: `sink.send` returns delivered/not; roll back `last_sent` if not (as
+   site_watchdog.py:217 already does).
+9. **Heartbeat `_page_owner` rate limit** via a timestamp file in data/ (≤1 per hour).
+10. **Test safety (do first)**: tests/test_healthcheck_script.py:54 runs a subprocess with full os.environ
+    and an unmocked `_page_owner` → a real DM if run where DISCORD_TOKEN/ALERT_DM_USER_IDS are exported.
+    Set `ALERTS_ENABLED=false` in `_run_watchdog`'s env.
+11. Site watchdog: exit 0 once the DM is delivered (GitHub emails a failure every 30 min otherwise);
+    `--dry-run` must not write the state file.
+12. Low: freshness `_compute` failure is not cached (cache the error for 60s too); prune state keys for
+    sources no longer attempted; drop stale "ops channel" wording (pipeline.py:1021 docstring is pipe's
+    file — ask; scrape_health.py:34, CycleReport.summary); comment out `ALERT_CHANNEL_ID` in .env.example.
