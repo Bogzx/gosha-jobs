@@ -2,6 +2,27 @@
 
 Written: 2026-10-16 ~12:05 UTC · Branch: wip/agents-2026-10-16 · Base commit: 5490d6a
 
+## Current state (2026-10-16 ~18:30 UTC) — read this first
+- **Released.** main = 1fe6243, deployed 18:05 UTC (lead). Every scraper/dedup change in this handoff is in it
+  (a84ba70 is an ancestor; no diff in our files between 1fe6243 and the branch). The lead verified the first
+  deployed cycle's 20 DMs by hand as relevant. The working tree is clean; nothing of ours is uncommitted.
+- Live in prod now: JobSpy job_level → experience_level, LinkedIn 24 h job-page cache, one JobSpy call per board
+  with per-board retry, `LINKEDIN_RESULTS_PER_TERM = 30`, invisible-char/entity cleaning, title requisition-code
+  stripping, Indeed "junior X" fallback (2 searches), refresh-date flags (`date_posted_is_refresh`), reposter
+  handling and `dedup.same_posting` (used by pipe for DM grouping), baseline catalog code (`SCRAPE_BASELINE`,
+  default **off**; whether the owner turned it on is not known to us).
+- Lead instruction: **stand by, no new work, no live requests.**
+- Waiting on deployed-cycle evidence (do nothing until the lead asks):
+  1. LinkedIn cap 30 → 60: only if deployed cycles show search-429s down from main's 27–112 per cycle
+     (`docker logs gosha-bot`, read-only).
+  2. Baseline Tier B (LinkedIn rotation): not approved; tell gosha-pipe first (its TODO 11, health grace period).
+  3. BestJobs: the prod image got 200 at 13:11 UTC; deployed cycles should show bestjobs > 0 (venv numbers are
+     not evidence, see the BestJobs section).
+- Open lead/owner decisions (sent; the lead was `agent_blocked` then): deactivate the 52 foreign Glassdoor rows
+  (Munich/Kraków/Freising); one eJobs detail GET in the prod image to check `workModel` for "Romania"-only remote ads;
+  pipe's expiry proposal (14 d ejobs/hipo, 30 d keyword boards) for stale empty-description rows.
+- Last full suite on the branch: 1528 passed, 9 skipped; ruff clean.
+
 ## Mission (one paragraph, self-contained)
 Make GOSHA find the jobs that actually exist for CS students in Romania (+ remote-EU),
 with accurate fields. Concretely: verify every source (eJobs, BestJobs, Hipo, RemoteOK,

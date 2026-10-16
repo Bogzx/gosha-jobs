@@ -176,7 +176,9 @@ Optional, not owned by me: mention the held-out set in `docs/EVAL.md`.
 
 ### How to verify (current)
 - Load check: **`261 10`**. Grade-2 counts: h-ml 15, h-data-ro 23, h-ops 17, h-qa-ro 8, h-fe 9, h-mob 5, h-emb 6, h-dotnet 5, h-java 7, h-cs-ro 20.
-- `.venv/bin/python -m pytest -q tests/test_heldout.py` gives 9 passed. The full suite (with the LD_PRELOAD from the README) gave **1268 passed, 9 skipped** on 2026-10-16 at about 13:10 UTC.
+- `.venv/bin/python -m pytest -q tests/test_heldout.py` gives 11 passed (rechecked after the release, main = 1fe6243, 2026-10-16).
+- Released in `main` 1fe6243 (deployed 18:05 UTC). The held-out set and its test in main match this branch.
+- Earlier note: The full suite (with the LD_PRELOAD from the README) gave **1268 passed, 9 skipped** on 2026-10-16 at about 13:10 UTC.
 
 ## For the owner's human label pass (added by the lead, 2026-10-16)
 - ~~"Exactly 2 years required" is labelled inconsistently~~ **RESOLVED by the owner's decision, applied by gosha-label on 2026-10-16. See "Two-year rule applied" below.**
