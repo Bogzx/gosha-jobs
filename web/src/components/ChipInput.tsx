@@ -7,10 +7,15 @@ interface Props {
   onChange: (values: string[]) => void
   placeholder?: string
   suggestions?: string[]
+  /** A comma ends the chip. Off for places: "Cluj-Napoca, Romania" is one
+   *  place, and splitting it saved the whole country as a second location. */
+  commaSeparates?: boolean
 }
 
 /** Free-text chips with one-tap suggestions (smart keywords, city aliases). */
-export function ChipInput({ label, values, onChange, placeholder, suggestions = [] }: Props) {
+export function ChipInput({
+  label, values, onChange, placeholder, suggestions = [], commaSeparates = true,
+}: Props) {
   const id = useId()
   const [draft, setDraft] = useState('')
 
@@ -51,7 +56,7 @@ export function ChipInput({ label, values, onChange, placeholder, suggestions = 
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ',') {
+            if (e.key === 'Enter' || (commaSeparates && e.key === ',')) {
               e.preventDefault()
               add(draft)
             } else if (e.key === 'Backspace' && !draft && values.length > 0) {

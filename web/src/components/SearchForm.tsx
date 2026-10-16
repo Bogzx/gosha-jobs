@@ -112,6 +112,7 @@ export function SearchForm({ existing, onDone }: Props) {
         onChange={setLocations}
         placeholder="cluj, bucharest, remote…"
         suggestions={meta?.locations}
+        commaSeparates={false}
       />
 
       <div>
