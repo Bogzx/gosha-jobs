@@ -99,3 +99,26 @@ work to the WIP branch. Owner's Discord: @Bogdanila.
 - Prod findings (read-only): BestJobs not blocked from prod IP (fallback unnecessary). Subscriptions #24
   `["iasi","kra","mun"]` and #25 `["llocation:Cluj"]` have malformed locations → owner decision to fix rows.
 - Next: respawn workers with `.agents/resume.sh`, then review each unit as they report.
+
+## Progress (server, 2026-10-16 ~14:30 UTC)
+Committed on the WIP branch (not pushed): label held-out (39a5cd5, eefe802), scrape (e6fdc92 job_level+LinkedIn
+page cache, ac6b1eb per-board retries, 50be546 text cleaning, 85f6409 Indeed junior fallback, 1117b44 baseline
+combos off by default), rank (cc2a29d caches/window index/z-clip), health (23aa9a9 alerts round 2 + handoff),
+pipe (c5cc7bc corrections checkpoint). Full suite 1237 passed / 9 skipped; ruff clean.
+- Postgres: whole suite run once against a throwaway postgres:16 container (removed): no WIP regressions; 2 tests are
+  SQLite-only by design (test_subscriptions_api sqlite_master, test_auth id reuse) and break following tests by
+  leaving rows. TODO (later): PG job in CI + skip those two on PG. Harness: pytest plugin that patches
+  tests.conftest.TEST_DB_URL (see git history of this note for the approach).
+- Rule given to all agents: this server's IP is prod's scraping IP → no live board/site requests without lead OK.
+- In flight: pipe follow-up 1–9 (multi-city regression, clause-crossing years, age, freshness tz on PG, combo window,
+  held-out negation rule) then baseline hook; rank item 6 (seniority imports filters) + item 7 (eval.yml paths;
+  baselines after pipe says required_years final) + EVAL.md disclosure; scrape Hipo dates; label targeted collection
+  (≤10 searches, before 15:45 UTC); health standing by.
+
+## Deploy checklist (owner, when merging to main)
+1. ALERT_DM_USER_IDS=<numeric id> in prod .env; GitHub secrets DISCORD_BOT_TOKEN + ALERT_DM_USER_IDS.
+2. Delete data/scrape_health.json once (keep data/alerts_state.json).
+3. After deploy: run "Site watchdog" workflow once; watch LinkedIn search-429 counts for 2 cycles before raising
+   LINKEDIN_RESULTS_PER_TERM to 60.
+4. SCRAPE_BASELINE stays off until the pipe hook is reviewed; SCRAPE_BROWSER_FALLBACK stays off (BestJobs works from prod).
+5. Owner decisions: subscriptions #24 ["iasi","kra","mun"] and #25 ["llocation:Cluj"] (prod rows untouched).
