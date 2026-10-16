@@ -10,13 +10,13 @@ and loads with the same functions:
 .venv/bin/python -c "from gosha import evaluation as e; from pathlib import Path; \
 p=e.load_postings(Path('eval/heldout/postings.jsonl')); \
 u=e.load_personas(Path('eval/heldout/personas.jsonl')); print(len(p), len(u))"
-# 258 10
+# 261 10
 ```
 
 Keep it held out: look at the aggregate numbers, not at which postings a
 change moves up or down, or it stops being a test set.
 
-## Postings (`postings.jsonl`, 258)
+## Postings (`postings.jsonl`, 261)
 
 - **Collected 2026-10-16** with the production adapters (eJobs, BestJobs,
   Hipo, RemoteOK, Jobicy), through a copy of `scripts/eval_collect.py`
@@ -82,9 +82,32 @@ were new. Searched for the thin families (`dotnet`, `mob`, `qa`,
     lexical trap for the QA persona.
 
 Same-day reruns of the same 57 searches mostly return what the first run
-did. Filling the thin families needs a new collection with targeted
-searches, which is not allowed from the server without the lead's OK:
-its IP is production's scraping IP.
+did.
+
+**Targeted top-up (3 postings).** With the lead's approval, a targeted
+collection for `dotnet` and `mob` ran from the server on 2026-10-16,
+12:42–13:00 UTC, under these limits:
+
+- 10 searches, on eJobs, BestJobs and Hipo only;
+- at least 5.5 s between every HTTP request (200 requests in total);
+- detail fetches as before, browser fallback off.
+
+The searches were `.net developer` (Bucuresti), `c#` (Cluj),
+`junior c#`, `asp.net`, `.net` (Timisoara), `android` (Cluj),
+`ios developer`, `flutter`, `swift` (Bucuresti) and `junior mobile`. A
+search with no city named used `romania`.
+
+What came back:
+
+- BestJobs answered 403 to every search from that IP.
+- eJobs and Hipo match keywords loosely: "c#" and ".net" returned truck
+  drivers and pharmacists.
+- Of 57 candidates, 36 were new to both sets.
+- 3 were added:
+  - `heldout-ejobs-084`: `dotnet`, senior;
+  - `heldout-ejobs-085`: `dotnet`+`fs`, `any`, a new `.NET` grade-2;
+  - `heldout-ejobs-086`: `qa`, `mid`.
+- No usable mobile-development posting came back.
 
 Postings I read but left out:
 
@@ -179,18 +202,18 @@ A person's review is still the open item.
 
 | family | postings | | level | postings | | lang / source | postings |
 |---|---|---|---|---|---|---|---|
-| `py` | 12 | | `intern` | 17 | | `en` | 182 |
-| `java` | 13 | | `junior` | 36 | | `ro` | 76 (29.5%) |
-| `dotnet` | 9 | | `any` | 62 | | bestjobs | 102 |
-| `be` | 20 | | `mid` | 70 | | ejobs | 83 |
-| `fe` | 14 | | `senior` | 73 | | hipo | 51 |
-| `fs` | 28 | | | | | jobicy | 19 |
+| `py` | 12 | | `intern` | 17 | | `en` | 183 |
+| `java` | 13 | | `junior` | 36 | | `ro` | 78 (29.9%) |
+| `dotnet` | 11 | | `any` | 63 | | bestjobs | 102 |
+| `be` | 20 | | `mid` | 71 | | ejobs | 86 |
+| `fe` | 14 | | `senior` | 74 | | hipo | 51 |
+| `fs` | 29 | | | | | jobicy | 19 |
 | `mob` | 8 | | | | | remoteok | 3 |
 | `ml` | 23 | | | | | | |
 | `data` | 36 | | | | | | |
 | `emb` | 11 | | | | | | |
 | `ops` | 31 | | | | | | |
-| `qa` | 13 | | | | | | |
+| `qa` | 14 | | | | | | |
 | `sec` | 11 | | | | | | |
 | `support` | 21 | | | | | | |
 | `ba` | 10 | | | | | | |
@@ -199,13 +222,13 @@ A person's review is still the open item.
 | `cs` | 21 | | | | | | |
 | `other` | 13 | | | | | | |
 
-Family counts are multi-label: 61 postings carry more than one family.
+Family counts are multi-label: 62 postings carry more than one family.
 Language by level:
 
 | | intern | junior | any | mid | senior |
 |---|---|---|---|---|---|
-| en | 15 | 21 | 44 | 41 | 61 |
-| ro | 2 | 15 | 18 | 29 | 12 |
+| en | 15 | 21 | 44 | 42 | 61 |
+| ro | 2 | 15 | 19 | 29 | 13 |
 
 ## Personas (`personas.jsonl`, 10)
 
@@ -220,22 +243,22 @@ CVs. Three are in Romanian. Every family has an `ADJACENT` rule in
 | `h-ml` | en | ml | ai engineer | 15 | 33 |
 | `h-data-ro` | ro | data | analist date | 23 | 34 |
 | `h-ops` | en | ops | cloud engineer | 17 | 54 |
-| `h-qa-ro` | ro | qa | tester software | 7 | 6 |
-| `h-fe` | en | fe | react developer | 9 | 22 |
-| `h-mob` | en | mob | android developer | 5 | 24 |
+| `h-qa-ro` | ro | qa | tester software | 8 | 6 |
+| `h-fe` | en | fe | react developer | 9 | 23 |
+| `h-mob` | en | mob | android developer | 5 | 25 |
 | `h-emb` | en | emb | embedded c developer | 6 | 5 |
-| `h-dotnet` | en | dotnet | c# developer | 4 | 36 |
-| `h-java` | en | java | junior java developer | 7 | 34 |
+| `h-dotnet` | en | dotnet | c# developer | 5 | 37 |
+| `h-java` | en | java | junior java developer | 7 | 35 |
 | `h-cs-ro` | ro | cs | relatii clienti | 20 | 27 |
 
 `h-cs-ro` is the non-IT control. On this posting set, the main set's 14
 personas also have at least 4 grade-2 postings each (py 5, java 7,
-dotnet 4, fe 9, mob 5, ml 15, data 23, emb 6, ops 17, qa 7, acc-ro 16,
+dotnet 5, fe 9, mob 5, ml 15, data 23, emb 6, ops 17, qa 8, acc-ro 16,
 cs 20), so they can be run here too.
 
 ## Limitations
 
-- **Small.** `dotnet` (4), `mob` (5), `emb` (6) and `qa` (7) have few
+- **Small.** `dotnet` (5), `mob` (5), `emb` (6) and `qa` (8) have few
   relevant postings, so their per-persona numbers are noisy. Read
   differences under about 0.1 nDCG@10 as noise, as with the main set.
 - **One annotator, an AI agent, on one day of the boards.** The labels
@@ -247,6 +270,7 @@ cs 20), so they can be run here too.
   (95% CI 0.384–0.628) on the 253-posting set, with these personas and
   the base-commit code (5490d6a).
   - With the working-tree code of 2026-10-16 it gives 0.501 on the 253
-    postings and 0.510 (0.375–0.631) on the current 258.
-  - So the 5 added postings move it by +0.009, which is noise.
+    postings, 0.510 on the 258, and 0.501 (0.370–0.614) on the current
+    261.
+  - So the 8 added postings move it by at most 0.009, which is noise.
   - The number moves whenever `job_text` or `evaluation.py` changes.

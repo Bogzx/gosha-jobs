@@ -137,11 +137,45 @@ TODO 2 is now done by gosha-rank (held-out run: production 0.625 vs cosine 0.543
    - **gosha-rank's held-out numbers (0.625 / 0.543) were on the 253 and need a rerun.**
    - Filling dotnet/mob/emb needs a new targeted collection (for example "junior .net", "c# developer" in other cities, "flutter", "ios developer", "android junior", "embedded junior", "qa junior"), from a non-production IP or with the lead's OK.
 
-### Remaining TODO (updated)
-1. **A person's review of the labels.** Start with the README's "Review pass" closest calls and the notes "boilerplate" and "years truncated".
-2. **Thin families** (see 3 above). This is blocked on the lead or owner approving a collection from a safe IP. When allowed: run `collect.py <out>` with targeted queries, dedupe against both sets, and label only entry/mid dotnet/mob/emb/qa postings plus a few distractors.
-3. Optional: mention the held-out set in `docs/EVAL.md` (not owned by me).
+4. **Targeted dotnet/mob collection (approved by the lead), done; 3 postings added, set now 261.**
+   - Ran 12:42:12–13:00:28 UTC: 10 searches, ejobs, bestjobs and hipo only, 200 requests at least 5.5 s apart, browser fallback off.
+     - The pacing was enforced by `scratchpad/targeted/run_targeted.py` (a lock on httpx's transport) and checked in the per-request log.
+     - Scratchpad files (not in the repo, not needed again): `/tmp/claude-1001/-home-ubuntu-gosha-agents/bd50c079-.../scratchpad/targeted/`, holding `cand_targeted.jsonl`, `requests.log` and `collect.stderr`.
+   - **The run overlapped the prod cycle that started at 12:26.** The lead's original check (`grep -c 'jobs for'`) cannot see the JobSpy phase. Prod made no native-board request during my run, and the lead was told.
+   - **BestJobs answered 403 to all 10 searches from this IP.** Prod got about 260 × 200 at 08:57–08:59; the accidental ~12:30 run already got 0 BestJobs postings. So the refusal most likely predates my traffic; the cause is unknown. The lead was told; the owner's decision on `SCRAPE_BROWSER_FALLBACK` lives with gosha-scrape.
+   - Of 57 candidates, 36 were new to both sets. Most were off-target, because the boards match keywords loosely ("c#" returns truck drivers).
+   - Added:
+     - `heldout-ejobs-084`: dotnet, senior.
+     - `heldout-ejobs-085`: dotnet+fs, `any`; the new .NET grade-2.
+     - `heldout-ejobs-086`: qa, `mid`, "2+ years". Add it to the owner's "2 years" question below.
+   - Labelled with the same rules and without looking at any ranker output.
+   - Grade-2 counts now: h-dotnet 5 (was 4), h-qa-ro 8; mob is still 5 (no usable mobile posting came back).
+   - TF-IDF with the current code on the 261: nDCG@10 0.501 (0.370–0.614).
+   - **gosha-rank's held-out numbers need a rerun on the 261** (I told them about the 258).
+
+### Prod timing and rules (from the lead, 2026-10-16)
+- Prod cycles start every 4 h at :26 UTC (04:26, 08:26, 12:26, 16:26 …) and last 35+ minutes.
+- A cycle is running if the last `=== Scrape cycle started ===` in `docker logs --since 5h gosha-bot` (read-only) has no later `Scrape health:` line.
+- Prod's JobSpy goes through a SOCKS proxy; the native boards use this server's IP.
+- No live board requests without the lead's OK, and no approvals while a cycle runs.
+
+### Status: DONE
+This agent's work is complete. Nothing is half-done, and every change is in `eval/heldout/`, `tests/test_heldout.py` and this file.
+
+**Resume only if the owner's human label review comes back.** Then:
+- apply the owner's decisions (including the "exactly 2 years" rule below) to the held-out set, in one pass, without looking at ranker scores;
+- update the README counts and `tests/test_heldout.py`;
+- tell gosha-rank to rerun.
+
+The thin families (mob 5, dotnet 5, emb 6) stay thin. The boards have few such postings, and BestJobs currently refuses this IP. Only the owner or lead can decide on another collection.
+
+Optional, not owned by me: mention the held-out set in `docs/EVAL.md`.
 
 ### How to verify (current)
-- Load check: `253 10` is now **`258 10`**. Grade-2 counts: h-ml 15, h-data-ro 23, h-ops 17, h-qa-ro 7, h-fe 9, h-mob 5, h-emb 6, h-dotnet 4, h-java 7, h-cs-ro 20.
-- `.venv/bin/python -m pytest -q tests/test_heldout.py tests/test_evaluation.py` gives 32 passed. The full suite (with the LD_PRELOAD from the README) gave 1074 passed, 9 skipped on 2026-10-16.
+- Load check: **`261 10`**. Grade-2 counts: h-ml 15, h-data-ro 23, h-ops 17, h-qa-ro 8, h-fe 9, h-mob 5, h-emb 6, h-dotnet 5, h-java 7, h-cs-ro 20.
+- `.venv/bin/python -m pytest -q tests/test_heldout.py` gives 7 passed. The full suite (with the LD_PRELOAD from the README) gave **1268 passed, 9 skipped** on 2026-10-16 at about 13:10 UTC.
+
+## For the owner's human label pass (added by the lead, 2026-10-16)
+- "Exactly 2 years required" is labelled inconsistently: main set 6 junior / 1 mid, held-out 7 mid / 0 junior.
+  Product rule (filters + seniority) is 2 years = junior. Decide one labelling rule and apply it to both sets
+  in one pass, without looking at ranker scores. Agents must not relabel this.
