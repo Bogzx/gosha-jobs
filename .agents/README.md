@@ -8,6 +8,12 @@ Everything an agent needs is in this folder and in the branch
 `wip/agents-2026-10-16`. Chat history does not travel: **the handoff files
 are the source of truth.**
 
+## Owner priority (2026-10-16)
+**Discord DMs are the main feature.** Users mostly use GOSHA by receiving job DMs for their saved
+searches; the web feed is secondary. Every change is judged first by whether the jobs people receive by
+DM are the most relevant ones (right role, level, location, fresh, once, best first, not flooded, not
+starved).
+
 ## Layout
 
 | Agent | Area | Handoff |
