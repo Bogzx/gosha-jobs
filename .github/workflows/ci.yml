@@ -28,7 +28,7 @@ jobs:
           pip install -c constraints.txt "discord.py" "sqlalchemy[asyncio]" \
             aiosqlite apscheduler pandas pysocks python-dotenv numpy \
             fastapi uvicorn jinja2 python-multipart httpx itsdangerous pymupdf \
-            asyncpg python-jobspy cryptography pytest pytest-asyncio respx
+            asyncpg python-jobspy cryptography pytest pytest-asyncio respx pyyaml
       - name: Lint
         # Rules pinned in pyproject.toml [tool.ruff]; ruff pinned in constraints.txt.
         run: pip install -c constraints.txt ruff && ruff check .
