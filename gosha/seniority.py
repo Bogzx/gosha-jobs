@@ -24,8 +24,10 @@ import re
 
 # Posting levels.
 ENTRY, MID, SENIOR, UNKNOWN = "entry", "mid", "senior", "unknown"
-# CV levels.
+# CV levels. CV_UNKNOWN: no CV text to read (a user ranked on 👍 alone, or
+# a CV that cannot be decrypted), so no seniority adjustment at all.
 STUDENT, JUNIOR, CV_MID, CV_SENIOR = "student", "junior", "mid", "senior"
+CV_UNKNOWN = "unknown"
 
 _SENIOR_TITLE = re.compile(
     r"(?i)\b(?:senior|sr\.?|lead|principal|staff|director|manager|head|vp|chief|"
@@ -119,13 +121,15 @@ _CV_SENIOR_TITLE = re.compile(
 
 
 def cv_level(cv_text: str | None) -> str:
-    """STUDENT, JUNIOR, CV_MID or CV_SENIOR, read from the CV text.
+    """STUDENT, JUNIOR, CV_MID or CV_SENIOR, read from the CV text, or
+    CV_UNKNOWN when there is none.
 
-    Unknown defaults to JUNIOR: GOSHA is built for students and early
-    careers, and a junior reading only mildly prefers junior postings.
+    A CV that states no level reads as JUNIOR: GOSHA is built for students
+    and early careers, and a junior reading only mildly prefers junior
+    postings. No CV text at all is no evidence either way.
     """
-    if not cv_text:
-        return JUNIOR
+    if not cv_text or not cv_text.strip():
+        return CV_UNKNOWN
     years = [int(m.group(1)) for m in _CV_YEARS.finditer(cv_text) if int(m.group(1)) < 40]
     most = max(years, default=0)
     if most >= 6 or (_CV_SENIOR_TITLE.search(cv_text) and most >= 4):
@@ -152,4 +156,5 @@ _PENALTY: dict[str, dict[str, float]] = {
 
 
 def level_penalty(reader: str, posting: str) -> float:
-    return _PENALTY.get(reader, _PENALTY[JUNIOR]).get(posting, 0.0)
+    """0 for a CV_UNKNOWN (or unrecognised) reader."""
+    return _PENALTY.get(reader, {}).get(posting, 0.0)

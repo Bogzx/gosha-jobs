@@ -23,6 +23,18 @@ def event_loop():
     loop.close()
 
 
+@pytest.fixture(autouse=True)
+def _fresh_ranking_caches():
+    """The ranking caches (seniority levels, term counts, keyword indexes)
+    are process-wide and keyed by job id; every test's fresh database
+    reuses ids 1..N, so one test's postings would answer for the next's."""
+    from gosha import recommend
+
+    recommend.clear_caches()
+    yield
+    recommend.clear_caches()
+
+
 @pytest_asyncio.fixture
 async def engine():
     """Create a fresh in-memory database engine per test."""

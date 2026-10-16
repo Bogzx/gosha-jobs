@@ -235,15 +235,18 @@ async def test_percentiles_are_relative_to_all_candidates_not_the_page(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("with_cv", [True, False])
+@pytest.mark.parametrize("cv", ["none", "vector_only", "text"])
 async def test_feed_reads_descriptions_only_for_the_page(
-    patched_db, session: AsyncSession, monkeypatch, with_cv,
+    patched_db, session: AsyncSession, monkeypatch, cv,
 ):
     """Ranking needs the vectors, not the text: every /feed request loaded
-    the description of every posting from the last 30 days."""
+    the description of every posting from the last 30 days. With CV text,
+    the first request reads each new posting once (keyword terms and
+    seniority are cached); after that, and always without CV text (no
+    keyword score, no seniority penalty), only the page is read."""
     user = User(
-        discord_user_id=21 + with_cv,
-        cv_embedding=vec_to_bytes(unit_vec(0)) if with_cv else None,
+        discord_user_id=21 + len(cv),
+        cv_embedding=vec_to_bytes(unit_vec(0)) if cv != "none" else None,
     )
     session.add(user)
     now = datetime.now(timezone.utc)
@@ -257,23 +260,212 @@ async def test_feed_reads_descriptions_only_for_the_page(
         job.first_seen_at = now - timedelta(hours=i)  # same order either way
         session.add(job)
     await session.commit()
+    all_ids = {job.id for job in (await recommend.load_candidates())}
 
-    loaded: list[Job] = []
+    import gosha.cover_letter
+
+    monkeypatch.setattr(
+        gosha.cover_letter, "load_cv", lambda _uid: "Python student" if cv == "text" else None,
+    )
+    loaded: list[list[Job]] = []
     real = recommend.load_candidates
 
     async def spy(*args, **kwargs):
         jobs = await real(*args, **kwargs)
-        loaded.extend(jobs)
+        loaded.append(jobs)
         return jobs
 
     monkeypatch.setattr(recommend, "load_candidates", spy)
-    items, total = await recommend.get_feed(user.id, page=1, per_page=2)
 
-    assert total == 5
-    assert [item.job.description for item in items] == ["Posting 0: Python", "Posting 1: Python"]
-    page_ids = {item.job.id for item in items}
-    without_text = {job.id for job in loaded if "description" not in job.__dict__}
-    assert without_text == {job.id for job in loaded} - page_ids
+    async def request() -> tuple[list[str], set[int], set[int]]:
+        items, total = await recommend.get_feed(user.id, page=1, per_page=2)
+        assert total == 5
+        read = {job.id for job in loaded[-1] if "description" in job.__dict__}
+        return [item.job.description for item in items], {item.job.id for item in items}, read
+
+    descriptions, page_ids, read = await request()
+    assert descriptions == ["Posting 0: Python", "Posting 1: Python"]
+    assert read == (all_ids if cv == "text" else page_ids)
+
+    descriptions, page_ids, read = await request()
+    assert descriptions == ["Posting 0: Python", "Posting 1: Python"]
+    assert read == page_ids
+
+
+def _vec(cosine: float) -> bytes:
+    """A unit vector at this cosine to unit_vec(0)."""
+    vec = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+    vec[0] = cosine
+    vec[1] = float(np.sqrt(1 - cosine**2))
+    return vec_to_bytes(vec)
+
+
+@pytest.mark.asyncio
+async def test_feed_rereads_a_posting_whose_text_changed(
+    patched_db, session: AsyncSession, monkeypatch,
+):
+    """A posting first seen title-only gets its description (and a new
+    embedding) from a later scrape; the keyword terms cached for its
+    title-only version must not stand in for it until a restart."""
+    import gosha.cover_letter
+
+    monkeypatch.setattr(gosha.cover_letter, "load_cv", lambda _uid: "Kotlin")
+    user = User(discord_user_id=31, cv_embedding=vec_to_bytes(unit_vec(0)))
+    mobile = make_job("https://r.com/m", None, title="Mobile Developer")
+    mobile.embedding = _vec(0.6)
+    accountant = make_job("https://r.com/a", None, title="Accountant", description="Excel, SAP")
+    accountant.embedding = _vec(0.8)
+    sales = make_job("https://r.com/s", None, title="Sales", description="B2B")
+    sales.embedding = _vec(0.7)
+    session.add_all([user, mobile, accountant, sales])
+    await session.commit()
+
+    items, _ = await recommend.get_feed(user.id)
+    assert [item.job.id for item in items] == [accountant.id, sales.id, mobile.id]
+
+    # What the pipeline does when the detail page arrives: new text, the
+    # old vector dropped and recomputed.
+    mobile.description = "Android apps in Kotlin"
+    mobile.embedding = _vec(0.75)
+    await session.commit()
+
+    items, _ = await recommend.get_feed(user.id)
+    # Only the keyword match can put it first: its cosine is second.
+    assert [item.job.id for item in items] == [mobile.id, accountant.id, sales.id]
+
+
+@pytest.mark.asyncio
+async def test_posting_level_follows_the_text(patched_db, session: AsyncSession):
+    job = make_job("https://r.com/lvl", 0, title="Backend Developer", description=None)
+    session.add(job)
+    await session.commit()
+    assert recommend.posting_level(job) == "unknown"
+    # A posting that really has no description is read in full: cached.
+    assert recommend._level_key(job) in recommend._level_cache
+
+    job.description = "Minimum 7 years of experience with Go"
+    job.embedding = vec_to_bytes(unit_vec(1))
+    await session.commit()
+    assert recommend.posting_level(job) == "senior"
+
+
+@pytest.mark.asyncio
+async def test_a_deferred_description_is_never_cached_as_missing(
+    patched_db, session: AsyncSession,
+):
+    """Ranking a posting whose description was left in the database and
+    whose cached reading was evicted: it is scored without the text for
+    that request, and nothing built from the gap is kept."""
+    from gosha import lexical
+
+    session.add(make_job("https://r.com/k", 0, title="Developer", description="Kotlin, 8 years of experience"))
+    await session.commit()
+    [job] = await recommend.load_candidates(with_description=False)
+    key = recommend._cache_key(job)
+
+    recommend._order([job], unit_vec(0), "Kotlin")
+    assert not lexical.is_cached(key)
+    assert not lexical._indexes
+    assert recommend._level_key(job) not in recommend._level_cache
+
+    await recommend.load_descriptions([job])
+    recommend._order([job], unit_vec(0), "Kotlin")
+    assert lexical.is_cached(key)
+    assert recommend._level_cache[recommend._level_key(job)] == "senior"
+
+
+@pytest.mark.asyncio
+async def test_every_user_shares_one_keyword_index_over_the_window(
+    patched_db, session: AsyncSession, monkeypatch,
+):
+    """The IDF is fitted on the whole window, not on each user's
+    candidates minus what they rated: one index for every request, the
+    same as the demo's, and a ranking that does not depend on which other
+    indexes happen to be cached."""
+    from gosha import lexical
+
+    import gosha.cover_letter
+
+    monkeypatch.setattr(gosha.cover_letter, "load_cv", lambda _uid: "Python Django")
+    user = User(discord_user_id=41, cv_embedding=vec_to_bytes(unit_vec(0)))
+    jobs = [
+        make_job(f"https://r.com/w{i}", None, title=title, description=text)
+        for i, (title, text) in enumerate([
+            ("Python Developer", "Django, PostgreSQL"),
+            ("Backend Engineer", "Python services"),
+            ("Accountant", "Excel"),
+            ("Data Analyst", "Python, SQL"),
+        ])
+    ]
+    for i, job in enumerate(jobs):
+        job.embedding = _vec(0.9 - i * 0.1)
+    session.add_all([user, *jobs])
+    await session.flush()
+    session.add(UserJob(user_id=user.id, job_id=jobs[0].id, feedback="not_relevant"))
+    await session.commit()
+
+    items, total = await recommend.get_feed(user.id)
+    assert total == 3 and jobs[0].id not in {item.job.id for item in items}
+    assert len(lexical._indexes) == 1
+    [index] = lexical._indexes.values()
+    assert {k[0] for k in index.keys} == {job.id for job in jobs}
+
+    window = await recommend.load_candidates()
+    recommend.rank_candidates(window, unit_vec(0), cv_text="Python Django")
+    assert list(lexical._indexes.values()) == [index]
+
+
+def test_posting_level_is_safe_under_concurrent_clears():
+    import threading
+
+    jobs = [
+        Job(id=i, url=f"u{i}", title="Senior Dev", company="A", source="x",
+            description="text", embedding=vec_to_bytes(unit_vec(i % 3)))
+        for i in range(50)
+    ]
+    errors: list[BaseException] = []
+    stop = threading.Event()
+
+    def read():
+        try:
+            while not stop.is_set():
+                for job in jobs:
+                    assert recommend.posting_level(job) == "senior"
+        except BaseException as exc:  # noqa: BLE001 - reported below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=read) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for _ in range(300):
+        recommend.clear_caches()
+    stop.set()
+    for t in threads:
+        t.join()
+    assert not errors
+
+
+def test_hybrid_scores_clip_a_sparse_keyword_outlier():
+    """One posting sharing a rare term with the CV, out of 400 sharing
+    none, is ~20 standard deviations out; unclipped, its keyword term alone
+    would outvote a cosine at the very bottom of the set."""
+    n = 400
+    cosines = np.linspace(0.6, 0.2, n)
+    keyword = np.zeros(n)
+    keyword[-1] = 0.3  # the worst cosine
+    final = recommend.hybrid_scores(cosines, keyword, None)
+    z_cosine = recommend._zscore(cosines)
+    assert final[-1] == pytest.approx(0.5 * z_cosine[-1] + 0.5 * recommend.Z_CLIP)
+    assert final[-1] < final[0]
+
+
+def test_no_cv_text_means_no_seniority_penalty():
+    from gosha import seniority
+
+    assert seniority.cv_level("") == seniority.CV_UNKNOWN
+    assert seniority.cv_level("   ") == seniority.CV_UNKNOWN
+    assert seniority.level_penalty(seniority.CV_UNKNOWN, seniority.SENIOR) == 0.0
+    assert seniority.cv_level("Software developer") == seniority.JUNIOR
 
 
 def test_percentile_ranks_handles_ties_and_edges():

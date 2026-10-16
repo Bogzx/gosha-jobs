@@ -1,6 +1,6 @@
 # Handoff: gosha-rank — web-feed ranking accuracy (hybrid + seniority), ranking eval
 
-Written: 2026-10-16 12:05 UTC · Branch: wip/agents-2026-10-16 (working tree was on `main`, uncommitted) · Base commit: 5490d6a
+Written: 2026-10-16 12:05 UTC, updated on the server 2026-10-16 (lead-review items 1–5 and 8 done) · Branch: wip/agents-2026-10-16 · Base commit: c67e734 (uncommitted on top)
 
 ## Mission (one paragraph, self-contained)
 Make the web feed (and the public demo, `gosha/api/demo.py`) rank postings for a CV as accurately as
@@ -82,16 +82,13 @@ Lead's sweep on the main set only (scratch script, TF-IDF IDF fitted on postings
   (no re-embedding / threshold re-tuning). Held-out not run for other models.
 
 ## In progress (exact state)
-- Nothing half-applied: every edit above is complete and tests pass except the known failure.
-- **Known failing test** `tests/test_recommend.py::test_feed_reads_descriptions_only_for_the_page[True]`
-  (tests/test_recommend.py:276, `assert set() == {3,4,5}`): with a CV vector, `get_feed` now loads all
-  candidates' descriptions (gosha/recommend.py:479 `load_descriptions([j for j in candidates if _needs_text(j)])`).
-  In this test the user has a CV *embedding* but no CV *text* (`load_cv` → None), so the keyword index is
-  never used, yet `_needs_text` (recommend.py:400) still asks for text because `lexical.is_cached` is
-  never true → **bug: CV-less (👍-only) users reload every description on every request.** Next step is TODO 1.
+- Nothing half-applied. Lead-review items 1–5 and 8 are done (see "Server session" below); item 6 waits on
+  gosha-pipe's filters work; item 7 (regenerate baselines + eval.yml paths) after 6.
+- Old "known failing" test is rewritten and passes alone and in the full suite.
 
 ## Remaining TODO (prioritized)
-1. **Fix gosha/recommend.py (review findings on the lead's code, not yet applied):**
+(TODO 1 and the lexical/hybrid parts of TODO 4 are DONE on the server, see below.)
+1. **[DONE] Fix gosha/recommend.py (review findings on the lead's code, not yet applied):**
    a. `_needs_text(job, keyword: bool)`: only require lexical caching when `cv_text.strip()`; decide
       `cv_text` before the load at recommend.py:479 (it already is). Then rewrite the failing test:
       request 1 (CV text present via monkeypatched `load_cv`) loads descriptions of uncached postings;
@@ -210,3 +207,52 @@ Main-set eval reproduces (production 0.731 vs cosine 0.546). Run tests on this a
 9. Held-out gain (+0.08) vs main (+0.19) suggests main-set overfitting: choose weights on main, report
    held-out, prefer round values; no regex/penalty tweaks justified only by main-set failures.
 10. Coordinate with gosha-pipe on feed hard filters (their TODO 1: location/level in get_feed — your file).
+
+## Server session (2026-10-16): lead-review corrections applied
+Verify: full suite `LD_PRELOAD=... .venv/bin/python -m pytest -q` → **1015 passed, 9 skipped** (other agents'
+new tests included); `ruff check` clean on my files.
+1. DONE. `tests/conftest.py`: autouse `_fresh_ranking_caches` (calls new `recommend.clear_caches()` before/after
+   every test, covers tests/api). `_needs_text(job, cv_text)`: nothing to read without CV text. Needed with it:
+   `seniority.cv_level("")`/whitespace → new `CV_UNKNOWN` (no penalty; `level_penalty` returns 0 for unknown
+   readers; `_order` skips posting_level entirely) — this is the lead's item-6 decision "empty CV → UNKNOWN",
+   applied now. Test `test_feed_reads_descriptions_only_for_the_page[none|vector_only|text]`: text → first
+   request reads the whole window, second only the page; others only the page. `vector_only` fails on old code.
+2. DONE. `recommend._cache_key(job) = (id, hash(job.embedding))` for lexical counts; `_level_key` adds
+   `experience_level` (board label changes without re-embed). lexical.py docstring corrected.
+   Test `test_feed_rereads_a_posting_whose_text_changed` (fails on old code), `test_posting_level_follows_the_text`.
+3. DONE. `_loaded_description` returns `_DEFERRED` sentinel; `_lexical_text` → None only when deferred;
+   `posting_level` caches real NULL descriptions, never a deferred reading. lexical `_counts` is a real LRU
+   (OrderedDict, hits move_to_end, evict oldest — a build never evicts its own keys); a deferred-and-uncached
+   key is a miss (`_cached_counts` → None), `LexicalIndex.complete=False`, scored 0 for that request, and
+   `index_for` does not cache an incomplete index. Test `test_a_deferred_description_is_never_cached_as_missing`.
+4. DONE. `_level_cache` is an LRU OrderedDict under `_level_lock`, `.get()` inside the lock.
+   Test `test_posting_level_is_safe_under_concurrent_clears`.
+5. DONE. `recommend.Z_CLIP = 3.0` in `_zscore`. Clean A/B (`--no-feedback`, same code, Z_CLIP inf vs 3):
+   main 0.731 → **0.743** (0.634–0.844); held-out (258 postings) 0.618 → **0.624** (0.469–0.741). Noise-level but
+   not worse on either → kept. Test `test_hybrid_scores_clip_a_sparse_keyword_outlier`.
+8. DONE (changed design, not just documented). `REUSE_SLACK`/superset reuse removed: `index_for` reuses only
+   an index over exactly the same key set. `get_feed` now loads the whole window (no SQL `notin_` on rated /
+   applied ids; filtered in Python) and `_order(candidates, vector, cv_text, corpus=window)` scores the user's
+   subset against one window index → the IDF is the same for every user and the demo, and no request's ranking
+   depends on what other indexes are cached. Measured on this server, 2,000 postings: cold build 1.1 s, warm
+   rebuild (counts cached) 0.4 s, score 0.6 ms → per-user exact indexes would cost 0.4 s/request; one window
+   index costs that once per window change. Test `test_every_user_shares_one_keyword_index_over_the_window`.
+New `tests/test_lexical.py` (9 tests: folding, skill tokens, LRU, miss, exact reuse, bounded index cache).
+New tests in tests/test_recommend.py also include `test_no_cv_text_means_no_seniority_penalty`.
+
+Current numbers (`--no-feedback`, all-mpnet-base-v2, this code):
+| Set | production | cosine only |
+|---|---|---|
+| main (202 × 14) | 0.743 (0.634–0.844), R-prec 0.544, MRR 0.799, P@10 0.429 | 0.546 (0.445–0.645) |
+| held-out (**258** × 10; gosha-label added 5 QA postings, 253 version = commit 39a5cd5) | 0.624 (0.469–0.741), R-prec 0.402, MRR 0.804, P@10 0.410 | 0.542 (0.418–0.654) |
+Not yet regenerated into eval/results (item 7, after item 6).
+
+Rules received on the server: no live requests to job boards or the production site without asking
+gosha-lead (this server is prod's scraping IP); read-only docker logs / SELECTs are fine.
+
+Next: item 6 (single seniority detector from gosha.filters) once gosha-pipe reports `required_years` done;
+then item 7 (TODO 3 weight sweep on main, report held-out; TODO 5 regenerate results with feedback incl.
+held-out; eval.yml paths), TODO 6 (Discord penalty eval), TODO 7 (docs/EVAL.md). Item 10: coordinate with
+gosha-pipe on feed hard filters in get_feed (my file) — note get_feed now loads the whole window and filters
+exclusions in Python; any hard filter should filter `candidates`, not `window` (the window is the IDF corpus).
+

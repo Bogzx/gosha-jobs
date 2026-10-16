@@ -13,10 +13,11 @@ carries ("experience", "team") weighs nothing, one that few carry
 ("kotlin", "contabilitate") weighs a lot.
 
 Tokenising ~2,000 descriptions is the expensive part, so term counts are
-cached per key for the life of the process. The caller picks the key and
-must change it when the text changes (recommend.py keys on the job id
-and its embedding, which the pipeline recomputes whenever the title,
-company or description changes).
+cached per key for the life of the process (least recently used first
+out). The caller picks the key and must change it when the text changes:
+recommend.py keys on the job id plus a hash of its embedding, which the
+pipeline drops and recomputes whenever the title, company or description
+changes.
 """
 
 from __future__ import annotations
@@ -33,9 +34,11 @@ import numpy as np
 _TOKEN = re.compile(r"[^\W\d_][\w+#.]*", re.UNICODE)
 
 # Bounded so a long-running process does not keep every posting it ever
-# ranked; the feed window holds a few thousand.
+# ranked; the feed window holds a few thousand. Least recently used out,
+# so one index build never evicts the counts it is reading: everything it
+# touched is newer than everything it would push out.
 MAX_CACHED = 20_000
-_counts: dict[Hashable, Counter] = {}
+_counts: OrderedDict[Hashable, Counter] = OrderedDict()
 _lock = threading.Lock()
 
 
@@ -61,23 +64,29 @@ def is_cached(key: Hashable) -> bool:
         return key in _counts
 
 
-def _cached_counts(key: Hashable | None, text: str | None) -> Counter:
-    """Term counts for one posting; `text` may be None when `key` is cached."""
+def _cached_counts(key: Hashable | None, text: str | None) -> Counter | None:
+    """Term counts for one posting.
+
+    `text` None means "not loaded, use the cache" (see index_for); the
+    result is then None when the key is not cached after all (evicted
+    since the caller checked), rather than an empty Counter that would
+    pass for a posting with no words.
+    """
     if key is None:
         return Counter(terms(text))
     with _lock:
         hit = _counts.get(key)
-    if hit is not None:
-        return hit
+        if hit is not None:
+            _counts.move_to_end(key)
+            return hit
     if text is None:
-        # Evicted between the caller's check and now: rank this one on its
-        # embedding alone for this request rather than cache it as empty.
-        return Counter()
+        return None
     counts = Counter(terms(text))
     with _lock:
-        if len(_counts) >= MAX_CACHED:
-            _counts.clear()  # crude, but rare: the window is a fraction of this
         _counts[key] = counts
+        _counts.move_to_end(key)
+        while len(_counts) > MAX_CACHED:
+            _counts.popitem(last=False)
     return counts
 
 
@@ -104,8 +113,13 @@ class LexicalIndex:
         keys = list(keys) if keys is not None else [None] * len(docs)
         if len(keys) != len(docs):
             raise ValueError("one key per document")
-        doc_counts = [_cached_counts(k, d) for k, d in zip(keys, docs)]
+        found = [_cached_counts(k, d) for k, d in zip(keys, docs)]
+        # A posting whose text was neither given nor cached scores 0 here.
+        # Fine for one request; index_for() does not keep such an index.
+        self.complete = all(c is not None for c in found)
+        doc_counts = [c if c is not None else Counter() for c in found]
         self.size = len(doc_counts)
+        self.keys = frozenset(k for k in keys if k is not None)
         self._position = {k: i for i, k in enumerate(keys) if k is not None}
         df: Counter = Counter()
         for counts in doc_counts:
@@ -143,53 +157,41 @@ class LexicalIndex:
                 out[idx] += ws * (w / q_norm)
         return out
 
-    def covers(self, keys: Sequence[Hashable]) -> bool:
-        return all(k in self._position for k in keys)
-
     def score_keys(self, query: str, keys: Sequence[Hashable]) -> np.ndarray:
         """Like score(), for the postings with these keys, in that order."""
         full = self.score(query)
         return full[[self._position[k] for k in keys]] if keys else full[:0]
 
 
-# Recently built indexes, most recent last. More than one: the public demo
-# ranks every candidate while each signed-in user ranks the candidates
-# minus the postings they rated, and users with excluded words or
-# blacklisted companies see smaller sets still. With a single slot those
-# requests evicted each other and every one paid a full rebuild.
+# Recently built indexes by their exact key set, most recent last. The
+# feed builds one over the whole candidate window, the same set the public
+# demo ranks, and scores each user's subset of it (score_keys), so every
+# request between two scrape cycles shares one index and one IDF: a
+# user's ranking does not depend on which other indexes happen to be
+# cached. More than one slot for the moment a scrape cycle changes the
+# window while requests for the old one are still in flight.
 MAX_INDEXES = 4
-_indexes: OrderedDict[int, LexicalIndex] = OrderedDict()
-# Reuse an index built over a superset of the requested postings while the
-# extra ones are a small share of it. The IDF moves negligibly with a few
-# extra documents; rebuilding per user would cost a full pass each time.
-REUSE_SLACK = 0.25
+_indexes: OrderedDict[frozenset, LexicalIndex] = OrderedDict()
 
 
 def index_for(docs: Sequence[str | None], keys: Sequence[Hashable]) -> LexicalIndex:
-    """An index covering these postings, reused across feed requests.
+    """The index over exactly these postings, reused across feed requests.
 
-    The candidate set changes once per scrape cycle; between cycles every
-    request asks for nearly the same one. Score through
-    `LexicalIndex.score_keys(query, keys)`. `docs[i]` may be None when
-    `keys[i]` is already cached (see is_cached).
+    `docs[i]` may be None when `keys[i]` is already cached (see is_cached).
+    Score a subset through `LexicalIndex.score_keys(query, subset_keys)`.
     """
+    wanted = frozenset(keys)
     with _lock:
-        cached = list(_indexes.items())
-    best = None
-    for ident, index in cached:
-        if index.size <= len(keys) * (1 + REUSE_SLACK) and index.covers(keys):
-            if best is None or index.size < best[1].size:
-                best = (ident, index)
-    if best is not None:
-        with _lock:
-            if best[0] in _indexes:
-                _indexes.move_to_end(best[0])
-        return best[1]
+        index = _indexes.get(wanted)
+        if index is not None:
+            _indexes.move_to_end(wanted)
+            return index
     index = LexicalIndex(docs, keys)
-    with _lock:
-        _indexes[id(index)] = index
-        while len(_indexes) > MAX_INDEXES:
-            _indexes.popitem(last=False)
+    if index.complete:
+        with _lock:
+            _indexes[wanted] = index
+            while len(_indexes) > MAX_INDEXES:
+                _indexes.popitem(last=False)
     return index
 
 

@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections import Counter
+import threading
+from collections import Counter, OrderedDict
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
@@ -339,11 +340,17 @@ def apply_feedback(
     return (vector / norm).astype(np.float32)
 
 
+# A z-score past this is "as close as it gets". TF-IDF scores are sparse
+# (most postings share no term with the CV), so the one posting that does
+# can sit sqrt(N) ~ 40 deviations out and outvote every other signal.
+Z_CLIP = 3.0
+
+
 def _zscore(values: np.ndarray) -> np.ndarray:
     std = float(values.std())
     if not std:
         return np.zeros_like(values, dtype=np.float64)
-    return (values - values.mean()) / std
+    return np.clip((values - values.mean()) / std, -Z_CLIP, Z_CLIP)
 
 
 def hybrid_scores(
@@ -356,7 +363,7 @@ def hybrid_scores(
 
     embedding_weight * z(cosine) + (1 - embedding_weight) * z(keyword)
     - seniority penalty, every term in standard deviations of this user's
-    own candidate set: a raw cosine and a TF-IDF cosine live on different
+    own candidate set (clipped to ±Z_CLIP): a raw cosine and a TF-IDF cosine live on different
     scales, and a fixed penalty means the same thing for every user.
     Without keyword scores (no CV text: a user ranked on 👍 alone) the
     cosine carries the whole weight. Pure, so the offline eval
@@ -373,33 +380,83 @@ def hybrid_scores(
     return score
 
 
-# Seniority of a posting never changes after it is scraped, and reading it
-# needs the description, which the feed otherwise leaves in the database.
-_level_cache: dict[int, str] = {}
+_DEFERRED = object()
 
 
-def _loaded_description(job: Job) -> str | None:
-    """The description if it is in memory; None if it was deferred."""
+def _loaded_description(job: Job) -> str | None | object:
+    """The description if it is in memory (possibly None: there is none),
+    or _DEFERRED if load_candidates() left it in the database."""
     if "description" in sa_inspect(job).unloaded:
-        return None
+        return _DEFERRED
     return job.description
 
 
+def _cache_key(job: Job) -> tuple[int, int] | None:
+    """What the per-posting caches (seniority level here, term counts in
+    gosha/lexical.py) are keyed on: the id alone would serve a posting's
+    first, title-only reading forever after its description arrives. The
+    pipeline drops and recomputes the embedding whenever the title,
+    company or description changes, so its bytes identify the text."""
+    if job.id is None:
+        return None
+    return (job.id, hash(job.embedding))
+
+
+# Reading a posting's seniority needs its description, which the feed
+# otherwise leaves in the database. Least recently used out; the lock
+# because _order() runs in worker threads (asyncio.to_thread).
+_level_cache: OrderedDict[tuple, str] = OrderedDict()
+_level_lock = threading.Lock()
+
+
+def _level_key(job: Job) -> tuple | None:
+    key = _cache_key(job)
+    # The board's label is read too, and is updated without a re-embed.
+    return None if key is None else (*key, job.experience_level)
+
+
 def posting_level(job: Job) -> str:
-    if job.id is not None and job.id in _level_cache:
-        return _level_cache[job.id]
+    key = _level_key(job)
+    if key is not None:
+        with _level_lock:
+            level = _level_cache.get(key)
+            if level is not None:
+                _level_cache.move_to_end(key)
+                return level
     description = _loaded_description(job)
-    level = seniority.posting_level(job.title, description, job.experience_level)
-    if job.id is not None and description is not None:
-        if len(_level_cache) >= lexical.MAX_CACHED:
-            _level_cache.clear()
-        _level_cache[job.id] = level
+    deferred = description is _DEFERRED
+    level = seniority.posting_level(
+        job.title, None if deferred else description, job.experience_level,
+    )
+    # A reading without the description is a guess for this request only;
+    # a posting that really has none is read in full and kept.
+    if key is not None and not deferred:
+        with _level_lock:
+            _level_cache[key] = level
+            while len(_level_cache) > lexical.MAX_CACHED:
+                _level_cache.popitem(last=False)
     return level
 
 
-def _needs_text(job: Job) -> bool:
-    """Whether ranking this job still has to read its description."""
-    return job.id is None or job.id not in _level_cache or not lexical.is_cached(job.id)
+def clear_caches() -> None:
+    """Forget every cached seniority level, term count and keyword index."""
+    with _level_lock:
+        _level_cache.clear()
+    lexical.clear_cache()
+
+
+def _needs_text(job: Job, cv_text: str) -> bool:
+    """Whether ranking this job for a CV with this text has to read its
+    description. Without CV text there is no keyword score and no
+    seniority penalty (seniority.cv_level), so nothing to read."""
+    if not cv_text.strip():
+        return False
+    key = _cache_key(job)
+    if key is None:
+        return True
+    with _level_lock:
+        level_known = _level_key(job) in _level_cache
+    return not level_known or not lexical.is_cached(key)
 
 
 async def get_feed(
@@ -435,10 +492,12 @@ async def get_feed(
     # only the page returned needs one (filled below), unless excluded
     # words have to be matched against every candidate's text.
     with_description = bool(excluded)
-    candidates = await load_candidates(
-        excluded_ids, embedded_only=user_vector is not None,
-        with_description=with_description,
+    # The whole window, rated postings included: it is what the keyword
+    # IDF is fitted on (_order), the same for every user and the demo.
+    window = await load_candidates(
+        embedded_only=user_vector is not None, with_description=with_description,
     )
+    candidates = [j for j in window if j.id not in excluded_ids]
 
     cv_text = ""
     if user_vector is not None:
@@ -476,10 +535,10 @@ async def get_feed(
     if not with_description:
         # Only postings this process has not tokenised yet: after the first
         # request of a scrape cycle that is a handful, not ~2,000.
-        await load_descriptions([j for j in candidates if _needs_text(j)])
+        await load_descriptions([j for j in window if _needs_text(j, cv_text)])
     # Building the keyword index is a CPU pass over every new posting:
     # off the event loop.
-    ranked = await asyncio.to_thread(_order, candidates, user_vector, cv_text)
+    ranked = await asyncio.to_thread(_order, candidates, user_vector, cv_text, window)
     page_rows = ranked[start : start + per_page]
     if not with_description:
         await load_descriptions([job for job, _, _ in page_rows])
@@ -561,9 +620,16 @@ def rank_candidates(
 
 
 def _order(
-    candidates: list[Job], vector: np.ndarray, cv_text: str = "",
+    candidates: list[Job],
+    vector: np.ndarray,
+    cv_text: str = "",
+    corpus: list[Job] | None = None,
 ) -> list[tuple[Job, float, int]]:
     """(job, clipped cosine, percentile) for every candidate, best first.
+
+    `corpus` (a superset of `candidates`, default the candidates) is what
+    the keyword IDF is fitted on: the feed passes the whole window so one
+    index serves every user (lexical.index_for).
 
     Ordered by hybrid_scores(): the embedding cosine, TF-IDF similarity to
     the CV text and the seniority gap between the CV and the posting. The
@@ -579,19 +645,20 @@ def _order(
 
     keyword = None
     if cv_text.strip():
-        keys = [j.id for j in candidates]
-        if all(k is not None for k in keys):
-            index = lexical.index_for(
-                [_lexical_text(j) for j in candidates], keys,
-            )
-            keyword = index.score_keys(cv_text, keys)
+        corpus = candidates if corpus is None else corpus
+        corpus_keys = [_cache_key(j) for j in corpus]
+        if all(k is not None for k in corpus_keys):
+            index = lexical.index_for([_lexical_text(j) for j in corpus], corpus_keys)
+            keyword = index.score_keys(cv_text, [_cache_key(j) for j in candidates])
         else:  # unsaved rows (tests): nothing stable to cache on
             keyword = lexical.scores(cv_text, [_lexical_text(j) or "" for j in candidates])
 
     reader = seniority.cv_level(cv_text)
-    penalties = np.array([
-        seniority.level_penalty(reader, posting_level(j)) for j in candidates
-    ])
+    penalties = None
+    if reader != seniority.CV_UNKNOWN:
+        penalties = np.array([
+            seniority.level_penalty(reader, posting_level(j)) for j in candidates
+        ])
     final = hybrid_scores(cosines, keyword, penalties)
     order = np.argsort(-final, kind="stable")
 
@@ -608,10 +675,12 @@ def _lexical_text(job: Job) -> str | None:
     """What the keyword index reads for a job, as the embedding does.
 
     None when the description was not loaded: the index then uses the
-    term counts it cached for this job id earlier (see _needs_text).
+    term counts it cached for this posting (see _needs_text), or, if they
+    were evicted meanwhile, scores it 0 for this request and caches
+    nothing (lexical.LexicalIndex.complete).
     """
     description = _loaded_description(job)
-    if description is None and job.id is not None and lexical.is_cached(job.id):
+    if description is _DEFERRED:
         return None
     return build_job_text(job.title, job.company, description)
 
