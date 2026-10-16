@@ -6,7 +6,7 @@ nothing else: the owner would learn the product had died by noticing his
 own DMs had stopped. This module inverts that. Nothing is said when jobs
 flow; noise is made when they stop.
 
-Two signals, because they fail differently:
+In-process signals, judged on every scrape cycle (ScrapeHealth):
 
 * **Zero-yield cycle** — every source returned nothing. Usually infra:
   proxies down, DNS, the container wedged.
@@ -14,6 +14,24 @@ Two signals, because they fail differently:
   cycles while the others are fine. Usually that board changed its
   markup/API and its adapter needs fixing. This is the failure mode that
   hides for weeks, because the feed keeps working on the other sources.
+* **Yield collapse** — a board that normally returns ~300 postings returns
+  3 for two cycles running. Not zero, so the streak never trips, but
+  pagination or a selector broke and the board is effectively gone.
+  Judged against the median of the source's recent normal cycles.
+
+Database signals, judged hourly (check_data_quality):
+
+* **Empty descriptions** — a source whose recent postings mostly arrive
+  without a description while they normally have one: the detail fetch or
+  the description parser broke, and matching runs on titles alone.
+* **Embedding backlog** — active postings hours old with no embedding: the
+  embedding step is failing, so the feed and semantic DM matching cannot
+  see new jobs at all.
+* **No new jobs** — nothing first seen for a day while searches exist.
+
+Every signal is a keyed *condition* (`conditions` failing, `cleared`
+positively healthy, anything else unknown); gosha/alerts.py turns those
+into a channel post + owner DMs with cooldown and recovery messages.
 
 Yields are counted on what each board RETURNED (unique postings), before
 the pipeline's relevance filter. Counting after it made a working board
@@ -26,16 +44,19 @@ attempts a source whose applies_to() accepts some subscription's location:
 RemoteOK used to "return 0 jobs for 57 consecutive cycles" simply because
 nobody searched remote.
 
-State is in-process and resets on restart. That is deliberate: after a
-restart the first few cycles re-establish the baseline, and a scraper that
-is genuinely dead trips the streak again within the hour.
+State is in-process unless a state file is attached (main.py attaches
+one under data/), so streaks and yield baselines survive deploys.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import statistics
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -43,9 +64,32 @@ log = logging.getLogger(__name__)
 # deliberate: boards legitimately return nothing for a narrow keyword in a
 # single cycle, but not three times running across every subscription.
 ZERO_STREAK_ALERT = 3
-# Re-alert cadence so a source that stays dead isn't silently forgotten
-# after the first message scrolls away.
+# Re-log cadence so a source that stays dead isn't silently forgotten in
+# the logs. (The owner's reminders run on the alerter's cooldown instead.)
 ZERO_STREAK_REPEAT = 12
+
+# Yield collapse: below COLLAPSE_RATIO × the source's baseline (median of
+# its last BASELINE_WINDOW non-collapsed, non-zero cycles) for
+# COLLAPSE_CYCLES cycles running. Sources whose baseline is under
+# COLLAPSE_MIN_BASELINE are too small to judge (5 → 1 is noise). After
+# REBASELINE_AFTER collapsed cycles the new level is accepted as normal —
+# e.g. the subscriptions that drove the old volume were deleted.
+COLLAPSE_RATIO = 0.25
+COLLAPSE_MIN_BASELINE = 20
+COLLAPSE_CYCLES = 2
+BASELINE_WINDOW = 8
+BASELINE_MIN_SAMPLES = 3
+REBASELINE_AFTER = 24
+
+KEY_ZERO_YIELD = "scrape:zero_yield"
+
+
+def dead_key(source: str) -> str:
+    return f"scrape:dead:{source}"
+
+
+def collapse_key(source: str) -> str:
+    return f"scrape:collapse:{source}"
 
 
 @dataclass
@@ -62,7 +106,12 @@ class CycleReport:
     zero_cycle_streak: int = 0
     dead_sources: list[str] = field(default_factory=list)
     recovered_sources: list[str] = field(default_factory=list)
+    collapsed_sources: list[str] = field(default_factory=list)
+    # Log lines for this cycle (state transitions only).
     alerts: list[str] = field(default_factory=list)
+    # Keyed conditions for gosha/alerts.py: failing now / known healthy.
+    conditions: dict[str, str] = field(default_factory=dict)
+    cleared: dict[str, str] = field(default_factory=dict)
 
     @property
     def should_alert(self) -> bool:
@@ -90,13 +139,81 @@ class ScrapeHealth:
         self,
         streak_threshold: int = ZERO_STREAK_ALERT,
         repeat_every: int = ZERO_STREAK_REPEAT,
+        collapse_ratio: float = COLLAPSE_RATIO,
+        collapse_min_baseline: int = COLLAPSE_MIN_BASELINE,
+        collapse_cycles: int = COLLAPSE_CYCLES,
+        baseline_window: int = BASELINE_WINDOW,
+        baseline_min_samples: int = BASELINE_MIN_SAMPLES,
+        rebaseline_after: int = REBASELINE_AFTER,
+        state_path: Path | None = None,
     ) -> None:
         self.streak_threshold = streak_threshold
         self.repeat_every = repeat_every
+        self.collapse_ratio = collapse_ratio
+        self.collapse_min_baseline = collapse_min_baseline
+        self.collapse_cycles = collapse_cycles
+        self.baseline_window = baseline_window
+        self.baseline_min_samples = baseline_min_samples
+        self.rebaseline_after = rebaseline_after
         self.zero_cycle_streak = 0
         self.streaks: dict[str, int] = {}
+        # Recent normal yields per source, oldest first.
+        self.history: dict[str, list[int]] = {}
+        self.collapse_streaks: dict[str, int] = {}
         self.last_report: CycleReport | None = None
+        self.state_path = state_path
+        if state_path is not None:
+            self._load()
 
+    # ── persistence ──────────────────────────────────────────────
+    def attach_state_file(self, path: Path) -> None:
+        self.state_path = path
+        self._load()
+
+    def _load(self) -> None:
+        if self.state_path is None:
+            return
+        try:
+            raw = json.loads(self.state_path.read_text(encoding="utf-8"))
+            self.zero_cycle_streak = int(raw.get("zero_cycle_streak", 0))
+            self.streaks = {str(k): int(v) for k, v in raw.get("streaks", {}).items()}
+            self.history = {
+                str(k): [int(x) for x in v][-self.baseline_window:]
+                for k, v in raw.get("history", {}).items()
+            }
+            self.collapse_streaks = {
+                str(k): int(v) for k, v in raw.get("collapse_streaks", {}).items()
+            }
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            log.warning("Ignoring unreadable scrape-health state %s: %s", self.state_path, exc)
+
+    def _save(self) -> None:
+        if self.state_path is None:
+            return
+        data = {
+            "zero_cycle_streak": self.zero_cycle_streak,
+            "streaks": self.streaks,
+            "history": self.history,
+            "collapse_streaks": self.collapse_streaks,
+        }
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
+            tmp.write_text(json.dumps(data), encoding="utf-8")
+            tmp.replace(self.state_path)
+        except OSError as exc:
+            log.warning("Could not persist scrape-health state to %s: %s", self.state_path, exc)
+
+    def baseline(self, source: str) -> float | None:
+        """Median of the source's recent normal yields, once there are enough."""
+        hist = self.history.get(source, [])
+        if len(hist) < self.baseline_min_samples:
+            return None
+        return float(statistics.median(hist))
+
+    # ── per-cycle judgement ──────────────────────────────────────
     def record_cycle(
         self,
         attempted: Iterable[str],
@@ -135,35 +252,24 @@ class ScrapeHealth:
         report.zero_cycle_streak = self.zero_cycle_streak
 
         for source, count in sorted(counts.items()):
-            previous = self.streaks.get(source, 0)
-            if count > 0:
-                if previous >= self.streak_threshold:
-                    report.recovered_sources.append(source)
-                    report.alerts.append(
-                        f"**{source}** recovered — {count} jobs after "
-                        f"{previous} empty cycles."
-                    )
-                self.streaks[source] = 0
-                continue
+            self._judge_dead(report, source, count)
+            self._judge_collapse(report, source, count)
 
-            streak = previous + 1
-            self.streaks[source] = streak
-            if streak == self.streak_threshold or (
-                streak > self.streak_threshold
-                and (streak - self.streak_threshold) % self.repeat_every == 0
-            ):
-                report.dead_sources.append(source)
-                report.alerts.append(
-                    f"**{source}** has returned 0 jobs for {streak} "
-                    f"consecutive cycles — its adapter is probably broken."
-                )
-
-        if report.zero_yield:
-            report.alerts.insert(
-                0,
+        if report.zero_yield and counts:
+            text = (
                 f"**Scrape produced 0 jobs** across {len(attempted_list) or 'all'} "
                 f"sources ({self.zero_cycle_streak} cycle(s) running). "
-                f"Nothing is being delivered to anyone.",
+                f"Nothing is being delivered to anyone."
+            )
+            report.alerts.insert(0, text)
+            report.conditions[KEY_ZERO_YIELD] = text
+            # Every source is at zero; one line says it better than seven
+            # "adapter probably broken" lines.
+            for source in counts:
+                report.conditions.pop(dead_key(source), None)
+        elif total > 0:
+            report.cleared[KEY_ZERO_YIELD] = (
+                f"Scraping produces jobs again — {total} this cycle."
             )
 
         if report.should_alert:
@@ -175,7 +281,79 @@ class ScrapeHealth:
             )
 
         self.last_report = report
+        self._save()
         return report
+
+    def _judge_dead(self, report: CycleReport, source: str, count: int) -> None:
+        previous = self.streaks.get(source, 0)
+        if count > 0:
+            if previous >= self.streak_threshold:
+                report.recovered_sources.append(source)
+                report.alerts.append(
+                    f"**{source}** recovered — {count} jobs after "
+                    f"{previous} empty cycles."
+                )
+            report.cleared[dead_key(source)] = f"**{source}** recovered — {count} jobs this cycle."
+            self.streaks[source] = 0
+            return
+
+        streak = previous + 1
+        self.streaks[source] = streak
+        if streak < self.streak_threshold:
+            return
+        text = (
+            f"**{source}** has returned 0 jobs for {streak} "
+            f"consecutive cycles — its adapter is probably broken."
+        )
+        report.conditions[dead_key(source)] = text
+        if streak == self.streak_threshold or (
+            (streak - self.streak_threshold) % self.repeat_every == 0
+        ):
+            report.dead_sources.append(source)
+            report.alerts.append(text)
+
+    def _judge_collapse(self, report: CycleReport, source: str, count: int) -> None:
+        if count == 0:
+            # Zero is the dead-source signal's job; it neither feeds nor
+            # resets the baseline.
+            return
+        key = collapse_key(source)
+        baseline = self.baseline(source)
+        hist = self.history.setdefault(source, [])
+        if (
+            baseline is not None
+            and baseline >= self.collapse_min_baseline
+            and count < self.collapse_ratio * baseline
+        ):
+            streak = self.collapse_streaks.get(source, 0) + 1
+            self.collapse_streaks[source] = streak
+            if streak >= self.rebaseline_after:
+                hist[:] = [count]
+                self.collapse_streaks[source] = 0
+                report.cleared[key] = (
+                    f"**{source}** has stayed at ~{count} jobs per cycle for {streak} "
+                    f"cycles (was ~{baseline:.0f}); accepting that as its new normal."
+                )
+                return
+            if streak >= self.collapse_cycles:
+                text = (
+                    f"**{source}** yield collapsed: {count} jobs this cycle vs a "
+                    f"baseline of ~{baseline:.0f} ({streak} cycles running). "
+                    f"Pagination or a selector probably broke."
+                )
+                report.conditions[key] = text
+                if streak == self.collapse_cycles:
+                    report.collapsed_sources.append(source)
+                    report.alerts.append(text)
+            return
+
+        self.collapse_streaks[source] = 0
+        hist.append(count)
+        del hist[: -self.baseline_window]
+        if baseline is not None:
+            report.cleared[key] = (
+                f"**{source}** yield is back to normal: {count} jobs (baseline ~{baseline:.0f})."
+            )
 
 
 _health: ScrapeHealth | None = None
@@ -193,3 +371,149 @@ def reset_scrape_health() -> None:
     """Drop the tracker — tests and manual re-baselining."""
     global _health
     _health = None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Database-side checks (hourly; survive restarts by construction)
+# ═══════════════════════════════════════════════════════════════════════
+
+# A description shorter than this is a stub ("See posting"), not content.
+MIN_DESCRIPTION_CHARS = 40
+EMPTY_DESC_WINDOW = timedelta(hours=24)
+EMPTY_DESC_BASELINE = timedelta(days=8)
+EMPTY_DESC_MIN_JOBS = 10
+EMPTY_DESC_ALERT_RATE = 0.8
+EMPTY_DESC_NORMAL_RATE = 0.5
+# The scrape cycle and the hourly backfill both embed; anything older
+# than this without a vector means both are failing.
+EMBED_GRACE = timedelta(hours=3)
+EMBED_BACKLOG_ALERT = 10
+NO_NEW_JOBS_HOURS = 24
+
+KEY_EMBEDDINGS = "data:embeddings"
+KEY_NO_NEW_JOBS = "data:no_new_jobs"
+
+
+def descriptions_key(source: str) -> str:
+    return f"data:descriptions:{source}"
+
+
+@dataclass
+class QualityReport:
+    conditions: dict[str, str] = field(default_factory=dict)
+    cleared: dict[str, str] = field(default_factory=dict)
+    # source → (recent jobs, recent empty, baseline jobs, baseline empty)
+    descriptions: dict[str, tuple[int, int, int, int]] = field(default_factory=dict)
+    embedding_backlog: int = 0
+    last_new_job_at: datetime | None = None
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def judge_descriptions(
+    report: QualityReport, source: str, recent: int, recent_empty: int,
+    base: int, base_empty: int,
+) -> None:
+    report.descriptions[source] = (recent, recent_empty, base, base_empty)
+    if recent < EMPTY_DESC_MIN_JOBS:
+        return  # too few postings to tell
+    rate = recent_empty / recent
+    key = descriptions_key(source)
+    if rate < EMPTY_DESC_NORMAL_RATE:
+        report.cleared[key] = (
+            f"**{source}** descriptions are back: {100 - round(rate * 100)}% of "
+            f"{recent} recent postings have one."
+        )
+        return
+    if rate < EMPTY_DESC_ALERT_RATE or base < EMPTY_DESC_MIN_JOBS:
+        return
+    base_rate = base_empty / base
+    if base_rate > EMPTY_DESC_NORMAL_RATE:
+        return  # this source never had descriptions; nothing broke
+    report.conditions[key] = (
+        f"**{source}**: {round(rate * 100)}% of the {recent} postings scraped in the "
+        f"last 24h have no description (normally ~{round(base_rate * 100)}%). The detail "
+        f"fetch or description parser is probably broken; matching sees titles only."
+    )
+
+
+async def check_data_quality(now: datetime | None = None) -> QualityReport:
+    """Judge what the scrape cycles stored: descriptions, embeddings, freshness."""
+    from sqlalchemy import case, func, or_, select
+
+    from gosha.database import get_session
+    from gosha.embeddings import stale_model_clause
+    from gosha.models import Job, Subscription
+
+    now = now or datetime.now(timezone.utc)
+    report = QualityReport()
+    recent_since = now - EMPTY_DESC_WINDOW
+    base_since = now - EMPTY_DESC_BASELINE
+    empty = or_(
+        Job.description.is_(None),
+        func.length(func.trim(Job.description)) < MIN_DESCRIPTION_CHARS,
+    )
+    is_recent = Job.first_seen_at >= recent_since
+
+    async with get_session() as session:
+        rows = (await session.execute(
+            select(
+                Job.source,
+                func.sum(case((is_recent, 1), else_=0)),
+                func.sum(case((is_recent & empty, 1), else_=0)),
+                func.sum(case((~is_recent, 1), else_=0)),
+                func.sum(case((~is_recent & empty, 1), else_=0)),
+            )
+            .where(Job.first_seen_at >= base_since)
+            .group_by(Job.source)
+        )).all()
+
+        backlog = (await session.execute(
+            select(func.count(Job.id)).where(
+                Job.is_active.is_(True),
+                Job.first_seen_at < now - EMBED_GRACE,
+                or_(Job.embedding.is_(None), stale_model_clause(Job.embedding_model)),
+            )
+        )).scalar() or 0
+
+        last_new = (await session.execute(select(func.max(Job.first_seen_at)))).scalar()
+        active_subs = (await session.execute(
+            select(func.count(Subscription.id)).where(Subscription.is_active.is_(True))
+        )).scalar() or 0
+
+    for source, recent, recent_empty, base, base_empty in rows:
+        judge_descriptions(
+            report, str(source), int(recent or 0), int(recent_empty or 0),
+            int(base or 0), int(base_empty or 0),
+        )
+
+    report.embedding_backlog = int(backlog)
+    if backlog >= EMBED_BACKLOG_ALERT:
+        report.conditions[KEY_EMBEDDINGS] = (
+            f"**{backlog} active jobs** first seen over {int(EMBED_GRACE.total_seconds() // 3600)}h "
+            f"ago still have no embedding. The embedding step is failing (model "
+            f"missing, out of memory?), so the web feed and semantic DM matching "
+            f"cannot see new postings."
+        )
+    else:
+        report.cleared[KEY_EMBEDDINGS] = "Job embeddings are keeping up again."
+
+    report.last_new_job_at = _aware(last_new)
+    if report.last_new_job_at is not None and active_subs:
+        age = now - report.last_new_job_at
+        if age >= timedelta(hours=NO_NEW_JOBS_HOURS):
+            report.conditions[KEY_NO_NEW_JOBS] = (
+                f"**No new job** has been stored for {int(age.total_seconds() // 3600)}h "
+                f"(last: {report.last_new_job_at:%Y-%m-%d %H:%M} UTC) although "
+                f"{active_subs} searches are active."
+            )
+        else:
+            report.cleared[KEY_NO_NEW_JOBS] = "New jobs are being stored again."
+
+    if report.conditions:
+        log.error("Data quality: %s", " | ".join(report.conditions.values()))
+    return report

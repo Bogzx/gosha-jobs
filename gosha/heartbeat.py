@@ -93,6 +93,28 @@ def watchdog_seconds() -> float:
         return WATCHDOG_STALE_SECONDS
 
 
+def _page_owner(stale: float, limit: float) -> None:
+    """DM the owner before exiting, through the one path that works now.
+
+    The loop is wedged, so discord.py cannot send anything; a plain-urllib
+    call to Discord's REST API with the bot token can (ALERT_DM_USER_IDS,
+    off with ALERTS_ENABLED=false). Bounded by a short timeout so a dead
+    network cannot keep the wedged process alive.
+    """
+    try:
+        from gosha.alerts import post_dm_sync
+
+        post_dm_sync(
+            f"🚨 **GOSHA bot watchdog**: no heartbeat for {stale:.0f}s (limit "
+            f"{limit:.0f}s) — the event loop stopped running scheduled jobs. "
+            "Restarting the bot; the thread dump is in its log "
+            "(`docker compose logs bot`).",
+            timeout=5.0,
+        )
+    except Exception as exc:  # exiting regardless
+        log.error("Watchdog could not page the owner: %s", exc)
+
+
 def start_watchdog(
     max_age: float | None = None, poll: float = WATCHDOG_POLL_SECONDS
 ) -> threading.Thread | None:
@@ -127,6 +149,7 @@ def start_watchdog(
             # The stack of the wedged loop is the whole diagnosis; without
             # it a restart erases the evidence.
             faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+            _page_owner(stale, limit)
             for handler in logging.getLogger().handlers:
                 try:
                     handler.flush()

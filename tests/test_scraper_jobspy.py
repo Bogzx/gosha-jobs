@@ -155,3 +155,44 @@ async def test_direct_is_a_fallback_route_when_the_tunnel_fails(monkeypatch):
 def test_scrape_direct_is_off_unless_enabled(monkeypatch, value):
     monkeypatch.setenv("SCRAPE_DIRECT", value)
     assert scraper.scrape_direct_enabled() is False
+
+
+@pytest.mark.parametrize(
+    ("location", "expected"),
+    [
+        ("cluj", ["indeed", "linkedin", "glassdoor"]),
+        ("romania", ["indeed", "linkedin", "glassdoor"]),
+        # "Remote" was a US place to Indeed/Glassdoor and none to LinkedIn.
+        ("remote", []),
+        ("Remote", []),
+        ("worldwide", []),
+        # Only LinkedIn knows a continent.
+        ("europe", ["linkedin"]),
+        ("eu", ["linkedin"]),
+    ],
+)
+def test_jobspy_boards_for(location, expected):
+    assert scraper.jobspy_boards_for(location, ["indeed", "linkedin", "glassdoor"]) == expected
+
+
+async def test_remote_search_is_not_sent_to_jobspy(monkeypatch):
+    monkeypatch.setattr(
+        scraper, "scrape_jobs", lambda **_: pytest.fail("must not scrape"),
+    )
+    df = await scraper.scrape_jobs_raw(_Tunnels(), "python developer", "remote", 14)
+    assert df.empty
+
+
+async def test_europe_search_only_asks_linkedin(monkeypatch):
+    monkeypatch.setattr(scraper, "DELAY_BETWEEN_SEARCHES", 0)
+    calls: list[dict] = []
+
+    def fake_scrape_jobs(**kwargs):
+        calls.append(kwargs)
+        return pd.DataFrame([{"job_url": "https://x/1", "site": "linkedin"}])
+
+    monkeypatch.setattr(scraper, "scrape_jobs", fake_scrape_jobs)
+    df = await scraper.scrape_jobs_raw(_Tunnels(), "python developer", "europe", 14)
+    assert len(df) == 1
+    assert [c["site_name"] for c in calls] == [["linkedin"]]
+    assert calls[0]["location"] == "Europe"

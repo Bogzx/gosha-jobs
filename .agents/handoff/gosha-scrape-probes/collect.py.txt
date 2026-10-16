@@ -1,0 +1,41 @@
+import asyncio, json, sys, time
+sys.path.insert(0, "/data/Repos/gosha-jobs")
+from functools import partial
+from gosha.scrapers.registry import get_extra_scrapers
+from gosha.scrapers.base import SearchQuery
+from gosha.filters import normalize_location, city_only, relevance_predicate, filter_dataframe
+from gosha.scraper import jobspy_kwargs, indeed_country, glassdoor_country
+from jobspy import scrape_jobs
+import pandas as pd
+
+QUERIES=[("python developer","cluj"),("junior java","bucuresti"),("internship software","romania"),("stagiu it","romania"),("data analyst","iasi"),("software engineer","remote")]
+out=[]
+async def main():
+    for kw,loc in QUERIES:
+        rel=relevance_predicate([kw])
+        for s in get_extra_scrapers():
+            q=SearchQuery(keyword=kw,location=loc,max_age_days=14,relevant=rel)
+            if not s.applies_to(q): continue
+            t=time.time(); jobs=await s.search(q)
+            print(f"{s.name:9} {kw!r}@{loc!r}: {len(jobs)} in {time.time()-t:.0f}s", flush=True)
+            for j in jobs:
+                r=j.to_record(); r["date_posted"]=str(r["date_posted"]) if r["date_posted"] else None
+                r["q"]=kw; r["loc"]=loc; r["relevant"]=rel(j.title,j.experience_level); r["desc_len"]=len(j.description or ""); r.pop("description")
+                out.append(r)
+        search_loc,_=normalize_location(loc)
+        for board in ["indeed","linkedin","glassdoor"]:
+            l=search_loc; c=indeed_country(search_loc)
+            if board=="glassdoor": l=city_only(search_loc); c=glassdoor_country(search_loc)
+            kwargs=jobspy_kwargs([board],kw,l,14,None,c); kwargs["fetch_description"]=(board!="linkedin")
+            t=time.time()
+            try: df=await asyncio.get_running_loop().run_in_executor(None,partial(scrape_jobs,**kwargs))
+            except Exception as e: print(board,"ERR",e); continue
+            print(f"{board:9} {kw!r}@{l!r} country={c}: {len(df)} in {time.time()-t:.0f}s", flush=True)
+            for row in df.to_dict("records"):
+                out.append({"job_url":row.get("job_url"),"title":row.get("title"),"company":row.get("company"),"location":row.get("location"),"site":board,
+                  "date_posted":str(row.get("date_posted")),"min_amount":row.get("min_amount"),"max_amount":row.get("max_amount"),"currency":row.get("currency"),"interval":row.get("interval"),
+                  "is_remote":row.get("is_remote"),"job_level":row.get("job_level"),"desc_len":len(str(row.get("description") or "")) if str(row.get("description"))!="nan" else 0,
+                  "q":kw,"loc":loc,"relevant":rel(str(row.get("title")))})
+            await asyncio.sleep(3)
+    json.dump(out,open("collected.json","w"),default=str,ensure_ascii=False,indent=0)
+asyncio.run(main())

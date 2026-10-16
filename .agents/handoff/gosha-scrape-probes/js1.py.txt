@@ -1,0 +1,14 @@
+import collections, time
+from jobspy import scrape_jobs
+def show(label, **kw):
+    try: df=scrape_jobs(results_wanted=20, hours_old=14*24, **kw)
+    except Exception as e: print(label,"ERR",e); return
+    locs=collections.Counter(str(l)[:30] for l in df.get("location",[]))
+    rem=df["is_remote"].sum() if "is_remote" in df else None
+    print(label, len(df), "is_remote:",rem, locs.most_common(6)); time.sleep(3)
+show("indeed RO remote", site_name=["indeed"], search_term="software engineer", location="Romania", country_indeed="romania", is_remote=True)
+show("indeed RO 'remote' term", site_name=["indeed"], search_term="software engineer remote", location="Romania", country_indeed="romania")
+show("linkedin EU remote", site_name=["linkedin"], search_term="software engineer", location="European Union", is_remote=True)
+show("linkedin RO remote", site_name=["linkedin"], search_term="software engineer", location="Romania", is_remote=True)
+show("linkedin Europe", site_name=["linkedin"], search_term="software engineer", location="Europe")
+show("indeed Europe (current)", site_name=["indeed"], search_term="software engineer", location="Europe")

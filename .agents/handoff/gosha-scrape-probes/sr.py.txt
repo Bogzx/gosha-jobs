@@ -1,0 +1,15 @@
+import httpx, json, collections
+H={"User-Agent":"Mozilla/5.0 Chrome/125","Accept":"application/json"}
+cands=["Bitdefender","Accenture","Atos","Eviden","Luxoft","Thales","Valeo","FORVIA","Autoliv","Preh","Wipro","Vodafone","VodafoneRomania","Siemens","SiemensHealthineers","Ericsson","Nokia","Microchip","Hella","Sabre","Adecco","Ness","Cognizant","CapgeminiRomania","Capgemini","Allianz","Raiffeisen","BRD","Orange","Telekom","LidlRomania","Lidl","Kaufland","EmersonElectricCo","Emerson","Garmin","SAP","Oracle","IBM","Amdocs","Genpact","Conduent","Stefanini","DXC","Ciklum","Globant","EPAM","Yonder","Fortech","Bosch","BoschRexroth","ContinentalAutomotive","Schaeffler","ZF","Dräxlmaier","Draexlmaier","Aumovio","AUMOVIO","Ubisoft","Electronic-Arts","Keysight","Synopsys","Cadence","Renault","RenaultGroup","Dacia","Michelin","Pirelli","Takata","Visteon","Marelli","Harman","HARMAN","Yazaki","Leoni","Delphi","Aptiv","Veoneer","Magna","BMW","Mercedes-Benz","DeutscheTelekom","Huawei","Accesa","Ullink","Societe-Generale","SocieteGenerale","ING-Hubs","INGHubsRomania","Endava","BoschGroup","Continental"]
+found={}
+for c in cands:
+    try:
+        d=httpx.get(f"https://api.smartrecruiters.com/v1/companies/{c}/postings",params={"country":"ro","limit":1},headers=H,timeout=20).json()
+        if d.get("totalFound"): found[c]=d["totalFound"]
+    except Exception as e: pass
+print(found, sum(found.values()))
+d=httpx.get("https://api.smartrecruiters.com/v1/companies/BoschGroup/postings",params={"country":"ro","limit":100},headers=H,timeout=20).json()
+p=d["content"][0]; print(json.dumps(p,ensure_ascii=False)[:1500])
+print(collections.Counter((x.get("experienceLevel") or {}).get("id") for x in d["content"]))
+print(collections.Counter((x.get("location") or {}).get("city") for x in d["content"]))
+det=httpx.get(p["ref"],headers=H,timeout=20).json(); print(list(det.keys())); print({k:(len(v.get("text","")) if isinstance(v,dict) else v) for k,v in ((det.get("jobAd") or {}).get("sections") or {}).items()}); print(det.get("postingUrl"), det.get("applyUrl"))

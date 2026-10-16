@@ -7,8 +7,15 @@
     python scripts/eval_ranking.py --models tfidf all-mpnet-base-v2 \
         paraphrase-multilingual-mpnet-base-v2 paraphrase-multilingual-mpnet-base-v2@512
 
-    # regression gate (CI): fail if the production model got worse
+    # regression gate (CI): fail if the production ranking got worse
     python scripts/eval_ranking.py --check eval/results/all-mpnet-base-v2.json
+
+    # the independent held-out set (never tuned on; docs/EVAL.md)
+    python scripts/eval_ranking.py --postings eval/heldout/postings.jsonl \
+        --personas eval/heldout/personas.jsonl --write-results eval/results/heldout
+
+"feed" is the ranking production ships (embedding cosine + TF-IDF +
+seniority, gosha/recommend.py); "cosine only" is the encoder alone.
 
 Needs sentence-transformers for every model except `tfidf`. See docs/EVAL.md.
 """
@@ -95,15 +102,19 @@ def _sweep_row(sweep: list[dict], threshold: float) -> dict:
 
 
 def summary_markdown(results: dict[str, dict]) -> str:
-    lines = ["| Model | window | nDCG@10 (95% CI) | R-prec | MRR | P@10 | nDCG@10 EN postings | "
-             "nDCG@10 RO postings | nDCG@10 EN CVs | nDCG@10 RO CVs |",
-             "|---|---|---|---|---|---|---|---|---|---|"]
+    lines = ["| Model | feed ranking | window | nDCG@10 (95% CI) | R-prec | MRR | P@10 | "
+             "nDCG@10 EN postings | nDCG@10 RO postings | nDCG@10 EN CVs | nDCG@10 RO CVs |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
+    rows = []
     for name, r in results.items():
-        f = r["feed"]
+        rows.append((name, r.get("feed_ranking", "production"), r["feed"], r))
+        if "feed_cosine" in r and r.get("feed_ranking") != "cosine":
+            rows.append((name, "cosine", r["feed_cosine"], r))
+    for name, feed_ranking, f, r in rows:
         lo, hi = f["ndcg@10_ci95"]
         by_post, by_cv = f["by_posting_lang"], f["by_cv_lang"]
         lines.append(
-            f"| `{name}` | {r['max_seq_length'] or '–'} | {f['mean']['ndcg@10']:.3f} "
+            f"| `{name}` | {feed_ranking} | {r['max_seq_length'] or '–'} | {f['mean']['ndcg@10']:.3f} "
             f"({lo:.3f}–{hi:.3f}) | {f['mean']['r_precision']:.3f} | {f['mean']['mrr']:.3f} | "
             f"{f['mean']['p@10']:.3f} | {by_post.get('en', {}).get('ndcg@10', 0):.3f} | "
             f"{by_post.get('ro', {}).get('ndcg@10', 0):.3f} | "
@@ -166,6 +177,9 @@ def main() -> int:
     parser.add_argument("--no-feedback", action="store_true", help="skip the Rocchio simulation")
     parser.add_argument("--job-text", choices=("production", "title"), default="production",
                         help="how postings are turned into text (gosha/evaluation.py job_text)")
+    parser.add_argument("--feed-ranking", choices=evaluation.FEED_RANKINGS,
+                        default="production",
+                        help="how the feed orders postings (cosine: the encoder alone)")
     parser.add_argument("--cache-dir", default=str(Path.home() / ".cache" / "gosha-eval"),
                         help="on-disk embedding cache ('' to disable)")
     parser.add_argument("--write-results", type=Path, metavar="DIR",
@@ -188,6 +202,9 @@ def main() -> int:
             query_location=None if args.no_query_location else "Cluj",
             with_feedback=not args.no_feedback,
             job_text_variant=variant,
+            # TF-IDF stands in for the embedding as a baseline: mixed with
+            # itself it would not be a baseline any more.
+            feed_ranking="cosine" if spec == "tfidf" else args.feed_ranking,
         )
         name = spec if variant == "production" else f"{spec} [{variant}]"
         result = {"model": spec, "job_text": variant, **info, **result}
@@ -197,6 +214,8 @@ def main() -> int:
         if args.write_results:  # as each model finishes: a long run can die
             args.write_results.mkdir(parents=True, exist_ok=True)
             suffix = "" if variant == "production" else f".{variant}"
+            if result["feed_ranking"] != "production" and spec != "tfidf":
+                suffix += f".{result['feed_ranking']}"
             (args.write_results / f"{slug(spec)}{suffix}.json").write_text(
                 json.dumps(result, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 

@@ -12,9 +12,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 
-import httpx
-
-from gosha.scrapers.base import DEFAULT_HEADERS, HTTP_TIMEOUT, RawJob, SearchQuery
+from gosha.scrapers.base import RawJob, SearchQuery, http_client
 from gosha.scrapers.details import html_to_text, repair_mojibake
 
 log = logging.getLogger(__name__)
@@ -104,9 +102,7 @@ class RemoteOKScraper:
         now = time.monotonic()
         try:
             if _cache is None or now - _cache[0] > CACHE_TTL_SECONDS:
-                async with httpx.AsyncClient(
-                    headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True,
-                ) as client:
+                async with http_client() as client:
                     resp = await client.get(API_URL)
                 resp.raise_for_status()
                 data = resp.json()

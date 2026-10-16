@@ -222,6 +222,8 @@ GOSHA holds real CVs. [`PRIVACY.md`](PRIVACY.md) is the operator-facing version 
 
 ## Backups
 
+**Scraper-failure alerts** go to the owner as a Discord DM only: a board that stops returning jobs or collapses, a cycle with zero jobs, missing descriptions or embeddings, a crashed scheduled job, a hung bot, and (from GitHub Actions) a site or bot that is down. Set `ALERT_DM_USER_IDS` to your numeric Discord user ID; setup, thresholds and the off switch are in [`docs/ALERTS.md`](docs/ALERTS.md).
+
 **Backups are built and tested, but not switched on in production yet.** Their secrets (restic password, bucket keys) go in a separate `.env.backup` that only the backup container reads, never in `.env`. [`docs/BACKUPS.md`](docs/BACKUPS.md) describes an opt-in `backup` service (`pg_dump` + encrypted restic snapshots of the database and the CV files) and a restore drill that loads the newest snapshot into a scratch Postgres and compares row counts with the live database. [`scripts/backup/drill.sh`](scripts/backup/drill.sh) runs backup → restore → CV decryption end to end on throwaway containers, and CI repeats it on every change to the backup code. An operator still has to point it at an off-site repository and run the restore drill there; until then, treat the data as unbacked-up.
 
 ## Credits

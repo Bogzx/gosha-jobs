@@ -255,3 +255,99 @@ async def test_older_rows_follow_their_canonical(patched_db, session):
 
     await dedup.assign_dedup_groups()
     assert await _group_ids(session, kept, orphan) == [live_canon.id, None]
+
+
+def test_normalize_key_folds_diacritics():
+    """The separators are ASCII: "București" split into "bucure" + "ti",
+    and "Română" lost its "a" — so the same posting on two boards, one
+    spelling with diacritics and one without, never grouped."""
+    assert dedup.normalize_key(
+        "Programator Junior – București", "Societatea Română SRL",
+    ) == dedup.normalize_key("Programator Junior Bucuresti", "Societatea Romana S.R.L.")
+
+
+def test_normalize_key_reduces_local_entities_to_the_brand():
+    """eJobs names the Romanian entity, LinkedIn the brand."""
+    brand = dedup.normalize_key("Java Developer", "Endava")
+    assert dedup.normalize_key("Java Developer", "ENDAVA ROMANIA SRL") == brand
+    assert dedup.normalize_key("Java Developer", "S.C. Acme S.R.L.") == dedup.normalize_key(
+        "Java Developer", "Acme",
+    )
+    # A name that IS the country is not emptied.
+    assert dedup.normalize_key("Java Developer", "Romania") is not None
+
+
+def test_locations_compatible():
+    assert not dedup.locations_compatible("Cluj-Napoca, Romania", "Iași, Romania")
+    assert dedup.locations_compatible("Cluj-Napoca, CJ, Romania", "Cluj-Napoca, Cluj, Romania")
+    assert dedup.locations_compatible("București, IF, RO", "Bucharest, Romania")
+    # No city on one side, or a multi-city listing that includes it.
+    assert dedup.locations_compatible("Cluj-Napoca, Romania", "Romania")
+    assert dedup.locations_compatible("Remote", "Iasi, Romania")
+    assert dedup.locations_compatible("Baia Mare, Cluj-Napoca, Romania", "Cluj-Napoca, Romania")
+
+
+@pytest.mark.asyncio
+async def test_same_role_in_two_cities_is_two_postings(patched_db, session):
+    """Hiding the Iasi opening behind the Cluj one made it unfindable from an
+    Iasi search: browse filters by location after dropping duplicates."""
+    cluj_li = Job(
+        url="https://linkedin.com/c", title="Java Developer", company="Endava",
+        location="Cluj-Napoca, Cluj, Romania", source="linkedin",
+    )
+    iasi_li = Job(
+        url="https://linkedin.com/i", title="Java Developer", company="Endava",
+        location="Iasi, Iasi, Romania", source="linkedin",
+    )
+    cluj_ej = Job(
+        url="https://ejobs.ro/c", title="Java Developer", company="ENDAVA ROMANIA SRL",
+        location="Cluj-Napoca, Romania", source="ejobs",
+    )
+    session.add_all([cluj_li, iasi_li, cluj_ej])
+    await session.commit()
+
+    assert await dedup.assign_dedup_groups() == 1
+    assert await _group_ids(session, cluj_li, iasi_li, cluj_ej) == [
+        cluj_li.id, None, cluj_li.id,
+    ]
+
+    from gosha.services import jobs as jobs_service
+
+    page, total = await jobs_service.list_jobs(
+        user_id=1, filters=jobs_service.JobFilters(locations=["iasi"]), page=1, per_page=50,
+    )
+    assert [job.url for job in page] == ["https://linkedin.com/i"]
+
+
+def test_shared_city_or_no_city_still_groups():
+    """A multi-city listing shares a city with each single-city copy, and a
+    remote copy names no city at all."""
+    assert dedup.locations_compatible("Cluj-Napoca, Bucuresti, Iasi", "Iasi")
+    assert dedup.locations_compatible("Remote", "Cluj-Napoca, Romania")
+
+
+@pytest.mark.asyncio
+async def test_multi_city_and_remote_copies_group(patched_db, session):
+    multi = Job(
+        url="https://ejobs.ro/m", title="QA Engineer", company="Acme",
+        location="Cluj-Napoca, Bucuresti, Iasi", source="ejobs",
+    )
+    iasi = Job(
+        url="https://linkedin.com/m", title="QA Engineer", company="Acme",
+        location="Iasi", source="linkedin",
+    )
+    remote = Job(
+        url="https://x.com/r", title="Data Engineer", company="Acme",
+        location="Remote", source="bestjobs",
+    )
+    cluj = Job(
+        url="https://y.com/r", title="Data Engineer", company="Acme",
+        location="Cluj", source="hipo",
+    )
+    session.add_all([multi, iasi, remote, cluj])
+    await session.commit()
+
+    assert await dedup.assign_dedup_groups() == 2
+    assert await _group_ids(session, multi, iasi, remote, cluj) == [
+        multi.id, multi.id, remote.id, remote.id,
+    ]

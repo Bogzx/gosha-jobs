@@ -1,0 +1,79 @@
+name: Site watchdog
+
+# The out-of-process dead-man switch (scripts/site_watchdog.py). Every
+# in-process alert needs a running bot; this needs nothing on the server
+# but the public API. It DMs the owner on Discord when the site stops
+# answering, no scrape cycle has finished for hours (bot crashed, hung or
+# crash-looping) or no new job has been stored for a day.
+#
+# Setup (docs/ALERTS.md): repository secrets DISCORD_BOT_TOKEN (the bot's
+# token; the DM is sent as the bot over Discord's REST API) and
+# ALERT_DM_USER_IDS (the owner's numeric Discord user ID). Optional
+# repository variables: ALERTS_ENABLED (false switches it off),
+# GOSHA_PUBLIC_URL, WATCHDOG_SCRAPE_STALE_HOURS (3),
+# WATCHDOG_NEW_JOB_STALE_HOURS (24), WATCHDOG_REMIND_HOURS (6).
+# Without both secrets, or with ALERTS_ENABLED=false, the job skips itself.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DISCORD_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+      ALERT_DM_USER_IDS: ${{ secrets.ALERT_DM_USER_IDS }}
+      ALERTS_ENABLED: ${{ vars.ALERTS_ENABLED }}
+      GOSHA_PUBLIC_URL: ${{ vars.GOSHA_PUBLIC_URL }}
+      WATCHDOG_SCRAPE_STALE_HOURS: ${{ vars.WATCHDOG_SCRAPE_STALE_HOURS }}
+      WATCHDOG_NEW_JOB_STALE_HOURS: ${{ vars.WATCHDOG_NEW_JOB_STALE_HOURS }}
+      WATCHDOG_REMIND_HOURS: ${{ vars.WATCHDOG_REMIND_HOURS }}
+    steps:
+      - name: Check configuration
+        id: config
+        run: |
+          if [ -z "$DISCORD_TOKEN" ] || [ -z "$ALERT_DM_USER_IDS" ] \
+             || [ "$(echo "$ALERTS_ENABLED" | tr '[:upper:]' '[:lower:]')" = "false" ]; then
+            echo "::notice::Site watchdog off: needs secrets DISCORD_BOT_TOKEN + ALERT_DM_USER_IDS and ALERTS_ENABLED not false (docs/ALERTS.md)."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.config.outputs.enabled == 'true'
+
+      # Alert state (what was already said, when) carried between runs, so a
+      # long outage is one page plus a reminder every few hours, not a page
+      # every 30 minutes. Each run saves under a new key; restore takes the
+      # newest by prefix.
+      - name: Restore alert state
+        if: steps.config.outputs.enabled == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: site-watchdog-state.json
+          key: site-watchdog-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: site-watchdog-
+
+      # Stdlib only (gosha/alerts.py imports nothing third-party): no install.
+      - name: Probe the site
+        id: probe
+        if: steps.config.outputs.enabled == 'true'
+        run: python3 scripts/site_watchdog.py --state-file site-watchdog-state.json
+
+      - name: Save alert state
+        if: always() && steps.config.outputs.enabled == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: site-watchdog-state.json
+          key: site-watchdog-${{ github.run_id }}-${{ github.run_attempt }}

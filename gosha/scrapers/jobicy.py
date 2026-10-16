@@ -22,9 +22,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import httpx
-
-from gosha.scrapers.base import DEFAULT_HEADERS, HTTP_TIMEOUT, RawJob, SearchQuery
+from gosha.scrapers.base import RawJob, SearchQuery, http_client
 from gosha.scrapers.details import html_to_text
 
 log = logging.getLogger(__name__)
@@ -136,9 +134,7 @@ async def _feed() -> list[dict]:
     items: list[dict] = []
     cursor: str | None = None
     try:
-        async with httpx.AsyncClient(
-            headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True,
-        ) as client:
+        async with http_client() as client:
             for _ in range(MAX_PAGES):
                 params: dict[str, Any] = {"count": PAGE_SIZE, "geo": "europe"}
                 if cursor:

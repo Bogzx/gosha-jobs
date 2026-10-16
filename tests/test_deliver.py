@@ -100,11 +100,20 @@ async def test_closed_dms_are_given_up_and_reported(patched_db, session, monkeyp
     await _setup(session, n_jobs=3, discord_id=4242)
     calls = _fake_dm(monkeypatch, [pipeline.DM_CLOSED])
     bot = _Bot()
+    owner_dms: list[str] = []
+
+    class _Sink:
+        async def send(self, text):
+            owner_dms.append(text)
+
+    monkeypatch.setattr("gosha.alerts.sink_for_bot", lambda _bot: _Sink())
 
     assert await pipeline.deliver_pending(bot) == 0
     assert len(calls) == 1  # no point trying the other two
     assert set((await _statuses(session)).values()) == {"failed"}
-    assert "<@4242>" in bot.channel.sent[0]
+    # Owners are told by DM; nothing is posted to a channel, nobody mentioned.
+    assert "4242" in owner_dms[0] and "<@" not in owner_dms[0]
+    assert bot.channel.sent == []
     assert await pipeline.deliver_pending(bot) == 0
     assert len(calls) == 1  # not retried
 

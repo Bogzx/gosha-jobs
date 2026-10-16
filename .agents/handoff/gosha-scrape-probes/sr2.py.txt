@@ -1,0 +1,28 @@
+import httpx, json, sys, collections
+sys.path.insert(0,"/data/Repos/gosha-jobs")
+from gosha.dedup import normalize_key
+H={"User-Agent":"Mozilla/5.0 Chrome/125","Accept":"application/json"}
+rows=json.load(open("collected.json"))
+titles={}
+for r in rows:
+    titles.setdefault(normalize_key(str(r["title"]),"x"),set()).add(r["site"])
+# also eJobs full nationwide browse (all departments) titles for those companies
+ej=[]
+for p in range(1,40):
+    d=httpx.get("https://api.ejobs.ro/jobs",params={"q":"bosch","page":p,"pageSize":100},headers=H,timeout=30).json()
+    ej+=d.get("jobs",[]); 
+    if not d.get("morePagesFollow"): break
+ejt={normalize_key(j["title"],"x") for j in ej if "bosch" in (j.get("company") or {}).get("name","").lower()}
+tot=hit=hit_ej=0; levels=collections.Counter()
+for c in ["BoschGroup","Endava","Continental","Aumovio","Accesa"]:
+    off=0
+    while True:
+        d=httpx.get(f"https://api.smartrecruiters.com/v1/companies/{c}/postings",params={"country":"ro","limit":100,"offset":off},headers=H,timeout=20).json()
+        for p in d["content"]:
+            tot+=1; k=normalize_key(p["name"],"x"); levels[(c,(p.get("experienceLevel") or {}).get("id"))]+=1
+            if k in titles: hit+=1
+            if c=="BoschGroup" and k in ejt: hit_ej+=1
+        off+=100
+        if off>=d["totalFound"]: break
+print("SR RO postings",tot,"title also in our 1345 collected rows:",hit, "| Bosch titles on eJobs (q=bosch):", hit_ej, "of 85; eJobs bosch postings:", len(ejt))
+print(levels)

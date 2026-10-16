@@ -10,6 +10,7 @@ from sqlalchemy import func, select, update
 from gosha.config import load_web_settings
 from gosha.database import get_session
 from gosha.domain.errors import NotFoundError, TierLimitError, ValidationError
+from gosha.filters import EXPERIENCE_LEVEL_CHOICES, canonical_level
 from gosha.models import Subscription, User, UserJob
 
 log = logging.getLogger(__name__)
@@ -31,6 +32,25 @@ class SubscriptionInput:
 
 def _clean_list(values: list[str], cap: int = 50) -> list[str]:
     return [v.strip() for v in values if v and v.strip()][:cap]
+
+
+def _clean_levels(values: list[str]) -> list[str]:
+    """Experience levels as the matcher spells them; ["any"] when empty.
+
+    An unknown level ("entry", say) used to be stored as typed and then
+    matched no posting at all, silently.
+    """
+    levels: list[str] = []
+    for value in _clean_list(values):
+        level = canonical_level(value)
+        if level is None:
+            raise ValidationError(
+                f"Unknown experience level {value!r}: use one of "
+                f"{', '.join(EXPERIENCE_LEVEL_CHOICES)}."
+            )
+        if level not in levels:
+            levels.append(level)
+    return levels or ["any"]
 
 
 def _check_tier_lists(user: User, keywords: list[str], locations: list[str]) -> None:
@@ -61,6 +81,7 @@ async def create_subscription(user: User, data: SubscriptionInput) -> Subscripti
     if not keywords or not locations:
         raise ValidationError("At least one keyword and one location are required.")
     _check_tier_lists(user, keywords, locations)
+    levels = _clean_levels(data.experience_levels)
 
     async with get_session() as session:
         # Count under a lock on the user row, or two concurrent creates both
@@ -95,7 +116,7 @@ async def create_subscription(user: User, data: SubscriptionInput) -> Subscripti
         sub.locations = locations
         sub.excluded_keywords = _clean_list(data.excluded_keywords)
         sub.company_blacklist = _clean_list(data.company_blacklist)
-        sub.experience_levels = _clean_list(data.experience_levels) or ["any"]
+        sub.experience_levels = levels
         session.add(sub)
         await session.commit()
         is_first = count == 0
@@ -158,6 +179,10 @@ async def update_subscription(
     if not keywords or not locations:
         raise ValidationError("At least one keyword and one location are required.")
     _check_tier_lists(user, keywords, locations)
+    levels = (
+        _clean_levels(patch["experience_levels"])
+        if patch.get("experience_levels") is not None else None
+    )
 
     async with get_session() as session:
         sub = await session.merge(sub)
@@ -169,8 +194,8 @@ async def update_subscription(
             sub.excluded_keywords = _clean_list(patch["excluded_keywords"])
         if patch.get("company_blacklist") is not None:
             sub.company_blacklist = _clean_list(patch["company_blacklist"])
-        if patch.get("experience_levels") is not None:
-            sub.experience_levels = _clean_list(patch["experience_levels"]) or ["any"]
+        if levels is not None:
+            sub.experience_levels = levels
         if patch.get("remote_ok") is not None:
             sub.remote_ok = patch["remote_ok"]
         if "salary_min" in patch:

@@ -142,76 +142,53 @@ async def test_scrape_stage_records_zero_for_a_dead_adapter(
 
 
 @pytest.mark.asyncio
-async def test_cycle_posts_health_alert_when_nothing_is_scraped(
+async def test_cycle_dms_health_alert_when_nothing_is_scraped(
     patched_db, monkeypatch,
 ):
-    """The inversion: an empty cycle must reach the alert channel."""
+    """The inversion: an empty cycle must reach the owner (by DM only)."""
     import gosha.pipeline as pipeline
-    from gosha.scrape_health import CycleReport
-
-    sent: list[str] = []
-
-    class FakeChannel:
-        async def send(self, content):
-            sent.append(content)
-
-    class FakeBot:
-        alert_channel_id = 42
-
-        def get_channel(self, _id):
-            return FakeChannel()
+    from gosha.alerts import reset_alerter
+    from tests.test_alerts import OWNER, FakeBot
 
     async def empty_stage(tunnel_manager, health=None):
-        report = CycleReport(
-            total=0, per_source={"ejobs": 0}, attempted=["ejobs"], zero_yield=True,
-        )
-        report.alerts.append("**Scrape produced 0 jobs**")
-        if health is not None:
-            health.last_report = report
+        health.record_cycle(["ejobs"], {})
         return []
 
     monkeypatch.setattr(pipeline, "run_scrape_stage", empty_stage)
     reset_scrape_health()
+    reset_alerter()
+    bot = FakeBot()
 
-    total = await pipeline.run_scrape_cycle(FakeBot(), None, alert_channel_id=42)
+    total = await pipeline.run_scrape_cycle(bot, None, alert_channel_id=42)
 
     assert total == 0
-    assert sent, "a zero-yield cycle must alert, not stay silent"
-    assert "Scraper health" in sent[0]
+    assert bot.dms(OWNER), "a zero-yield cycle must alert, not stay silent"
+    assert "Scraper health" in bot.dms(OWNER)[0]
+    assert bot.channel.sent == []
     reset_scrape_health()
+    reset_alerter()
 
 
 @pytest.mark.asyncio
 async def test_cycle_stays_quiet_when_sources_are_healthy(patched_db, monkeypatch):
     import gosha.pipeline as pipeline
-    from gosha.scrape_health import CycleReport
-
-    sent: list[str] = []
-
-    class FakeChannel:
-        async def send(self, content):
-            sent.append(content)
-
-    class FakeBot:
-        alert_channel_id = 42
-
-        def get_channel(self, _id):
-            return FakeChannel()
+    from gosha.alerts import reset_alerter
+    from tests.test_alerts import OWNER, FakeBot
 
     async def healthy_stage(tunnel_manager, health=None):
-        if health is not None:
-            health.last_report = CycleReport(
-                total=5, per_source={"ejobs": 5}, attempted=["ejobs"],
-            )
+        health.record_cycle(["ejobs"], {"ejobs": 5})
         return []
 
     monkeypatch.setattr(pipeline, "run_scrape_stage", healthy_stage)
     reset_scrape_health()
+    reset_alerter()
+    bot = FakeBot()
 
-    await pipeline.run_scrape_cycle(FakeBot(), None, alert_channel_id=42)
+    await pipeline.run_scrape_cycle(bot, None, alert_channel_id=42)
 
-    assert sent == []
+    assert bot.dms(OWNER) == [] and bot.channel.sent == []
     reset_scrape_health()
+    reset_alerter()
 
 
 def test_breakdown_shows_scraped_and_kept():

@@ -28,10 +28,8 @@ import logging
 import re
 from typing import Any
 
-import httpx
-
 from gosha.filters import fold, normalize_location
-from gosha.scrapers.base import DEFAULT_HEADERS, HTTP_TIMEOUT, RawJob, SearchQuery
+from gosha.scrapers.base import RawJob, SearchQuery, http_client
 from gosha.scrapers.details import fetch_details, html_to_text
 from gosha.scrapers.salary import parse_salary_range
 
@@ -143,7 +141,12 @@ def _parse(payload: dict, query: SearchQuery) -> list[RawJob]:
             str(loc.get("name", "")) for loc in locations if isinstance(loc, dict)
         ) or "Romania"
 
-        salary_text = item.get("salary") or item.get("estimatedSalary") or ""
+        # Only what the employer stated. `estimatedSalary` is BestJobs' own
+        # guess for postings whose salary is confidential (the detail page
+        # says salaryConfidential); it was stored as the posting's salary,
+        # shown as such and used by the salary filter — on 2026-10-16 for
+        # 36 of the 76 salaried postings in three searches.
+        salary_text = item.get("salary") or ""
         salary_min, salary_max, currency = parse_salary_range(
             salary_text, default_currency="EUR",
         )
@@ -191,9 +194,7 @@ class BestJobsScraper:
         if not self.applies_to(query):
             return []
         try:
-            async with httpx.AsyncClient(
-                headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True,
-            ) as client:
+            async with http_client() as client:
                 jobs: list[RawJob] = []
                 seen: set[str] = set()
                 for location in search_locations(query.location):

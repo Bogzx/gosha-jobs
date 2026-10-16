@@ -338,6 +338,20 @@ def test_bestjobs_salary_defaults_to_eur():
     assert jobs[0].salary_currency == "EUR"
 
 
+def test_bestjobs_estimate_is_not_the_postings_salary():
+    """estimatedSalary is BestJobs' guess for a confidential salary."""
+    payload = {
+        "items": [{
+            "slug": "x", "title": "Dev", "companyName": "Y",
+            "salary": "", "estimatedSalary": "1715 - 1895",
+            "locations": [{"name": "Cluj-Napoca, România"}],
+        }]
+    }
+    [job] = bestjobs._parse(payload, SearchQuery(keyword="dev", location="cluj"))
+    assert (job.salary_min, job.salary_max, job.salary_currency) == (None, None, None)
+    assert job.salary_period is None
+
+
 def test_bestjobs_location_slug():
     assert bestjobs.location_to_slug("cluj") == "cluj-napoca-romania"
     assert bestjobs.location_to_slug("Bucharest") == "bucharest-romania"
@@ -485,3 +499,51 @@ async def test_feed_sources_back_off_after_a_failure(monkeypatch):
         assert await remoteok.RemoteOKScraper().search(query) == []
     assert feed.call_count == 1
     monkeypatch.setattr(remoteok, "_cache", None)
+
+
+def test_hipo_all_cities_catalog_is_located_in_romania_not_toate_orasele():
+    card = (
+        '<a title="R&amp;D Engineer" class="job-title" href="/locuri-de-munca/locuri_de_munca/7/X/t">'
+        '</a><p class="company-name"><span>Procter &amp; Gamble</span>'
+    )
+    [job] = hipo._parse(card, hipo.ALL_CITIES)
+    assert job.location == "Romania"  # was "Toate Orasele, Romania"
+    assert job.title == "R&D Engineer" and job.company == "Procter & Gamble"
+    [job] = hipo._parse(card, "Cluj-Napoca")
+    assert job.location == "Cluj Napoca, Romania"
+
+
+def test_hipo_detail_names_the_real_city():
+    page = (
+        '<script type="application/ld+json">{"@type": "JobPosting", "jobLocation": '
+        '{"@type": "Place", "address": {"addressLocality": "BUCURESTI , Ilfov ,", '
+        '"addressRegion": "RO"}}}</script>'
+    )
+    assert hipo._extract_detail(page)["location"] == "Bucuresti, Ilfov, Romania"
+    assert "location" not in hipo._extract_detail(
+        '<script type="application/ld+json">{"@type": "JobPosting"}</script>',
+    )
+
+
+@respx.mock
+async def test_hipo_reads_past_the_fourth_page(monkeypatch):
+    """Bucharest's catalog ran to 9 pages; a 4-page cap kept under half."""
+    monkeypatch.setattr(hipo, "_cache", {})
+    details.clear_cache()
+    base = hipo.LISTING_URL.format(city="Bucuresti")
+
+    def page(n: int) -> httpx.Response:
+        return httpx.Response(200, text=(
+            f'<a title="Dev {n}" class="job-title" href="/locuri-de-munca/locuri_de_munca/{n}/X/t">'
+            f'</a><p class="company-name"><span>Acme</span>'
+        ))
+
+    respx.get(base).mock(return_value=page(1))
+    for n in range(2, 10):
+        respx.get(f"{base}/{n}").mock(return_value=page(n))
+    respx.get(f"{base}/10").mock(return_value=page(9))  # nothing new: stop
+    respx.get(url__regex=r".*/locuri_de_munca/\d+/.*").mock(return_value=httpx.Response(404))
+
+    jobs = await hipo.HipoScraper().search(SearchQuery(keyword="x", location="bucharest"))
+    assert len(jobs) == 9
+    details.clear_cache()

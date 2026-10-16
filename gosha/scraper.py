@@ -110,6 +110,32 @@ def jobspy_kwargs(
     return kwargs
 
 
+# Search locations JobSpy cannot serve, per board (measured 2026-10-16,
+# python-jobspy 1.3.0, "software engineer", 30 results a board):
+# - "Remote" is a US place to Indeed and Glassdoor (indeed.com: New York,
+#   Denver, Chicago) and no place at all to LinkedIn (Pune, New York,
+#   Singapore); 1 of the 90 rows had "remote" in its location. LinkedIn
+#   ignores is_remote, and Indeed's remote filter returns nothing on
+#   ro.indeed.com. The rows were stored all the same and ranked in
+#   Romanian students' feeds, which do not filter by location.
+# - "Europe" is a place to LinkedIn (London, Dublin, ...) but not to
+#   Indeed or Glassdoor, which return nothing for it.
+# Remote searches are served by the native feeds (Jobicy, RemoteOK,
+# BestJobs' remote listings) instead.
+_REMOTE_LOCATIONS = {"remote", "anywhere", "worldwide"}
+_CONTINENT_LOCATIONS = {"europe", "eu"}
+
+
+def jobspy_boards_for(location: str, boards: list[str]) -> list[str]:
+    """The JobSpy boards that can serve a search location (user spelling)."""
+    key = location.strip().lower()
+    if key in _REMOTE_LOCATIONS:
+        return []
+    if key in _CONTINENT_LOCATIONS:
+        return [b for b in boards if b == "linkedin"]
+    return list(boards)
+
+
 def scrape_direct_enabled() -> bool:
     """SCRAPE_DIRECT=true lets JobSpy also use the server's own IP."""
     return os.getenv("SCRAPE_DIRECT", "").strip().lower() in ("1", "true", "yes", "on")
@@ -220,6 +246,10 @@ async def scrape_jobs_raw(
     """
     if boards is None:
         boards = ["indeed", "linkedin", "glassdoor"]
+    boards = jobspy_boards_for(location, boards)
+    if not boards:
+        log.info("JobSpy cannot search %r; left to the native remote feeds", location)
+        return pd.DataFrame()
 
     terms = expand_keyword(keyword)
     search_location, _match_subs = normalize_location(location)

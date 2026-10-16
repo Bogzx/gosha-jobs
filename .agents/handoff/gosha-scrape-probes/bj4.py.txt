@@ -1,0 +1,15 @@
+from curl_cffi import requests as cr
+import collections, time
+def run(loc, kw="developer"):
+    p={"keyword":kw}
+    if loc: p["location"]=loc
+    items=cr.get("https://api.bestjobs.eu/v1/jobs",params=p,impersonate="chrome",timeout=30).json().get("items",[])
+    c=collections.Counter()
+    for i in items:
+        names=[l.get("slug") for l in i.get("locations") or []]
+        c["remote" if not names else ("match" if any(loc and n and n.startswith(loc.split("-romania")[0][:5]) for n in names) else "other")]+=1
+    return len(items), dict(c), collections.Counter(n.get("slug") for i in items for n in (i.get("locations") or [])).most_common(3)
+for loc in ["bucharest-romania","bucuresti-romania","bucuresti","iasi-romania","iasi","cluj-napoca-romania","cluj-napoca","timisoara-romania","timisoara","brasov-romania","romania",None]:
+    print(loc, run(loc)); time.sleep(1)
+print("data analyst iasi-romania", run("iasi-romania","data analyst"))
+print("data analyst iasi", run("iasi","data analyst"))

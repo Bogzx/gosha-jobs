@@ -1,0 +1,16 @@
+import httpx, re, sys
+sys.path.insert(0,"/data/Repos/gosha-jobs")
+from gosha.scrapers.hipo import _CARD_RE, LISTING_URL
+UA={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36"}
+for city in ["Bucuresti","Cluj-Napoca","Toate-Orasele","Iasi"]:
+    seen=set(); 
+    for n in range(1,15):
+        url=LISTING_URL.format(city=city)+("" if n==1 else f"/{n}")
+        r=httpx.get(url,headers=UA,timeout=30,follow_redirects=True)
+        h={m.group("href") for m in _CARD_RE.finditer(r.text)}
+        new=h-seen; seen|=h
+        if n==1:
+            m=re.search(r"(\d+)\s*(?:locuri de munc|joburi|rezultate)",r.text)
+            print(city,"count text:",m.group(0) if m else None)
+        if not new: break
+    print(city,"pages",n-1,"cards",len(seen))

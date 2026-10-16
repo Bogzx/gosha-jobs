@@ -1,0 +1,18 @@
+import json, sys, collections
+sys.path.insert(0,"/data/Repos/gosha-jobs")
+from gosha.filters import normalize_location, location_matches, fold
+rows=json.load(open("collected.json"))
+print(f"{'query':22} {'site':9} {'n':>4} {'rel':>4} {'inLoc':>5} {'date':>4} {'co':>4} {'desc':>4} {'sal':>4}  sample locations")
+for (q,loc,site),g in sorted(collections.defaultdict(list,{}).items()) or []: pass
+groups=collections.defaultdict(list)
+for r in rows: groups[(r["q"],r["loc"],r["site"])].append(r)
+for (q,loc,site),g in groups.items():
+    _,subs=normalize_location(loc)
+    inloc=sum(1 for r in g if location_matches(str(r.get("location") or ""),subs))
+    date=sum(1 for r in g if r.get("date_posted") not in (None,"None","nan","NaT"))
+    co=sum(1 for r in g if r.get("company") and str(r["company"]) not in ("Unknown","nan","None"))
+    desc=sum(1 for r in g if (r.get("desc_len") or 0)>0)
+    sal=sum(1 for r in g if r.get("min_amount") not in (None,"nan") and str(r.get("min_amount"))!="nan")
+    rel=sum(1 for r in g if r["relevant"])
+    locs=collections.Counter(str(r.get("location"))[:28] for r in g).most_common(3)
+    print(f"{q+'@'+loc:22.22} {site:9} {len(g):4} {rel:4} {inloc:5} {date:4} {co:4} {desc:4} {sal:4}  {locs}")

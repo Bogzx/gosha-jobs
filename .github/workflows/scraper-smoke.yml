@@ -4,6 +4,12 @@ name: Scraper smoke
 # its markup or API and every check stays green while production quietly
 # scrapes nothing. This hits the real endpoints daily and opens an issue
 # when an adapter stops returning usable jobs.
+#
+# The issue alone reached nobody who was not watching the repo, so every
+# state change (first failure, a different set of failing sources,
+# recovery) is also DMed to the owner on Discord, as the bot, when the
+# repository secrets DISCORD_BOT_TOKEN and ALERT_DM_USER_IDS (numeric user
+# IDs) are set and the variable ALERTS_ENABLED is not false — docs/ALERTS.md.
 
 on:
   schedule:
@@ -56,15 +62,53 @@ jobs:
       # comments on #2, all about an import error in this workflow's own
       # script rather than any job board.
       - name: Open, update or close the scraper-health issue
+        id: track
         if: success() || failure()
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           OUTCOME: ${{ steps.smoke.outcome }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          ALERT_DM_USER_IDS: ${{ secrets.ALERT_DM_USER_IDS }}
+          ALERTS_ENABLED: ${{ vars.ALERTS_ENABLED }}
         with:
           script: |
             const fs = require('fs');
             const { owner, repo } = context.repo;
             const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+
+            // Same rules as the issue: only on a state change, never per run.
+            // A DM from the bot (Discord REST: open the DM channel, post).
+            async function page(text) {
+              const token = (process.env.DISCORD_BOT_TOKEN || '').trim();
+              const ids = (process.env.ALERT_DM_USER_IDS || '')
+                .split(',').map((s) => s.trim()).filter((s) => /^\d+$/.test(s));
+              if ((process.env.ALERTS_ENABLED || '').toLowerCase() === 'false') return;
+              if (!token || ids.length === 0) {
+                core.notice('DISCORD_BOT_TOKEN / ALERT_DM_USER_IDS not set; Discord was not told.');
+                return;
+              }
+              const headers = {
+                'Authorization': `Bot ${token}`,
+                'Content-Type': 'application/json',
+                'User-Agent': 'DiscordBot (https://github.com/Bogzx/gosha-jobs, 1)',
+              };
+              for (const id of ids) {
+                try {
+                  const dm = await fetch('https://discord.com/api/v10/users/@me/channels', {
+                    method: 'POST', headers, body: JSON.stringify({ recipient_id: id }),
+                  });
+                  if (!dm.ok) { core.warning(`Opening a DM with ${id} answered ${dm.status}`); continue; }
+                  const channel = await dm.json();
+                  const resp = await fetch(`https://discord.com/api/v10/channels/${channel.id}/messages`, {
+                    method: 'POST', headers,
+                    body: JSON.stringify({ content: text.slice(0, 1950), allowed_mentions: { parse: [] } }),
+                  });
+                  if (!resp.ok) core.warning(`Discord DM to ${id} answered ${resp.status}`);
+                } catch (e) {
+                  core.warning(`Discord DM to ${id} failed: ${e}`);
+                }
+              }
+            }
 
             let log = '(no log captured)';
             try { log = fs.readFileSync('smoke.log', 'utf8').slice(-6000); } catch (e) {}
@@ -87,6 +131,7 @@ jobs:
                 await github.rest.issues.update({
                   owner, repo, issue_number: issue.number, state: 'closed',
                 });
+                await page(`✅ **GOSHA scraper smoke recovered** — every gating source is healthy again. ${runUrl}`);
               }
               return;
             }
@@ -99,6 +144,7 @@ jobs:
               ? 'The smoke script crashed before reporting any source. This is a bug in `scripts/smoke_scrapers.py` or its dependencies, not a job board.'
               : `Unhealthy: **${failing.join(', ')}**. Production is most likely delivering fewer jobs than it should — check \`gosha/scrapers/\` (or \`gosha/scraper.py\` for Indeed).`;
             const body = [marker, `Run: ${runUrl}`, '', headline, '', '```', log, '```'].join('\n');
+            const discord = `🚨 **GOSHA scraper smoke failing**\n${headline}\n${runUrl}`;
 
             if (!issue) {
               await github.rest.issues.create({
@@ -107,6 +153,7 @@ jobs:
                   ? 'Scraper smoke harness is broken'
                   : `Scraper smoke failing — ${failing.join(', ')}`,
               });
+              await page(discord);
               return;
             }
 
@@ -123,3 +170,22 @@ jobs:
             await github.rest.issues.createComment({
               owner, repo, issue_number: issue.number, body,
             });
+            await page(discord);
+
+      # The step above is the one that tells anyone. If it crashed (API
+      # error, bad token permissions), say that much directly.
+      - name: Page if the issue tracking itself failed
+        if: always() && steps.track.outcome == 'failure'
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          ALERT_DM_USER_IDS: ${{ secrets.ALERT_DM_USER_IDS }}
+          ALERTS_ENABLED: ${{ vars.ALERTS_ENABLED }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # gosha/alerts.py is stdlib-only, so no install is needed.
+        run: |
+          python3 -c "
+          import os, sys
+          sys.path.insert(0, '.')
+          from gosha.alerts import post_dm_sync
+          post_dm_sync('🚨 **GOSHA scraper smoke**: the run failed and could not even update its issue. ' + os.environ['RUN_URL'])
+          "

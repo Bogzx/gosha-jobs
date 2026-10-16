@@ -220,7 +220,7 @@ async def run_scrape_stage(
     working; one that answers with nothing is not.
     """
     from gosha.scrape_health import get_scrape_health
-    from gosha.scraper import scrape_jobs_raw
+    from gosha.scraper import jobspy_boards_for, scrape_jobs_raw
 
     health = health or get_scrape_health()
     attempted: set[str] = set()
@@ -247,7 +247,11 @@ async def run_scrape_stage(
 
     all_jobs: list[Job] = []
     for (keyword, location, boards, max_age_days), keywords in scrape_combos.items():
-        attempted.update(boards)
+        # Only the boards JobSpy actually asks for this location: none for
+        # "remote", LinkedIn alone for "europe". Counting the rest as
+        # attempted raised "indeed returned nothing" alerts for searches
+        # Indeed was never sent.
+        attempted.update(jobspy_boards_for(location, list(boards)))
         try:
             df = await scrape_jobs_raw(
                 tunnel_manager, keyword, location, max_age_days, boards=list(boards),
@@ -408,7 +412,11 @@ def job_matches_subscription(job: Job, sub: Subscription) -> bool:
         sub.salary_min, job.salary_monthly_min_ron, job.salary_monthly_max_ron,
     ):
         return False
-    if not matches_experience_level(job.title, sub.experience_levels, job.experience_level):
+    if not matches_experience_level(
+        job.title, sub.experience_levels, job.experience_level, job.description,
+    ):
+        return False
+    if not is_fresh_enough(job, sub.max_age_days):
         return False
 
     # Location matching — job must match at least one subscription location
@@ -430,16 +438,39 @@ def job_matches_subscription(job: Job, sub: Subscription) -> bool:
     return False
 
 
+def is_fresh_enough(job: Job, max_age_days: int | None) -> bool:
+    """Posted within the subscription's max_age_days, as far as we know.
+
+    The boards are asked for postings that recent, but the match stage
+    scores every job the cycle scraped, for anyone: a search with a 30-day
+    window brought in postings that a 3-day search was then sent. Judged
+    on the board's posted date, else on when the posting was first seen.
+    Compared by calendar day, since most boards give a date and no time.
+    """
+    if not max_age_days:
+        return True
+    when = job.posted_at or job.first_seen_at
+    if when is None:
+        return True
+    if when.tzinfo is None:  # SQLite hands back naive UTC
+        when = when.replace(tzinfo=timezone.utc)
+    oldest = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).date()
+    return when.astimezone(timezone.utc).date() >= oldest
+
+
 def _title_relevant_for_any_keyword(
-    title: str, keywords: list[str], experience_level: str | None = None,
+    title: str,
+    keywords: list[str],
+    experience_level: str | None = None,
+    description: str | None = None,
 ) -> bool:
     """Check if title is relevant for at least one subscription keyword.
 
-    `experience_level` (the board's label) as the scrape stage's filter
-    uses it, so a posting kept there is not dropped here.
+    `experience_level` (the board's label) and `description` as the scrape
+    stage's filter uses them, so a posting kept there is not dropped here.
     """
     for kw in keywords:
-        if title_is_relevant(title, kw, experience_level):
+        if title_is_relevant(title, kw, experience_level, description):
             return True
     return False
 
@@ -503,6 +534,21 @@ async def match_jobs_for_subscription(
         return []
 
     keywords = sub.keywords
+    # What the keyword itself implies: "software engineer intern" wants
+    # entry-level titles in tech. The scrape stage applied this to the
+    # search's own results; the jobs here also come from everyone else's
+    # searches, and the embeddings cannot see seniority (docs/EVAL.md), so
+    # without it an intern search was sent the senior roles another
+    # user's "java developer" search had found.
+    if keywords:
+        candidates = [
+            job for job in candidates
+            if _title_relevant_for_any_keyword(
+                job.title, keywords, job.experience_level, job.description,
+            )
+        ]
+        if not candidates:
+            return []
 
     # Semantic matching path — reuses embeddings stored at scrape time
     # instead of re-encoding the same postings for every subscription.
@@ -529,15 +575,8 @@ async def match_jobs_for_subscription(
             matches.sort(key=lambda x: x[1], reverse=True)
             return matches
 
-    # Regex fallback path
-    matches: list[tuple[Job, float]] = []
-    for job in candidates:
-        if keywords and not _title_relevant_for_any_keyword(
-            job.title, keywords, job.experience_level,
-        ):
-            continue
-        matches.append((job, 1.0))
-    return matches
+    # Regex fallback path: title relevance (applied above) decides.
+    return [(job, 1.0) for job in candidates]
 
 
 async def _cv_vector_for(user: User) -> np.ndarray | None:
@@ -736,6 +775,10 @@ async def deliver_pending(bot: JobBot) -> int:
                 UserJob.feedback.is_(None),
                 UserJob.delivered_at >= cutoff,
                 Job.is_active.is_(True),
+                # Paused searches wait: a match whose DM failed, or that
+                # was queued just before the user hit pause, was sent
+                # anyway. It goes out if the search resumes in the window.
+                Subscription.is_active.is_(True),
             )
             .order_by(UserJob.id.asc())
         )
@@ -751,6 +794,10 @@ async def deliver_pending(bot: JobBot) -> int:
         statuses: dict[int, str] = {}
         sendable: list[tuple[UserJob, Job, User, Subscription]] = []
         seen_titles: set[tuple[str, str]] = set()
+        # Best first, before the duplicate check below: in id order the
+        # copy kept was the older one, whatever its score, and the DMs
+        # went out in the order the rows were written.
+        items = sorted(items, key=lambda row: row[0].relevance_score or 0.0, reverse=True)
         for uj, job, user, sub in items:
             # Web-managed searches can opt out of Discord notifications;
             # matches still show up on the website.
@@ -765,7 +812,6 @@ async def deliver_pending(bot: JobBot) -> int:
             seen_titles.add(key)
             sendable.append((uj, job, user, sub))
 
-        sendable.sort(key=lambda row: row[0].relevance_score or 0.0, reverse=True)
         for uj, *_rest in sendable[MAX_DMS_PER_USER:]:
             statuses[uj.id] = UserJob.DM_SKIPPED
         overflow = len(sendable) - MAX_DMS_PER_USER
@@ -782,6 +828,11 @@ async def deliver_pending(bot: JobBot) -> int:
                 statuses[uj.id] = UserJob.DM_SENT
                 sent_at[uj.id] = datetime.now(timezone.utc)
                 sent += 1
+                # Recorded as soon as Discord accepts it: a crash or deploy
+                # later in this user's batch must not send it again.
+                await _record_dm_statuses(
+                    {uj.id: UserJob.DM_SENT}, {uj.id: sent_at[uj.id]},
+                )
                 try:
                     from gosha.events import emit_job_delivered
                     await emit_job_delivered(job.id, user.id, "discord_dm")
@@ -803,23 +854,22 @@ async def deliver_pending(bot: JobBot) -> int:
                 f"…and **{overflow}** more matches. See them all on {where}.",
             )
 
-        # Recorded per user, so a crash (or a deploy) mid-loop costs at most
-        # one user's statuses, not a re-send of everyone's batch.
+        # The rest (skipped, failed) once per user; sent ones are already
+        # recorded, and writing them again is harmless.
         await _record_dm_statuses(statuses, sent_at)
 
-    if closed_dms and bot.alert_channel_id:
-        try:
-            channel = bot.get_channel(bot.alert_channel_id)
-            if channel is not None:
-                mentions = " ".join(f"<@{uid}>" for uid in dict.fromkeys(closed_dms))
-                await channel.send(
-                    f"**I found jobs for you but can't deliver them!**\n"
-                    f"{mentions}\n\n"
-                    f"Please enable DMs so I can send you job matches:\n"
-                    f"**Server Settings > Privacy Settings > Allow direct messages from server members**"
-                )
-        except Exception as exc:
-            log.error("Failed to send DM-failure notice: %s", exc)
+    # Ops alerts are owner DMs only (gosha/alerts.py): no channel posts, no
+    # mentions of the users concerned.
+    if closed_dms:
+        from gosha.alerts import sink_for_bot
+
+        sink = sink_for_bot(bot)
+        if sink is not None:  # send() never raises
+            await sink.send(
+                f"**{len(set(closed_dms))} user(s) have DMs closed** — matches "
+                "could not be delivered: "
+                + ", ".join(str(u) for u in dict.fromkeys(closed_dms))
+            )
 
     return sent
 
@@ -968,26 +1018,16 @@ async def _reload_jobs(job_ids: list[int]) -> list[Job]:
 async def _post_health_alert(
     bot: JobBot, alert_channel_id: int, report: CycleReport | None,
 ) -> None:
-    """Push scraper-health alerts to the ops channel.
+    """Push scraper-health alerts to the ops channel and the owners' DMs.
 
     Deliberately silent on success. The previous behaviour — a message only
     when deliveries went out — meant a dead scraper looked exactly like a
-    quiet week.
+    quiet week. Cooldown, recovery messages and recipients live in
+    gosha/alerts.py; this never raises.
     """
-    if not alert_channel_id or report is None or not report.should_alert:
-        return
-    try:
-        channel = bot.get_channel(alert_channel_id)
-        if channel is None:
-            return
-        breakdown = report.breakdown()
-        await channel.send(  # type: ignore[union-attr]
-            "**Scraper health**\n"
-            + report.summary()
-            + (f"\nscraped→kept: `{breakdown}`" if breakdown else "")
-        )
-    except Exception as exc:
-        log.error("Failed to post scraper-health alert: %s", exc)
+    from gosha.alerts import publish_scrape_report
+
+    await publish_scrape_report(bot, alert_channel_id, report)
 
 
 # ═══════════════════════════════════════════════════════════════════════

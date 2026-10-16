@@ -1,0 +1,22 @@
+import httpx, json, sys
+from datetime import datetime, timezone, timedelta
+sys.path.insert(0,"/data/Repos/gosha-jobs")
+from gosha.filters import relevance_predicate
+from gosha.scrapers.ejobs import experience_level
+UA={"User-Agent":"Mozilla/5.0 Chrome/125","Accept":"application/json"}
+rows=json.load(open("collected.json"))
+cut=datetime.now(timezone.utc)-timedelta(days=14)
+city={"cluj":14,"bucuresti":1,"iasi":21,"romania":None}
+for kw,loc in [("python developer","cluj"),("junior java","bucuresti"),("internship software","romania"),("stagiu it","romania"),("data analyst","iasi")]:
+    ours={r["job_url"].rsplit("/",1)[-1] for r in rows if r["site"]=="ejobs" and r["q"]==kw}
+    p={"q":kw}
+    if city[loc]: p["filters.cities"]=city[loc]
+    js=[]
+    for pg in range(1,20):
+        d=httpx.get("https://api.ejobs.ro/jobs",params={**p,"page":pg,"pageSize":100},headers=UA,timeout=30).json(); js+=d["jobs"]
+        if not d.get("morePagesFollow"): break
+    rel=relevance_predicate([kw])
+    fresh=[j for j in js if datetime.fromisoformat(j["creationDate"])>=cut]
+    relevant=[j for j in fresh if rel(j["title"],experience_level(j.get("careerLevelsIds")))]
+    miss=[j for j in relevant if str(j["id"]) not in ours]
+    print(f"{kw}@{loc}: site keyword hits {len(js)} (fresh {len(fresh)}, title-relevant {len(relevant)}); ours {len(ours)}; relevant site hits we lack {len(miss)}", [m["title"][:35] for m in miss[:5]])

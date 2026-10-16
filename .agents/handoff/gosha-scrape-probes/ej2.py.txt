@@ -1,0 +1,27 @@
+import httpx, json, sys
+from datetime import datetime, timezone, timedelta
+UA={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36","Accept":"application/json"}
+TECH=[57,58,31,38,46]
+def all_pages(params, maxp=30):
+    out=[]; 
+    for p in range(1,maxp+1):
+        d=httpx.get("https://api.ejobs.ro/jobs",params={**params,"page":p,"pageSize":100},headers=UA,timeout=30).json()
+        out+=d.get("jobs",[])
+        if not d.get("morePagesFollow"): break
+    return out, d.get("totalCount")
+for city,name in [(14,"Cluj"),(1,"Buc"),(21,"Iasi"),(None,"RO")]:
+    base={"filters.departments":TECH}
+    if city: base["filters.cities"]=city
+    jobs,total=all_pages(base, 20)
+    ids={j["id"] for j in jobs}
+    cutoff=datetime.now(timezone.utc)-timedelta(days=14)
+    recent=[j for j in jobs if datetime.fromisoformat(j["creationDate"])>=cutoff]
+    # order check
+    dates=[j["creationDate"] for j in jobs]
+    print(name,"total",total,"fetched",len(jobs),"recent14",len(recent),"sorted desc?",dates==sorted(dates,reverse=True), "first600 recent", sum(1 for j in jobs[:600] if datetime.fromisoformat(j["creationDate"])>=cutoff))
+    for kw in ["python","java","developer","data analyst","intern","stagiu","junior","qa","devops","react"]:
+        p={"q":kw}
+        if city: p["filters.cities"]=city
+        qj,qt=all_pages(p,5)
+        miss=[j for j in qj if j["id"] not in ids]
+        print(f"   q={kw!r}: {qt} hits, not in IT-dept browse: {len(miss)}", [ (j['title'][:40], j.get('departmentsIds')) for j in miss[:6]])

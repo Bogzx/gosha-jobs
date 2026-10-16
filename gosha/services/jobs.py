@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -117,6 +117,21 @@ async def _without_excluded_keywords(ids: list[int], excluded: list[str]) -> lis
     return [job_id for job_id in ids if job_id not in hits]
 
 
+def _one_per_group(ids: list[int], group_of: dict[int, int]) -> list[int]:
+    """`ids` (in order) with one row per duplicate group: the canonical row
+    when it is among them, else the first of its group."""
+    present = set(ids)
+    kept: list[int] = []
+    shown: set[int] = set()
+    for job_id in ids:
+        group = group_of.get(job_id, job_id)
+        if group in shown or (group != job_id and group in present):
+            continue
+        shown.add(group)
+        kept.append(job_id)
+    return kept
+
+
 async def list_jobs(
     user_id: int, filters: JobFilters, page: int, per_page: int,
 ) -> tuple[list[Job], int]:
@@ -129,11 +144,9 @@ async def list_jobs(
     They now run over a slim scan of every SQL match, and full rows are
     loaded for the requested page only.
     """
-    conditions = [
-        Job.is_active.is_(True),
-        # Hide non-canonical cross-board duplicates
-        or_(Job.dedup_group_id.is_(None), Job.dedup_group_id == Job.id),
-    ]
+    conditions = [Job.is_active.is_(True)]
+    # Hide non-canonical cross-board duplicates
+    canonical_only = or_(Job.dedup_group_id.is_(None), Job.dedup_group_id == Job.id)
     if filters.q.strip():
         needle = f"%{filters.q.strip()}%"
         conditions.append(or_(Job.title.ilike(needle), Job.company.ilike(needle)))
@@ -156,8 +169,12 @@ async def list_jobs(
             )
         )
     if filters.posted_within_days is not None:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=filters.posted_within_days)
-        conditions.append(Job.first_seen_at >= cutoff)
+        # The board's posted date when it gave one: first_seen_at alone
+        # called a month-old posting "posted today" the first time a scrape
+        # returned it. Whole days, as most boards date without a time.
+        day = (datetime.now(timezone.utc) - timedelta(days=filters.posted_within_days)).date()
+        cutoff = datetime.combine(day, time.min, tzinfo=timezone.utc)
+        conditions.append(func.coalesce(Job.posted_at, Job.first_seen_at) >= cutoff)
     newest_first = (Job.first_seen_at.desc(), Job.id.desc())
     start = (page - 1) * per_page
 
@@ -171,30 +188,40 @@ async def list_jobs(
         # Nothing for Python to decide: count and page in SQL.
         async with get_session() as session:
             total = (await session.execute(
-                select(func.count(Job.id)).where(*conditions)
+                select(func.count(Job.id)).where(*conditions, canonical_only)
             )).scalar_one()
             jobs = (await session.execute(
-                select(Job).where(*conditions).order_by(*newest_first)
+                select(Job).where(*conditions, canonical_only).order_by(*newest_first)
                 .offset(start).limit(per_page)
             )).scalars().all()
         return list(jobs), total
 
+    # Duplicates are scanned too and collapsed after filtering: a group is
+    # one role at one employer from any city, so hiding them first lost
+    # the Iasi copy of a posting whose canonical row is in Cluj from an
+    # "Iasi" filter, which the Cluj row then failed.
     async with get_session() as session:
         rows = (await session.execute(
-            select(Job.id, Job.title, Job.company, Job.location, Job.experience_level)
+            select(
+                Job.id, Job.title, Job.company, Job.location, Job.experience_level,
+                Job.dedup_group_id,
+            )
             .where(*conditions).order_by(*newest_first).limit(MAX_SCAN)
         )).all()
     if len(rows) == MAX_SCAN:
         log.warning("Browse scan hit MAX_SCAN=%d; older matches are not listed", MAX_SCAN)
 
-    ids = [
-        row.id for row in rows
+    passing = [
+        row for row in rows
         if (not blacklist or not matches_company_blacklist(row.company, blacklist))
         and (location_ok is None or location_ok(row.location))
         and (not levels or matches_experience_level(row.title, levels, row.experience_level))
     ]
+    group_of = {row.id: row.dedup_group_id or row.id for row in passing}
+    ids = [row.id for row in passing]
     if excluded:
         ids = await _without_excluded_keywords(ids, excluded)
+    ids = _one_per_group(ids, group_of)
 
     page_ids = ids[start : start + per_page]
     if not page_ids:

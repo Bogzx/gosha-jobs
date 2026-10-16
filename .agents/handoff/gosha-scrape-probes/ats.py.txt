@@ -1,0 +1,27 @@
+import httpx, json
+H={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36","Accept":"application/json"}
+def ro(s): s=str(s).lower(); return any(c in s for c in ["romania","bucharest","bucuresti","bucurești","cluj","iasi","iași","timisoara","timișoara","brasov","brașov","sibiu","craiova","oradea"])
+def smart(company):
+    r=httpx.get(f"https://api.smartrecruiters.com/v1/companies/{company}/postings",params={"country":"ro","limit":100},headers=H,timeout=30)
+    d=r.json(); return r.status_code, d.get("totalFound"), [p["name"][:40] for p in d.get("content",[])[:3]]
+def gh(token):
+    r=httpx.get(f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs",headers=H,timeout=30)
+    if r.status_code!=200: return r.status_code,None,[]
+    js=r.json()["jobs"]; rj=[j for j in js if ro(j.get("location",{}).get("name"))]
+    return r.status_code, f"{len(rj)}/{len(js)} RO", [j["title"][:40] for j in rj[:3]]
+def lever(co):
+    r=httpx.get(f"https://api.lever.co/v0/postings/{co}",params={"mode":"json"},headers=H,timeout=30)
+    if r.status_code!=200: return r.status_code,None,[]
+    js=r.json(); rj=[j for j in js if ro(json.dumps(j.get("categories",{})))]
+    return r.status_code, f"{len(rj)}/{len(js)} RO", [j["text"][:40] for j in rj[:3]]
+def workable(acc):
+    r=httpx.post(f"https://apply.workable.com/api/v3/accounts/{acc}/jobs",json={"query":"","location":[{"country":"Romania","countryCode":"RO"}]},headers=H,timeout=30)
+    if r.status_code!=200: return r.status_code,None,[]
+    d=r.json(); return r.status_code, d.get("total"), [j["title"][:40] for j in d.get("results",[])[:3]]
+for f,names in [(smart,["BoschGroup","Visa","Endava","Continental","ING","Ubisoft2","Philips","NTTDATA","Deutsche-Bank","ServiceNow"]),
+                (gh,["uipath","cognizant","adobe","grammarly","bitdefender","databricks","doctolib","pipedrive","celonis","cresta","n26","tremend"]),
+                (lever,["bitdefender","fortech","3pillarglobal","plentific","wizz","nagarro","endava","pentalog"]),
+                (workable,["tremend","fortech","softvision","evozon","bitstone","assist-software","zitec","tss"])]:
+    for n in names:
+        try: print(f.__name__, n, f(n))
+        except Exception as e: print(f.__name__, n, "ERR", type(e).__name__, str(e)[:80])

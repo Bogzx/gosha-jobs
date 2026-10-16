@@ -1,0 +1,40 @@
+import json, sys, collections, importlib.util
+sys.path.insert(0,"/data/Repos/gosha-jobs")
+from gosha import dedup as new
+spec=importlib.util.spec_from_file_location("dedup_old","dedup_old.py"); old=importlib.util.module_from_spec(spec); spec.loader.exec_module(old)
+rows=json.load(open("collected.json"))
+uniq={}
+for r in rows: uniq.setdefault(r["job_url"], r)
+rows=list(uniq.values()); print("unique urls", len(rows))
+def groups(keyf, split):
+    g=collections.defaultdict(list)
+    for r in rows:
+        k=keyf(str(r["title"]),str(r["company"]) if r["company"] not in (None,"nan") else "")
+        if k: g[k].append(r)
+    out=[]
+    for k,m in g.items():
+        if split:
+            clusters=[]
+            for r in m:
+                for c in clusters:
+                    if all(new.locations_compatible(str(r["location"]),str(o["location"])) for o in c): c.append(r); break
+                else: clusters.append([r])
+            out+= [c for c in clusters if len(c)>1]
+        elif len(m)>1: out.append(m)
+    return out
+go=groups(old.normalize_key,False); gn=groups(new.normalize_key,True); gnn=groups(new.normalize_key,False)
+def stats(gs,label):
+    cross=[g for g in gs if len({r["site"] for r in g})>1]
+    print(label,"groups",len(gs),"rows hidden",sum(len(g)-1 for g in gs),"cross-board groups",len(cross))
+stats(go,"OLD"); stats(gnn,"NEW key, no split"); stats(gn,"NEW key + city split")
+# merges gained by new key
+ko={frozenset(r["job_url"] for r in g) for g in go}
+print("\n-- groups only under the new key (missed merges before):")
+for g in gnn:
+    if frozenset(r["job_url"] for r in g) not in ko:
+        print("  ", [(r["site"], r["title"][:40], str(r["company"])[:28], str(r["location"])[:25]) for r in g])
+print("\n-- groups split by city (false merges before):")
+for g in gnn:
+    sub=[c for c in gn if set(r["job_url"] for r in c)<=set(r["job_url"] for r in g)]
+    if not sub or len(sub[0])!=len(g):
+        print("  ", [(r["site"], r["title"][:35], str(r["company"])[:20], str(r["location"])[:28]) for r in g])

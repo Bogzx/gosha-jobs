@@ -2,9 +2,11 @@
 
 The harness scores labelled postings (eval/postings.jsonl) against
 synthetic CV personas (eval/personas.jsonl) through the production code
-path — the same job text, CV chunking and pooling, Discord query blending
-and Rocchio update the bot and API use — so the numbers describe what
-ships, and only the encoder varies. It takes an `encode` callable, which
+path — the same job text, CV chunking and pooling, feed scoring
+(recommend.hybrid_scores over the embedding cosine, gosha.lexical and
+gosha.seniority), Discord query blending and Rocchio update the bot and
+API use — so the numbers describe what ships, and only the encoder
+varies. It takes an `encode` callable, which
 lets the tests drive it with a fake encoder and no torch.
 scripts/eval_ranking.py is the command-line front end; docs/EVAL.md has
 the method and the results.
@@ -150,6 +152,10 @@ def ranking(scores: Sequence[float]) -> list[int]:
     return sorted(range(len(scores)), key=lambda i: -scores[i])
 
 
+def _order(scores: np.ndarray) -> list[int]:
+    return ranking(np.asarray(scores).tolist())
+
+
 def dcg(gains: Sequence[float]) -> float:
     return sum((2 ** g - 1) / math.log2(rank + 2) for rank, g in enumerate(gains))
 
@@ -233,12 +239,20 @@ FEEDBACK_ROUNDS = (1, 3)
 SCORE_BANDS = (0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60)
 
 
+# How the feed orders postings. "production" is what gosha/recommend.py
+# ships; "cosine" is the embedding alone (the ranking before 2026-10-16),
+# kept so the two can be compared.
+FEED_RANKINGS = ("production", "cosine")
+
+
 @dataclass
 class Vectors:
     jobs: np.ndarray          # (P, D) production job text vectors
     cvs: np.ndarray           # (U, D) chunked + pooled CV vectors
     queries: np.ndarray       # (U, D) Discord subscription queries
     gains: np.ndarray         # (U, P) graded relevance
+    keyword: np.ndarray       # (U, P) gosha.lexical TF-IDF cosine, CV vs job text
+    penalties: np.ndarray     # (U, P) gosha.seniority level penalty
 
 
 def job_text(posting: Posting, variant: str = "production") -> str:
@@ -277,7 +291,53 @@ def encode_all(
         for u in personas
     ]), dtype=np.float32)
     gains = np.array([[grade(u.family, p) for p in postings] for u in personas])
-    return Vectors(jobs, cvs, queries, gains)
+    keyword, penalties = ranking_signals(postings, personas, job_text_variant)
+    return Vectors(jobs, cvs, queries, gains, keyword, penalties)
+
+
+def ranking_signals(
+    postings: Sequence[Posting], personas: Sequence[Persona],
+    job_text_variant: str = "production",
+) -> tuple[np.ndarray, np.ndarray]:
+    """(keyword, penalties), each (U, P): what the feed adds to the cosine.
+
+    The same calls gosha/recommend.py makes: a TF-IDF index over the job
+    texts (fitted on the postings only, as in production), and the gap
+    between the CV's level and each posting's.
+    """
+    from gosha import lexical, seniority
+
+    index = lexical.LexicalIndex([job_text(p, job_text_variant) for p in postings])
+    keyword = np.stack([index.score(u.cv) for u in personas]) if personas else (
+        np.zeros((0, len(postings))))
+    levels = [seniority.posting_level(p.title, p.description) for p in postings]
+    penalties = np.array([
+        [seniority.level_penalty(seniority.cv_level(u.cv), level) for level in levels]
+        for u in personas
+    ], dtype=np.float64).reshape(len(personas), len(postings))
+    return keyword.astype(np.float64), penalties
+
+
+def feed_scores(
+    vectors: Vectors, u: int, vector: np.ndarray | None = None,
+    idx: Sequence[int] | None = None, ranking: str = "production",
+) -> np.ndarray:
+    """Persona `u`'s feed scores for postings `idx` (default: all).
+
+    `vector` replaces the CV vector (after feedback). The z-scores in
+    hybrid_scores are taken over the postings scored, as production takes
+    them over the user's candidates (rated postings excluded).
+    """
+    from gosha.recommend import hybrid_scores
+
+    vector = vectors.cvs[u] if vector is None else vector
+    sel = slice(None) if idx is None else list(idx)
+    cosines = vectors.jobs[sel] @ vector
+    if ranking == "cosine":
+        return cosines
+    if ranking != "production":
+        raise ValueError(f"unknown feed ranking {ranking!r}")
+    return hybrid_scores(cosines, vectors.keyword[u, sel], vectors.penalties[u, sel])
 
 
 def feed_metrics(scores: np.ndarray, gains: np.ndarray) -> dict[str, float]:
@@ -296,12 +356,13 @@ def _mean_metrics(rows: list[dict[str, float]]) -> dict[str, float]:
 
 def evaluate_feed(
     vectors: Vectors, postings: Sequence[Posting], personas: Sequence[Persona],
+    ranking: str = "production",
 ) -> dict:
-    """The web feed: every posting ranked by cosine to the CV vector."""
+    """The web feed: every posting ranked for each persona's CV."""
     per_persona = {}
     by_posting_lang: dict[str, list[dict[str, float]]] = {"en": [], "ro": []}
     for u, persona in enumerate(personas):
-        scores = vectors.jobs @ vectors.cvs[u]
+        scores = feed_scores(vectors, u, ranking=ranking)
         per_persona[persona.id] = feed_metrics(scores, vectors.gains[u])
         # Same persona, one posting language at a time: does a relevant
         # Romanian posting rank as well as an English one?
@@ -384,6 +445,7 @@ def simulate_feedback(
     weights: Sequence[tuple[float, float]] = FEEDBACK_WEIGHTS,
     rounds: Sequence[int] = FEEDBACK_ROUNDS,
     shown: int = 10,
+    ranking: str = "production",
 ) -> list[dict]:
     """Residual-collection test of the Rocchio update (recommend.apply_feedback).
 
@@ -391,7 +453,8 @@ def simulate_feedback(
     likes every grade-2 one and dislikes every grade-0 one. After the last
     round, nDCG@10 over the postings still unrated is compared with the
     CV-only ranking of the same postings, so rated items cannot flatter
-    either side.
+    either side. Feedback moves only the embedding vector; under the
+    production ranking the keyword and seniority terms stay as they were.
     """
     from gosha.recommend import apply_feedback
 
@@ -407,8 +470,9 @@ def simulate_feedback(
                 disliked: list[np.ndarray] = []
                 vector = base
                 for _ in range(n_rounds):
-                    scores = vectors.jobs @ vector
-                    order = [i for i in ranking(scores.tolist()) if i not in rated][:shown]
+                    unrated = [i for i in range(len(gains)) if i not in rated]
+                    scores = feed_scores(vectors, u, vector, unrated, ranking)
+                    order = [unrated[i] for i in _order(scores)][:shown]
                     for i in order:
                         rated.add(i)
                         if gains[i] == 2:
@@ -420,8 +484,10 @@ def simulate_feedback(
                 rest = [i for i in range(len(gains)) if i not in rated]
                 if not any(gains[i] == 2 for i in rest):
                     continue
-                before.append(feed_metrics(vectors.jobs[rest] @ base, gains[rest])["ndcg@10"])
-                after.append(feed_metrics(vectors.jobs[rest] @ vector, gains[rest])["ndcg@10"])
+                before.append(feed_metrics(
+                    feed_scores(vectors, u, base, rest, ranking), gains[rest])["ndcg@10"])
+                after.append(feed_metrics(
+                    feed_scores(vectors, u, vector, rest, ranking), gains[rest])["ndcg@10"])
             row = {"like_weight": like_w, "dislike_weight": dislike_w,
                    "rounds": n_rounds, "personas": len(before)}
             if before:  # else every relevant posting was already rated
@@ -450,8 +516,13 @@ def run(
     query_location: str | None = "Cluj",
     with_feedback: bool = True,
     job_text_variant: str = "production",
+    feed_ranking: str = "production",
 ) -> dict:
-    """Every measurement for one encoder, as plain JSON-able data."""
+    """Every measurement for one encoder, as plain JSON-able data.
+
+    "feed" is ranked by `feed_ranking` (by default what production ships);
+    "feed_cosine" is the encoder's cosine alone, for comparison.
+    """
     vectors = encode_all(postings, personas, encode, query_location, job_text_variant)
     dm_cv = dm_scores(vectors, with_cv=True)
     dm_search = dm_scores(vectors, with_cv=False)
@@ -459,7 +530,9 @@ def run(
     result = {
         "postings": len(postings),
         "personas": len(personas),
-        "feed": evaluate_feed(vectors, postings, personas),
+        "feed_ranking": feed_ranking,
+        "feed": evaluate_feed(vectors, postings, personas, feed_ranking),
+        "feed_cosine": evaluate_feed(vectors, postings, personas, "cosine"),
         "dm_with_cv": {
             "sweep": threshold_sweep(dm_cv, vectors.gains, thresholds),
             "bands": score_bands(dm_cv, vectors.gains),
@@ -474,5 +547,5 @@ def run(
         },
     }
     if with_feedback:
-        result["feedback"] = simulate_feedback(vectors)
+        result["feedback"] = simulate_feedback(vectors, ranking=feed_ranking)
     return result

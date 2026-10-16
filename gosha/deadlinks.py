@@ -46,14 +46,33 @@ UNCHECKABLE_SOURCES = frozenset({"linkedin", "indeed", "glassdoor"})
 UNSEEN_EXPIRY_DAYS = 30
 
 
+# Boards that keep serving a removed posting with 200 and a notice in the
+# page, keyed by host. Measured 2026-10-16 on the eval set's postings: Hipo
+# answers "Acest job nu mai este activ!" for filled jobs, so every one of
+# them stayed active until UNSEEN_EXPIRY_DAYS. The notice is reported as
+# 410 Gone.
+SOFT_DEAD_MARKERS: dict[str, tuple[str, ...]] = {
+    "www.hipo.ro": ("Acest job nu mai este activ",),
+    "hipo.ro": ("Acest job nu mai este activ",),
+}
+
+
 async def _check_url_status(client: httpx.AsyncClient, url: str) -> int | None:
     """HTTP status for the posting URL; None when the check is inconclusive."""
     try:
-        resp = await client.head(url, follow_redirects=True)
-        if resp.status_code == 405:  # some boards reject HEAD
+        markers = SOFT_DEAD_MARKERS.get(httpx.URL(url).host, ())
+        resp = None if markers else await client.head(url, follow_redirects=True)
+        # Some boards reject HEAD (405), and some servers and CDNs answer
+        # HEAD 404 for pages a GET serves fine: a dead verdict expires the
+        # posting for everyone, so it is only ever taken from a GET.
+        if resp is None or resp.status_code == 405 or resp.status_code in DEAD_STATUSES:
             resp = await client.get(url, follow_redirects=True)
+        if resp.status_code == 200 and any(m in resp.text for m in markers):
+            return 410
         return resp.status_code
-    except httpx.HTTPError:
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError):
+        # ValueError: a stored URL httpx cannot request (no scheme). It
+        # used to escape and end the day's run for every job after it.
         return None
 
 

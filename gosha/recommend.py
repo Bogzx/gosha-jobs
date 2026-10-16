@@ -7,6 +7,7 @@ over the candidate set (active jobs from the last FEED_WINDOW_DAYS).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections import Counter
@@ -14,12 +15,15 @@ from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
 import numpy as np
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import or_, select
 from sqlalchemy.orm import defer
 from sqlalchemy.orm.attributes import set_committed_value
 
+from gosha import lexical, seniority
 from gosha.database import get_session
 from gosha.embeddings import bytes_to_vec, current_model_clause, is_current
+from gosha.matching import build_job_text
 from gosha.models import Application, Job, User, UserJob
 
 log = logging.getLogger(__name__)
@@ -31,6 +35,11 @@ FEED_WINDOW_DAYS = 30
 # likes alone (0.3 / 0) gain less, and 0.5 / 0.5 is no better within noise.
 LIKE_WEIGHT = 0.3
 DISLIKE_WEIGHT = 0.3
+# Share of the embedding cosine in the feed score; the rest is TF-IDF
+# keyword similarity to the CV (gosha/lexical.py). Both are z-scored over
+# the candidate set first, so the weight means what it says. On the
+# offline eval (docs/EVAL.md) neither signal alone beats the mix.
+EMBEDDING_WEIGHT = 0.5
 
 
 class FeedItem(NamedTuple):
@@ -330,6 +339,69 @@ def apply_feedback(
     return (vector / norm).astype(np.float32)
 
 
+def _zscore(values: np.ndarray) -> np.ndarray:
+    std = float(values.std())
+    if not std:
+        return np.zeros_like(values, dtype=np.float64)
+    return (values - values.mean()) / std
+
+
+def hybrid_scores(
+    cosines: np.ndarray,
+    keyword: np.ndarray | None,
+    penalties: np.ndarray | None,
+    embedding_weight: float = EMBEDDING_WEIGHT,
+) -> np.ndarray:
+    """The feed's ranking score for each candidate.
+
+    embedding_weight * z(cosine) + (1 - embedding_weight) * z(keyword)
+    - seniority penalty, every term in standard deviations of this user's
+    own candidate set: a raw cosine and a TF-IDF cosine live on different
+    scales, and a fixed penalty means the same thing for every user.
+    Without keyword scores (no CV text: a user ranked on 👍 alone) the
+    cosine carries the whole weight. Pure, so the offline eval
+    (gosha/evaluation.py) runs exactly this.
+    """
+    score = _zscore(np.asarray(cosines, dtype=np.float64))
+    if keyword is not None and len(keyword) and float(np.ptp(keyword)) > 0:
+        score = (
+            embedding_weight * score
+            + (1 - embedding_weight) * _zscore(np.asarray(keyword, dtype=np.float64))
+        )
+    if penalties is not None:
+        score = score - penalties
+    return score
+
+
+# Seniority of a posting never changes after it is scraped, and reading it
+# needs the description, which the feed otherwise leaves in the database.
+_level_cache: dict[int, str] = {}
+
+
+def _loaded_description(job: Job) -> str | None:
+    """The description if it is in memory; None if it was deferred."""
+    if "description" in sa_inspect(job).unloaded:
+        return None
+    return job.description
+
+
+def posting_level(job: Job) -> str:
+    if job.id is not None and job.id in _level_cache:
+        return _level_cache[job.id]
+    description = _loaded_description(job)
+    level = seniority.posting_level(job.title, description, job.experience_level)
+    if job.id is not None and description is not None:
+        if len(_level_cache) >= lexical.MAX_CACHED:
+            _level_cache.clear()
+        _level_cache[job.id] = level
+    return level
+
+
+def _needs_text(job: Job) -> bool:
+    """Whether ranking this job still has to read its description."""
+    return job.id is None or job.id not in _level_cache or not lexical.is_cached(job.id)
+
+
 async def get_feed(
     user_id: int, page: int = 1, per_page: int = 50,
 ) -> tuple[list[FeedItem], int]:
@@ -401,7 +473,13 @@ async def get_feed(
             await load_descriptions(page_jobs)
         return [FeedItem(job, None, None, [], []) for job in page_jobs], len(candidates)
 
-    ranked = _order(candidates, user_vector)
+    if not with_description:
+        # Only postings this process has not tokenised yet: after the first
+        # request of a scrape cycle that is a handful, not ~2,000.
+        await load_descriptions([j for j in candidates if _needs_text(j)])
+    # Building the keyword index is a CPU pass over every new posting:
+    # off the event loop.
+    ranked = await asyncio.to_thread(_order, candidates, user_vector, cv_text)
     page_rows = ranked[start : start + per_page]
     if not with_description:
         await load_descriptions([job for job, _, _ in page_rows])
@@ -471,7 +549,7 @@ def rank_candidates(
     Shared by the signed-in feed and the public demo (gosha/api/demo.py),
     so the demo shows exactly the ranking users get.
     """
-    ranked = _order(candidates, vector)
+    ranked = _order(candidates, vector, cv_text)
     start = (page - 1) * per_page
     return (
         _explain(
@@ -483,23 +561,59 @@ def rank_candidates(
 
 
 def _order(
-    candidates: list[Job], vector: np.ndarray,
+    candidates: list[Job], vector: np.ndarray, cv_text: str = "",
 ) -> list[tuple[Job, float, int]]:
-    """(job, clipped cosine, percentile) for every candidate, best first."""
+    """(job, clipped cosine, percentile) for every candidate, best first.
+
+    Ordered by hybrid_scores(): the embedding cosine, TF-IDF similarity to
+    the CV text and the seniority gap between the CV and the posting. The
+    cosine is still what is returned as the score (the Discord delivery
+    threshold and the API's match_score speak cosine); the percentile is
+    of the hybrid score, so it agrees with the order.
+    """
     if not candidates:
         return []
 
     matrix = np.stack([bytes_to_vec(j.embedding) for j in candidates])
-    scores = matrix @ vector
-    order = np.argsort(-scores)
+    cosines = matrix @ vector
+
+    keyword = None
+    if cv_text.strip():
+        keys = [j.id for j in candidates]
+        if all(k is not None for k in keys):
+            index = lexical.index_for(
+                [_lexical_text(j) for j in candidates], keys,
+            )
+            keyword = index.score_keys(cv_text, keys)
+        else:  # unsaved rows (tests): nothing stable to cache on
+            keyword = lexical.scores(cv_text, [_lexical_text(j) or "" for j in candidates])
+
+    reader = seniority.cv_level(cv_text)
+    penalties = np.array([
+        seniority.level_penalty(reader, posting_level(j)) for j in candidates
+    ])
+    final = hybrid_scores(cosines, keyword, penalties)
+    order = np.argsort(-final, kind="stable")
 
     ranked_jobs = [candidates[int(i)] for i in order]
-    ranked_scores = [float(max(0.0, min(1.0, scores[int(i)]))) for i in order]
+    ranked_scores = [float(max(0.0, min(1.0, cosines[int(i)]))) for i in order]
     # Percentiles are computed against the WHOLE candidate set, not the
     # page — otherwise page 2 would relabel its own worst jobs as top
     # matches.
-    ranked_percentiles = percentile_ranks(ranked_scores)
+    ranked_percentiles = percentile_ranks([float(final[int(i)]) for i in order])
     return list(zip(ranked_jobs, ranked_scores, ranked_percentiles))
+
+
+def _lexical_text(job: Job) -> str | None:
+    """What the keyword index reads for a job, as the embedding does.
+
+    None when the description was not loaded: the index then uses the
+    term counts it cached for this job id earlier (see _needs_text).
+    """
+    description = _loaded_description(job)
+    if description is None and job.id is not None and lexical.is_cached(job.id):
+        return None
+    return build_job_text(job.title, job.company, description)
 
 
 def _explain(

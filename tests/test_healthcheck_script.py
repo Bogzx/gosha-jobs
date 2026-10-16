@@ -98,3 +98,23 @@ def test_watchdog_can_be_disabled(tmp_path):
     ), GOSHA_WATCHDOG_SECONDS="0")
     assert result.returncode == 0, result.stderr
     assert "disabled" in result.stdout
+
+
+def test_watchdog_dms_the_owner_before_exiting(monkeypatch):
+    """(f) A wedged loop cannot use discord.py; the REST DM path is used."""
+    from gosha import alerts, heartbeat
+
+    sent: list[str] = []
+    monkeypatch.setattr(alerts, "post_dm_sync", lambda text, **kw: sent.append(text) or True)
+    heartbeat._page_owner(950, 900)
+    assert sent and "no heartbeat for 950s" in sent[0]
+
+
+def test_watchdog_paging_failure_never_blocks_the_exit(monkeypatch):
+    from gosha import alerts, heartbeat
+
+    def boom(text, **kw):
+        raise RuntimeError("network")
+
+    monkeypatch.setattr(alerts, "post_dm_sync", boom)
+    heartbeat._page_owner(950, 900)  # must not raise

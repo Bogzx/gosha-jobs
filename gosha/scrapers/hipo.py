@@ -14,10 +14,17 @@ Probed 2026-10-12: the listing is paginated by a path suffix
 (.../IT-Software/Bucuresti/2, 40 cards a page; a `?page=` query is
 ignored), and career fairs and workshops are listed as cards too. Their
 JSON-LD says employmentType "eveniment", which is how they are dropped.
+
+Probed 2026-10-16: Bucharest's catalog runs to 9 pages (332 cards) and
+the all-cities one to 12 (462), ordered by refresh date; the old 4-page
+cap kept 160 of each. The listing page names only the city that was
+searched, so an all-cities posting's real place comes from its JSON-LD
+jobLocation (addressLocality "BUCURESTI , Ilfov ,").
 """
 
 from __future__ import annotations
 
+import html as html_lib
 import json
 import logging
 import re
@@ -28,7 +35,7 @@ from typing import Any
 import httpx
 
 from gosha.filters import normalize_location
-from gosha.scrapers.base import DEFAULT_HEADERS, HTTP_TIMEOUT, RawJob, SearchQuery
+from gosha.scrapers.base import RawJob, SearchQuery, http_client
 from gosha.scrapers.details import fetch_details, html_to_text, repair_mojibake
 
 log = logging.getLogger(__name__)
@@ -40,8 +47,9 @@ LISTING_URL = BASE_URL + "/locuri-de-munca/cautajob/IT-Software/{city}"
 # would refetch the same pages — cache per city for a few minutes.
 CACHE_TTL_SECONDS = 600
 _cache: dict[str, tuple[float, list[str]]] = {}
-# Bucharest's IT-Software catalog runs to a few pages; smaller cities to one.
-MAX_PAGES = 4
+# Pages of one catalog. The all-cities one ran to 12 and Bucharest's to 9
+# (2026-10-16); smaller cities fit on one. The cap only stops a runaway.
+MAX_PAGES = 20
 # schema.org employmentType values that are not jobs.
 NON_JOB_TYPES = {"eveniment", "event"}
 
@@ -59,6 +67,7 @@ CITY_SEGMENTS = {
     "oradea": "Oradea",
     "romania": "Toate-Orasele",
 }
+ALL_CITIES = "Toate-Orasele"
 
 # Network detail fetches per search. A city page lists ~20-40 postings and
 # every keyword term re-searches the same city, so the cache does the work.
@@ -85,8 +94,26 @@ def _job_posting(page: str) -> dict[str, Any]:
     return {}
 
 
+def _locality(posting: dict[str, Any]) -> str:
+    """"Bucuresti, Ilfov" from jobLocation's "BUCURESTI , Ilfov ,"."""
+    places = posting.get("jobLocation") or []
+    places = [places] if isinstance(places, dict) else places
+    names: list[str] = []
+    for place in places:
+        address = place.get("address") if isinstance(place, dict) else None
+        if not isinstance(address, dict):
+            continue
+        for part in str(address.get("addressLocality") or "").split(","):
+            part = repair_mojibake(part).strip()
+            if part.isupper():
+                part = part.title()
+            if part and part not in names:
+                names.append(part)
+    return ", ".join(names)
+
+
 def _extract_detail(page: str) -> dict[str, Any]:
-    """{description, posted_at} from a job page's JobPosting JSON-LD."""
+    """{description, posted_at, location} from a job page's JobPosting JSON-LD."""
     posting = _job_posting(page)
     parts: list[str] = []
     for key in _PROSE_FIELDS:
@@ -101,6 +128,9 @@ def _extract_detail(page: str) -> dict[str, Any]:
             detail["not_a_job"] = True
     if parts:
         detail["description"] = "\n\n".join(parts)[:20000]
+    locality = _locality(posting)
+    if locality:
+        detail["location"] = f"{locality}, Romania"
     raw_date = posting.get("datePosted")
     if raw_date:
         try:
@@ -131,12 +161,16 @@ def city_segment(location: str) -> str | None:
     return CITY_SEGMENTS.get(city)
 
 
-def _parse(html: str, city_label: str) -> list[RawJob]:
+def _parse(html: str, segment: str) -> list[RawJob]:
+    """Cards of one catalog page. `segment` is the city's URL segment."""
+    # The all-cities catalog says nothing about the city on the card; the
+    # detail page does (_locality).
+    location = "Romania" if segment == ALL_CITIES else f"{segment.replace('-', ' ')}, Romania"
     jobs: list[RawJob] = []
     for match in _CARD_RE.finditer(html):
-        href = match.group("href").strip()
-        title = match.group("title").strip()
-        company = match.group("company").strip() or "Unknown"
+        href = html_lib.unescape(match.group("href").strip())
+        title = html_lib.unescape(match.group("title")).strip()
+        company = html_lib.unescape(match.group("company")).strip() or "Unknown"
         if not href or not title:
             continue
         url = href if href.startswith("http") else BASE_URL + href
@@ -144,7 +178,7 @@ def _parse(html: str, city_label: str) -> list[RawJob]:
             url=url,
             title=title,
             company=company,
-            location=f"{city_label}, Romania" if city_label != "Toate-Orasele" else "Romania",
+            location=location,
             description="",
             source="hipo",
         ))
@@ -161,9 +195,7 @@ async def _listing_pages(segment: str) -> list[str]:
 
     pages: list[str] = []
     seen: set[str] = set()
-    async with httpx.AsyncClient(
-        headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True,
-    ) as client:
+    async with http_client() as client:
         for number in range(1, MAX_PAGES + 1):
             url = LISTING_URL.format(city=segment)
             if number > 1:
@@ -198,13 +230,11 @@ class HipoScraper:
             jobs: list[RawJob] = []
             seen: set[str] = set()
             for html in await _listing_pages(segment):
-                for job in _parse(html, segment.replace("-", " ")):
+                for job in _parse(html, segment):
                     if job.url not in seen:
                         seen.add(job.url)
                         jobs.append(job)
-            async with httpx.AsyncClient(
-                headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True,
-            ) as client:
+            async with http_client() as client:
                 details = await fetch_details(
                     client,
                     [j.url for j in jobs if query.is_relevant(j.title, "entry")],
@@ -219,6 +249,8 @@ class HipoScraper:
                     job.description = detail["description"]
                 if detail.get("posted_at"):
                     job.posted_at = detail["posted_at"]
+                if detail.get("location"):
+                    job.location = detail["location"]
                 kept.append(job)
             return kept
         except Exception as exc:

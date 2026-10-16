@@ -53,6 +53,13 @@ class Settings:
     # Admin user IDs (can run /scrape_now, /status)
     admin_user_ids: set[int] = field(default_factory=set)
 
+    # Ops alerts (gosha/alerts.py): DMed to these user IDs only (the
+    # owner); ALERTS_ENABLED=false or no IDs turns them off. A condition
+    # that stays broken is repeated every alert_cooldown_minutes.
+    alerts_enabled: bool = True
+    alert_dm_user_ids: set[int] = field(default_factory=set)
+    alert_cooldown_minutes: int = 360
+
 
 @dataclass(frozen=True)
 class WebSettings:
@@ -234,15 +241,41 @@ def _parse_vps_list() -> list[VPSConfig]:
     return configs
 
 
-def _parse_admin_ids() -> set[int]:
-    """Parse ADMIN_DISCORD_IDS env var into a set of int."""
-    raw = os.getenv("ADMIN_DISCORD_IDS", "")
+def _parse_id_list(name: str) -> set[int]:
+    """Parse a comma-separated list of numeric Discord IDs from env var `name`.
+
+    Anything that is not all digits is skipped with a warning: the classic
+    mistake is a username ("Bogdanila"), and Discord can only mention or DM
+    a numeric ID.
+    """
+    raw = os.getenv(name, "")
     ids: set[int] = set()
     for s in raw.split(","):
-        s = s.strip()
+        s = s.strip().removeprefix("<@").removesuffix(">")
         if s.isdigit():
             ids.add(int(s))
+        elif s:
+            log.warning(
+                "%s: %r is not a numeric Discord user ID — skipped (Developer "
+                "Mode > right-click the user > Copy User ID)", name, s,
+            )
     return ids
+
+
+def _parse_admin_ids() -> set[int]:
+    """Parse ADMIN_DISCORD_IDS env var into a set of int."""
+    return _parse_id_list("ADMIN_DISCORD_IDS")
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        log.warning("%s=%r is not a whole number — using %d", name, raw, default)
+        return default
 
 
 def load_settings() -> Settings:
@@ -275,4 +308,7 @@ def load_settings() -> Settings:
         semantic_threshold=semantic_threshold,
         semantic_threshold_cv=semantic_threshold_cv,
         admin_user_ids=_parse_admin_ids(),
+        alert_dm_user_ids=_parse_id_list("ALERT_DM_USER_IDS"),
+        alerts_enabled=env_flag("ALERTS_ENABLED", default=True),
+        alert_cooldown_minutes=max(1, _int_env("ALERT_COOLDOWN_MINUTES", 360)),
     )

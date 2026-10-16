@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
+
+import httpx
+
+log = logging.getLogger(__name__)
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -22,6 +28,103 @@ HTTP_TIMEOUT = 25.0
 # rarely put "junior" in the title while the board files them as
 # entry-level, so title-only filtering threw most of them away.
 EXPERIENCE_LEVELS = ("intern", "entry", "mid", "senior")
+
+# Hosts that refused a plain request (403) and answered one made with a
+# browser's TLS fingerprint. Process-wide, so the refused request is paid
+# once per host and process, not once per search.
+_browser_hosts: set[str] = set()
+# Headers curl has already applied to the body it hands back.
+_DECODED_HEADERS = {"content-encoding", "content-length", "transfer-encoding"}
+
+
+async def _browser_get(request: httpx.Request) -> httpx.Response | None:
+    """`request` re-sent by curl_cffi with Chrome's TLS fingerprint.
+
+    None when curl_cffi is missing or the request fails: the caller then
+    keeps the response it already has.
+    """
+    try:
+        from curl_cffi.requests import AsyncSession
+    except ImportError:  # pragma: no cover - curl_cffi ships with jobspy
+        return None
+    timeout = request.extensions.get("timeout", {}).get("read") or HTTP_TIMEOUT
+    try:
+        async with AsyncSession(impersonate="chrome", timeout=timeout) as session:
+            resp = await session.get(
+                str(request.url),
+                headers={
+                    k: v for k, v in request.headers.items()
+                    if k.lower() not in ("host", "accept-encoding", "connection")
+                },
+            )
+    except Exception as exc:
+        log.debug("Browser-fingerprint retry of %s failed: %s", request.url, exc)
+        return None
+    return httpx.Response(
+        resp.status_code,
+        headers=[
+            (k, v) for k, v in resp.headers.items() if k.lower() not in _DECODED_HEADERS
+        ],
+        content=resp.content,
+        request=request,
+    )
+
+
+class BrowserFallbackTransport(httpx.AsyncBaseTransport):
+    """httpx transport that retries a 403'd GET with a browser fingerprint.
+
+    BestJobs answers 403 to every request whose TLS handshake is Python's
+    (httpx, requests) from some networks while curl and browsers get 200
+    from the same address (measured 2026-10-16: the whole board, API and
+    website, went dark for that host). The adapter then logged a warning
+    and returned nothing, which only the zero-yield alert would notice
+    hours later. curl_cffi, which JobSpy already depends on for the same
+    reason, makes the handshake look like Chrome's. It is only used for a
+    host that has refused a plain request, and only for GETs.
+
+    OFF unless SCRAPE_BROWSER_FALLBACK=true: a 403 aimed at a TLS
+    fingerprint is the board's bot protection, and getting around it is
+    the operator's call (terms of service), not a default.
+    """
+
+    def __init__(self) -> None:
+        self._plain = httpx.AsyncHTTPTransport()
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        if request.method == "GET" and host in _browser_hosts:
+            response = await _browser_get(request)
+            if response is not None:
+                return response
+        response = await self._plain.handle_async_request(request)
+        if response.status_code != 403 or request.method != "GET":
+            return response
+        retried = await _browser_get(request)
+        if retried is None or retried.status_code == 403:
+            return response
+        if host not in _browser_hosts:
+            log.info("%s refuses Python's TLS fingerprint; using a browser's", host)
+            _browser_hosts.add(host)
+        await response.aclose()
+        return retried
+
+    async def aclose(self) -> None:
+        await self._plain.aclose()
+
+
+def browser_fallback_enabled() -> bool:
+    """SCRAPE_BROWSER_FALLBACK=true opts in to BrowserFallbackTransport."""
+    value = os.getenv("SCRAPE_BROWSER_FALLBACK", "")
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def http_client() -> httpx.AsyncClient:
+    """The HTTP client every adapter uses: shared headers, timeout and
+    redirects, plus the browser-fingerprint fallback when opted in."""
+    return httpx.AsyncClient(
+        headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True,
+        transport=BrowserFallbackTransport() if browser_fallback_enabled() else None,
+    )
 
 
 @dataclass(frozen=True)
