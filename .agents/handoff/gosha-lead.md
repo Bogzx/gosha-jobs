@@ -162,3 +162,15 @@ Deploy checklist update: step 4 → SCRAPE_BROWSER_FALLBACK is ON by owner decis
   ALERT_DM_USER_IDS still to add; freeze the branch and re-run pytest + ruff + both eval --check on the exact
   merge commit; after deploy check /api/v1/health/freshness, "Using semantic matching", DM counts.
 - .agents/ added to .dockerignore.
+
+## RELEASED 2026-10-16 17:11 UTC — main = 03e5314 (fast-forward from 5490d6a)
+- Release gate (scratchpad release_gate.sh) passed on 03e5314: ruff; pytest CI-identical venv 1588 + full venv 1592;
+  real Postgres 15 + full suite 1590; eval --check main+held-out; web eslint/vitest/build; prod-image imports (78
+  modules, DM panel 40) and API routes. CI run 38937293880: backend, frontend, images, deploy all green.
+- Pre-deploy manual check of every would-send DM (48 → 46 after the duplicate fix a1f5aef): 0 irrelevant.
+- Prod after deploy: 4 containers healthy; "Ops alerts will be DMed to [owner]"; apply_clicks + search_nudges tables
+  created; /api/v1/health 200; /api/v1/health/freshness 200 (interval 240); forged /api/v1/r/… → 404; SPA 200.
+- DM watermark: user_jobs.id > 4418 are the new code's DMs (the 17:07 old-code cycle sent 27).
+- Next: manual review of every DM of the first new cycles; watch LinkedIn 429s; then decide LINKEDIN_RESULTS_PER_TERM 60.
+- Owner still to do: GitHub secrets DISCORD_BOT_TOKEN + ALERT_DM_USER_IDS (site watchdog / smoke DMs); off-box backup
+  target; EMPTY_SEARCH_NUDGE_ENABLED when ready.
