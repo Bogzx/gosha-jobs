@@ -47,6 +47,15 @@ def make_sub(keyword: str, levels: list[str] | None = None, max_age_days: int = 
     return sub
 
 
+# A description long enough to judge a level by (filters.MIN_EVIDENCE_CHARS):
+# an unmarked title without one is not sent to an intern/junior search.
+BODY = (
+    " You will join a small team in Cluj, write code and tests reviewed by a mentor,"
+    " and take part in planning and retrospectives. Onboarding takes a week, with"
+    " training on our tools and a buddy for your first projects."
+)
+
+
 def make_job(title: str, **kwargs) -> Job:
     return Job(
         url=f"https://jobs.test/{title.replace(' ', '-')}",
@@ -83,7 +92,7 @@ async def test_an_intern_search_is_not_sent_another_searchs_senior_roles():
 
 
 async def test_an_unmarked_posting_reaches_a_junior_keyword_search():
-    entry = "Manual testing of our web apps. 0-1 years of experience."
+    entry = "Manual testing of our web apps. 0-1 years of experience." + BODY
     jobs = [
         make_job("QA Engineer", description=entry),
         make_job("Senior QA Engineer", description=entry),
@@ -101,7 +110,7 @@ async def test_the_junior_level_reads_the_years_a_posting_asks_for():
     never sent. Unmarked titles now pass unless the posting asks for more
     than two years."""
     jobs = [
-        make_job("Python Developer", description="Python, Django. 1 year of experience."),
+        make_job("Python Developer", description="Python, Django. 1 year of experience." + BODY),
         make_job("Backend Developer", description="Minimum 4 years of experience with Python."),
     ]
     matches = await pipeline.match_jobs_for_subscription(
@@ -429,7 +438,7 @@ def test_place_and_age_are_checked_before_the_description_is_read(monkeypatch):
     assert not pipeline.job_matches_subscription(far, sub)
     assert not pipeline.job_matches_subscription(stale, sub)
     assert read == []
-    assert pipeline.job_matches_subscription(make_job("Java Developer"), sub)
+    assert pipeline.job_matches_subscription(make_job("Java Developer", description=BODY), sub)
     assert set(read) == {"matches_experience_level", "matches_excluded"}
 
 
@@ -438,7 +447,8 @@ def test_a_description_is_read_for_its_years_once_per_cycle_not_per_search():
 
     required_years.cache_clear()
     job = make_job(
-        "Java Developer", description="Minimum 2 years of experience with Java. (cache test)",
+        "Java Developer",
+        description="Minimum 2 years of experience with Java. (cache test)" + BODY,
     )
     subs = [make_sub(kw, ["junior"]) for kw in ("junior java", "java developer", "junior dev")]
     for sub in subs * 20:
@@ -534,7 +544,9 @@ async def test_a_junior_manager_title_reaches_an_entry_keyword_search():
 async def test_the_dm_names_the_search_by_its_keyword_not_its_label(
     patched_db, session, monkeypatch,
 ):
-    sub_id, _ids = await _pending(session, [("Python Developer", "Acme", 0.6)], discord_id=7301)
+    sub_id, _ids = await _pending(
+        session, [("Python Developer Intern", "Acme", 0.6)], discord_id=7301,
+    )
     sub = await session.get(Subscription, sub_id)
     sub.keywords = ["computer science internship — 19 intern/junior roles"]
     await session.commit()
@@ -570,7 +582,8 @@ async def test_the_scrape_filter_and_the_match_follow_each_searchs_levels(
     async def jobspy(_tunnels, keyword, location, max_age_days, boards=None):
         return pd.DataFrame([
             {"job_url": f"https://j.test/{i}", "title": title, "company": "Acme",
-             "location": "Cluj-Napoca", "site": "linkedin", "description": "", "date_posted": NOW}
+             "location": "Cluj-Napoca", "site": "linkedin", "description": BODY,
+             "date_posted": NOW}
             for i, title in enumerate(["Software Engineer Backend(Django)", "Software Engineer Intern"])
         ])
 

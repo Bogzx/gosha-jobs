@@ -30,7 +30,10 @@ from gosha.filters import (
     city_only,
     fold,
     clean_location,
+    entry_level_search,
     filter_dataframe,
+    is_gig_marketplace,
+    lacks_level_evidence,
     looks_like_an_ad,
     matches_company_blacklist,
     matches_excluded,
@@ -583,7 +586,9 @@ def _applies(scraper: object, query: object) -> bool:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def job_matches_subscription(job: Job, sub: Subscription) -> bool:
+def job_matches_subscription(
+    job: Job, sub: Subscription, *, require_evidence: bool = True,
+) -> bool:
     """Check if a stored Job matches a Subscription's criteria.
 
     Cheapest first: this runs for every subscription × job on the event
@@ -604,7 +609,14 @@ def job_matches_subscription(job: Job, sub: Subscription) -> bool:
         return False
     if not search_location_ok(job.location, sub.locations, sub.remote_ok):
         return False
-    if looks_like_an_ad(job.title, job.company):
+    if looks_like_an_ad(job.title, job.company) or is_gig_marketplace(job.company):
+        return False
+    # No evidence of the level: an unmarked title without a description is
+    # not sent to an intern/junior search. A later cycle that brings the
+    # description matches it again (it has no UserJob row yet).
+    if require_evidence and lacks_level_evidence(
+        job.title, job.experience_level, job.description,
+    ) and entry_level_search(sub.experience_levels, sub.keywords):
         return False
     if matches_excluded(job.title, job.description, sub.excluded_keywords):
         return False
@@ -694,7 +706,9 @@ def blend_with_user_vector(
     return ((query + user) / 2).astype(np.float32)
 
 
-def prefilter(sub: Subscription, jobs: list[Job]) -> list[Job]:
+def prefilter(
+    sub: Subscription, jobs: list[Job], *, require_evidence: bool = True,
+) -> list[Job]:
     """The jobs a search can be matched with, before any scoring: the hard
     filters (job_matches_subscription) and what the keyword itself implies
     for the search's levels. Public: gosha.evaluation builds its DM pool
@@ -707,7 +721,10 @@ def prefilter(sub: Subscription, jobs: list[Job]) -> list[Job]:
     search was sent the senior roles another user's "java developer" search
     had found.
     """
-    candidates = [job for job in jobs if job_matches_subscription(job, sub)]
+    candidates = [
+        job for job in jobs
+        if job_matches_subscription(job, sub, require_evidence=require_evidence)
+    ]
     if not sub.keywords:
         return candidates
     return [
@@ -1127,10 +1144,15 @@ async def deliver_pending(bot: JobBot) -> int:
             if not sub.notify_discord:
                 statuses[uj.id] = UserJob.DM_SKIPPED
                 continue
-            # A match deferred by the caps below waited a cycle or more:
-            # still within its search's window?
-            if not is_fresh_enough(job, sub.max_age_days):
-                statuses[uj.id] = UserJob.DM_SKIPPED
+            # Judged again by the current code and data: a match deferred by
+            # the caps waited a cycle or more (still within its search's
+            # window?), and one queued by an older release passed older
+            # gates (49 rows queued before the 2026-10-16 fixes). Every
+            # gate of the match stage, not the score. One held back only
+            # for want of a description stays pending: it may come.
+            if not prefilter(sub, [job]):
+                if not prefilter(sub, [job], require_evidence=False):
+                    statuses[uj.id] = UserJob.DM_SKIPPED
                 continue
             # One posting, one DM: a copy from another board, in this batch
             # (best first, so the better-scoring copy is the one kept) or

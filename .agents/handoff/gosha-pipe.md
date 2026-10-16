@@ -1,3 +1,31 @@
+# POST-DEPLOY FIX (gosha-pipe, 2026-10-16 ~18:00 UTC) — for gosha-lead, on top of 9b09080
+
+The lead judged the 65 DMs of the first 03e5314 cycle (17:35): 51 right, 14 wrong. Fixes, each tested on the real titles and text (tests/test_dm_postdeploy.py):
+- **A, "experienced" wording → not junior** (`filters.asks_experienced`, applied in `_asks_junior_years`, so for the junior level, the board's "entry" label and title_is_relevant alike). Patterns: "looking for / seeking / hiring an experienced", "experienced and motivated <role>" (not "… team/colleagues"), "proven … experience as/in <role>", "proven track record", "căutăm un … experimentat". Skipped when the sentence is a nice-to-have (either side, "Preferred qualifications: …") or negated. "Proven experience working with Excel" (tools) does not count. Also `_YEARS_RE` reads "4y+ of experience" (NTT DATA's Java posting).
+- **B, no evidence** (`filters.lacks_level_evidence`, `entry_level_search`; DMs only, in `pipeline.job_matches_subscription`): a title with no intern/trainee/working-student/junior/graduate/entry marker and a description under 200 chars is not sent to an intern/junior search. Training titles and board-"intern" labels pass without one. Not in the scrape filter or feed (they see postings before the description).
+- **C, gig marketplaces** (`filters.is_gig_marketplace`): Alignerr, Outlier (whole name), DataAnnotation, Remotasks, Mercor, Toloka, Appen, TELUS International/Digital AI → never DM'd. The web feed does not use it (recommend.py is not mine).
+- **D, not CS behind "Engineering"** (`filters._engineering_not_cs`, in title_is_relevant for tech keywords): a title that is tech only through engineer/engineering needs CS in its description (CS degree, a language, software, data work, Power BI, IT…). Line Engineering Support goes; Production IT and Process Engineering & Digitalization stay. Kept when there is no description.
+- **E, send-time recheck** (`deliver_pending`): every pending row passes `prefilter(sub, [job])` (all gates, current code and data) at send time, not only freshness. Failing → skipped; failing only for want of a description (`prefilter(..., require_evidence=False)` passes) → stays pending until the description comes or DM_RETRY_WINDOW ends.
+
+**Side effects measured (HEAD vs new):**
+- eval/postings.jsonl (main set only, no held-out): 7 postings leave the junior level: 3 gold mid/senior (correct), 4 gold "any" (ejobs-012, hipo-026, bestjobs-090, bestjobs-104: "proven experience as a full stack developer", "seeking an experienced and highly motivated test engineer"…). The gold label was read from the title and opening lines. I did not run evaluation.py (it may read held-out).
+- Prod active jobs (845): 19 verdicts flip, all checked by hand. Besides the lead's cases, the flips are an IVI system architect, "proven experience as a business analyst", two plant quality engineers, and tyre/cost engineering internships.
+
+**would_send_v3** (read-only export at 17:38:55, after the 17:35 cycle; working tree's code; throwaway SQLite DB; Discord stubbed): `/tmp/claude-1001/-home-ubuntu-gosha-jobs/3f714841-0998-4735-a06e-3fd5c1335b14/scratchpad/would_send_v3.csv` (+ `_dropped.csv`).
+- Of the 49 queued rows, 20 are sent next cycle and 21 wait. 17 of those wait for a description (5 empty postings: Vertiv Application Engineering Analyst, meteocontrol Linux Systems Engineer, Bosch Agentic AI Engineer, Snyk GTM Automation Engineer, QSound IT Support & Systems Engineer); 4 are deferred by sub 25's per-search cap. 8 are dropped: Alignerr's Back End Developer and SupportYourApp's T3, ×4 users.
+- New matches over all active jobs: 10, all sent. This is an upper bound: prod scores only what its cycle scraped.
+- 0 of the 14 bad postings are in v3, and none passes the new prefilter for any of the 22 active searches.
+- Flagged, not changed: RWS "Software Localization Engineer" (queued for subs 3/5/26) asks for "previous experience working in localization engineering". Wordpress developer asks for "min. 24 luni" (months are not parsed; that is 2 years, so it is still junior).
+
+**Follow-up after the lead's v3 review (RWS judged wrong):**
+- `asks_experienced` now also catches "previous … experience (working) in/as/with <field>" as a requirement.
+- It now skips, for every pattern: "No previous experience required", "… is not required", and wishes in other words ("would be highly valuable", "beneficial", "desirable", "an asset", "welcome", "helpful", "appreciated").
+- Flips from this change: eval main set 0; prod (845 active jobs) 1, RWS "Software Localization Engineer". On the way, Perficient's associate QA posting ("Previous experience in a regulated industry … would be highly valuable") flipped wrongly; the wish words fixed that.
+- HEAD→now is still 7 on the eval main set and 20 on prod (the 19 above + RWS), so none of the earlier flips were undone. Held-out not checked (rule).
+- `would_send_v3b.csv` (+ `_dropped.csv`) is in the lead's scratchpad: the same export (prod unchanged since: 0 new or re-seen jobs at 17:52, the same 49 pending). The only difference from v3: RWS ×4 (subs 3/5/25/26) moved to dropped. Queue: 17 sent next cycle, 20 wait, 12 dropped; plus 10 new matches.
+
+**Commit-ready:** gosha/filters.py, gosha/pipeline.py, tests/test_dm_postdeploy.py (new), tests/test_deliver.py, tests/test_pipeline_accuracy.py, tests/test_outbox.py. The fixture changes give their postings a real tech title, a 200+ char description or a location, because the recheck now runs every gate. **Suite: 1643 passed, 9 skipped; ruff clean.**
+
 # RELEASE REPORT (gosha-pipe, 2026-10-16) — for gosha-lead
 
 **Suite:** 1576 passed, 9 skipped; ruff clean. Everything below is uncommitted, on top of the branch head.

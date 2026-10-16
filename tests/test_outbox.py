@@ -107,8 +107,8 @@ async def test_pipeline_respects_notify_discord(patched_db, session, monkeypatch
     loud_sub.locations = ["cluj"]
     session.add_all([quiet_sub, loud_sub])
 
-    j1 = Job(url="https://o.com/1", title="Dev", company="A", source="indeed")
-    j2 = Job(url="https://o.com/2", title="QA", company="B", source="indeed")
+    j1 = Job(url="https://o.com/1", title="Dev", company="A", location="Cluj", source="indeed")
+    j2 = Job(url="https://o.com/2", title="QA", company="B", location="Cluj", source="indeed")
     session.add_all([j1, j2])
     await session.flush()
 

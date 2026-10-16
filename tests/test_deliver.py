@@ -137,8 +137,8 @@ async def test_closed_dms_are_reported_once_not_every_cycle(patched_db, session,
     monkeypatch.setattr("gosha.alerts.sink_for_bot", lambda _bot: _Sink())
 
     async def new_match(n):
-        job = Job(url=f"https://d.test/later/{n}", title=f"Later {n}", company="L",
-                  source="ejobs")
+        job = Job(url=f"https://d.test/later/{n}", title=f"Python Developer {n}", company="L",
+                  location="Cluj-Napoca", source="ejobs")
         session.add(job)
         await session.flush()
         session.add(UserJob(user_id=user_id, job_id=job.id, subscription_id=sub_id,
@@ -365,11 +365,18 @@ async def test_regex_matching_honours_the_board_level(patched_db, session):
     sub.keywords, sub.locations = ["computer science internship"], ["cluj"]
     session.add(sub)
     job = Job(url="https://ej.test/qa", title="QA Engineer", company="Acme",
-              location="Cluj-Napoca, Romania", source="ejobs", experience_level="entry")
+              location="Cluj-Napoca, Romania", source="ejobs", experience_level="entry",
+              description="Manual and automated testing of our web and mobile apps. " * 5)
     session.add(job)
     await session.commit()
 
     assert await pipeline.run_match_stage([job]) == 1
+
+
+# Distinct tech titles: the send-time recheck runs the keyword gate
+# ("python developer" wants a tech title).
+ROLES = ["Python Developer", "Java Developer", "QA Engineer", "Data Engineer",
+         "DevOps Engineer", "Frontend Developer", "Backend Developer", "Cloud Engineer"]
 
 
 async def _matches(session, user, sub, specs):
@@ -394,7 +401,7 @@ async def test_a_search_sends_at_most_five_a_cycle_and_defers_the_rest(
 ):
     user, sub, _jobs, rows = await _setup(session, n_jobs=0)
     ids = await _matches(session, user, sub, [
-        (f"Role {i}", f"Co{i}", 0.40 + i / 100, 0) for i in range(8)
+        (ROLES[i], f"Co{i}", 0.40 + i / 100, 0) for i in range(8)
     ])
     calls = _fake_dm(monkeypatch, [])
     monkeypatch.setattr(pipeline, "_send_text", lambda *a: asyncio.sleep(0))
@@ -410,8 +417,8 @@ async def test_a_search_sends_at_most_five_a_cycle_and_defers_the_rest(
 async def test_one_company_gets_at_most_three_dms_a_batch(patched_db, session, monkeypatch):
     user, sub, _jobs, _rows = await _setup(session, n_jobs=0)
     ids = await _matches(session, user, sub, [
-        (f"Role {i}", "Endava", 0.50 + i / 100, 0) for i in range(4)
-    ] + [("Other", "Acme", 0.45, 0)])
+        (ROLES[i], "Endava", 0.50 + i / 100, 0) for i in range(4)
+    ] + [(ROLES[4], "Acme", 0.45, 0)])
     _fake_dm(monkeypatch, [])
     monkeypatch.setattr(pipeline, "_send_text", lambda *a: asyncio.sleep(0))
 
@@ -429,7 +436,7 @@ async def test_a_deferred_match_is_rechecked_when_its_turn_comes(
     user, sub, _jobs, _rows = await _setup(session, n_jobs=0)
     sub.max_age_days = 7
     await session.commit()
-    ids = await _matches(session, user, sub, [("Fresh", "A", 0.5, 1), ("Stale", "B", 0.6, 9)])
+    ids = await _matches(session, user, sub, [("Python Developer", "A", 0.5, 1), ("Java Developer", "B", 0.6, 9)])
     calls = _fake_dm(monkeypatch, [])
     assert await pipeline.deliver_pending(_Bot()) == 1
     statuses = await _statuses(session)
@@ -441,7 +448,7 @@ async def test_a_deferred_match_is_rechecked_when_its_turn_comes(
 async def test_unscored_matches_go_after_scored_ones(patched_db, session, monkeypatch):
     user, sub, _jobs, _rows = await _setup(session, n_jobs=0)
     monkeypatch.setattr(pipeline, "MAX_DMS_PER_SEARCH", 1)
-    ids = await _matches(session, user, sub, [("Regex", "A", None, 0), ("Scored", "B", 0.3, 0)])
+    ids = await _matches(session, user, sub, [("Python Developer", "A", None, 0), ("Java Developer", "B", 0.3, 0)])
     _fake_dm(monkeypatch, [])
     monkeypatch.setattr(pipeline, "_send_text", lambda *a: asyncio.sleep(0))
     assert await pipeline.deliver_pending(_Bot()) == 1
@@ -513,6 +520,8 @@ async def test_same_title_in_another_city_or_a_short_title_is_not_a_copy(
     patched_db, session, monkeypatch,
 ):
     user, sub, _jobs, _rows = await _setup(session, n_jobs=0)
+    sub.locations = ["cluj", "iasi"]
+    await session.commit()
     await _copies(session, user, sub, [
         # Another city and employer spelling: two postings. (Same employer in
         # two cities is one posting for gosha.dedup, which ignores cities.)

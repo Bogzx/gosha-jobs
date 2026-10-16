@@ -831,7 +831,35 @@ def title_is_relevant(
         # carries an unambiguous CS signal.
         if NON_CS_DOMAIN_RE.search(title) and not STRONG_CS_RE.search(title):
             return False
+        if _engineering_not_cs(title, description):
+            return False
     return True
+
+
+# A title that is tech only through "engineer(ing)" ("Working Student – Line
+# Engineering Support", "Process Engineer") is CS when its description says
+# so: a CS degree, a language, software, data work.
+_GENERIC_TECH_WORDS = frozenset({"engineer", "engineers", "engineering"})
+_CS_TEXT_RE = re.compile(
+    r"\b(?:computer\s+(?:science|engineering)|calculatoare|informatic\w*|software|"
+    r"programm\w*|programare|coding|scripting|developers?|python|java\w*|c\+\+|c#|sql|"
+    r"power\s*bi|data\s+(?:scien\w*|analy\w*|engineer\w*)|machine\s+learning|"
+    r"embedded|firmware|automation|automatizar\w*|web|cloud|devops|networks?|"
+    r"cyber\w*|linux|api)\b"
+)
+
+
+def _engineering_not_cs(title: str, description: str | None) -> bool:
+    """A generic engineering title whose description shows no CS: the Bosch
+    plant's line engineering working student (data input, production
+    equipment, a mechanical or electrical degree). Kept when there is no
+    description to read."""
+    if not description:
+        return False
+    words = {m.group(0).lower() for m in TECH_RE.finditer(title)}
+    if not words or not words <= _GENERIC_TECH_WORDS or STRONG_CS_RE.search(title):
+        return False
+    return not (_CS_TEXT_RE.search(fold(description)) or re.search(r"\bIT\b", description))
 
 
 _IT_PLATFORM_RE = re.compile(r"(?i)\b(?:sap|abap|erp|crm|salesforce|servicenow|dynamics)\b")
@@ -885,6 +913,21 @@ def looks_like_an_ad(title: str | None, company: str | None) -> bool:
     return bool(
         _AD_TITLE_RE.search(fold(title)) or (company and _AD_COMPANY_RE.search(fold(company)))
     )
+
+
+# AI-training gig marketplaces: piecework labelling and grading of model
+# output, posted as "Software Engineer (AI Training)" or "Back End Developer
+# (AI Infrastructure)" in every city. Not jobs (production DMs judged wrong,
+# 2026-10-16). "Outlier" only as the whole name.
+_GIG_COMPANY_RE = re.compile(
+    r"\b(?:alignerr|remotasks|mercor|toloka|appen|data\s*annotation(?:\.tech)?)\b|"
+    r"^outlier(?:\s+ai)?$|\btelus\s+(?:international|digital)\s+ai\b"
+)
+
+
+def is_gig_marketplace(company: str | None) -> bool:
+    """The company is an AI-training gig marketplace (Alignerr, Outlier, ...)."""
+    return bool(company) and bool(_GIG_COMPANY_RE.search(" ".join(fold(company).split())))
 
 
 def _training_only(keyword: str, levels: list[str] | None) -> bool:
@@ -1037,7 +1080,7 @@ _YEARS_RE = re.compile(
     r"(?<![\w.,])(\d{1,2}|" + "|".join(_NUMBER_WORDS) + r")"
     r"(?:\s*\(\d{1,2}\))?\s*\+?\s*"
     r"(?:(?:-|–|to|la|sau|or|si|and)\s*\d{1,2}\s*\+?\s*)?"
-    r"(?:years?|yrs?|ani|an)\b"
+    r"(?:years?|yrs?|y(?=\+|\s+of\b)|ani|an)\b"
 )
 # A posting asking for this many years is not one a student can apply to.
 # Two is still junior on the boards (the eval set's junior postings ask
@@ -1100,7 +1143,7 @@ _EXPERIENCE_WORD = r"(?:experien\w*|exp\b|practic[ae]\b)"
 # without the word, and "10+ years required" needs no word at all.
 _GAP_WORD = r"(?!old\b|ago\b|on\b|in\s+business\b|pe\b|we\b|our\b|you\b|will\b)\S+\s+"
 _YEARS_THEN_EXPERIENCE_RE = re.compile(
-    r"^[\s'’)]*(?:"
+    r"^[\s'’)+]*(?:"
     r"(?:" + _GAP_WORD + r"){0,8}" + _EXPERIENCE_WORD + r"|"
     r"(?:of|de|in)\s+(?:" + _GAP_WORD + r"){0,7}"
     r"(?:development|programming|engineering|dezvoltare|programare)\b|"
@@ -1267,13 +1310,102 @@ def _is_junior(title: str, experience_level: str | None, description: str | None
 
 
 def _asks_junior_years(title: str, description: str | None) -> bool:
-    """No more than JUNIOR_MAX_YEARS asked for, or none stated."""
+    """No more than JUNIOR_MAX_YEARS asked for, or none stated, and not a
+    posting written for experienced people (asks_experienced)."""
     # In a title the years are the requirement ("Java Developer (3+ years)").
     in_title = [
         int(m.group(1)) for m in _YEARS_RE.finditer(fold(title)) if m.group(1).isdigit()
     ]
     years = max(in_title) if in_title else required_years(description)
-    return years is None or years <= JUNIOR_MAX_YEARS
+    if years is not None and years > JUNIOR_MAX_YEARS:
+        return False
+    return not asks_experienced(description)
+
+
+# Postings that say who they want without a number: "we are looking for an
+# experienced Software Developer", "an experienced and motivated System
+# Engineer", "Proven customer-facing experience in a technical support
+# role", "Previous experience working in localization engineering".
+# Production DMs judged wrong (2026-10-16) were sent to junior
+# searches through these. Not the team ("alongside experienced
+# colleagues", "join our experienced and motivated team"), nor tools
+# ("proven experience working with Excel" is how data-analyst postings
+# open to graduates put it).
+_EXPERIENCED_RE = re.compile(
+    r"\b(?:looking for|searching for|seeking|hiring|we need|in search of)\s+"
+    r"(?:an?\s+|one\s+)?"
+    r"(?:(?:highly|very|motivated|talented|skilled|passionate|dedicated|driven)\s+(?:and\s+)?)*"
+    r"(?:experienced|seasoned)\b(?!\s+(?:team|colleagues|people|peers|mentors)\b)|"
+    r"\b(?:experienced|seasoned)\s+and\s+(?:motivated|passionate|driven|dedicated|skilled|talented)\s+"
+    r"(?!(?:team|colleagues|people|peers|mentors|professionals)\b)|"
+    r"\bproven\s+(?:[\w-]+\s+){0,3}?experience\s+(?:as|in)\b|\bproven\s+track\s+record\b|"
+    r"\bprevious\s+(?:[\w-]+\s+){0,2}?experience\s+(?:working\s+)?(?:in|as|with)\b|"
+    r"\bcautam\s+(?:un|o)\s+(?:\w+\s+){0,3}?experimentat\w*"
+)
+
+
+_NO_BEFORE_RE = re.compile(r"\b(?:no|not|without|fara)\s+(?:\w+\s+)?$")
+# Wishes said in other words: "Previous experience in a regulated industry
+# would be highly valuable" (Perficient's associate QA posting).
+_WISH_RE = re.compile(
+    r"\b(?:valuable|beneficial|desirable|an asset|welcome[ds]?|helpful|appreciated)\b"
+)
+
+
+@functools.lru_cache(maxsize=4096)
+def asks_experienced(description: str | None) -> bool:
+    """The description asks for an experienced candidate in words, as a
+    requirement: not as a nice-to-have ("proven experience with Docker is
+    a plus") nor negated ("we are not looking for an experienced ...")."""
+    if not description:
+        return False
+    for sentence in _sentences(fold(description)):
+        for m in _EXPERIENCED_RE.finditer(sentence):
+            # Either side: "Preferred qualifications: proven experience in
+            # backend development", "... is a plus".
+            if _NICE_TO_HAVE_RE.search(sentence) or _WISH_RE.search(sentence):
+                continue
+            if _NOT_WANTED_BEFORE_RE.search(sentence[: m.end()]):
+                continue
+            # "No previous experience required", "... is not required".
+            if _NO_BEFORE_RE.search(sentence[: m.start()]) or _NOT_WANTED_AFTER_RE.search(
+                sentence[m.end():]
+            ):
+                continue
+            return True
+    return False
+
+
+# Below this a description says nothing about the level (an empty Hipo
+# posting, a LinkedIn card cut to a line): see lacks_level_evidence.
+MIN_EVIDENCE_CHARS = 200
+
+
+def lacks_level_evidence(
+    title: str | None, experience_level: str | None, description: str | None,
+) -> bool:
+    """A title with no level marker (intern, trainee, working student,
+    junior, graduate, entry level) and no description to read the level
+    from. The junior level takes unmarked titles on what the description
+    says (years, "experienced"); with none, "AI/ML Engineer" went to junior
+    searches on no evidence. For the DMs only: the scrape stage and the
+    feed see postings before their description is fetched."""
+    title = str(title or "")
+    if (
+        ENTRY_LEVEL_RE.search(title) or JUNIOR_RE.search(title) or INTERN_RE.search(title)
+        or experience_level == "intern"
+    ):
+        return False
+    return len(" ".join((description or "").split())) < MIN_EVIDENCE_CHARS
+
+
+def entry_level_search(levels: list[str] | None, keywords: list[str] | None) -> bool:
+    """A search whose matches must be intern or junior: its levels say so,
+    or, with no level restriction, its keyword does ("software intern")."""
+    wanted = {canonical_level(level) or level.lower() for level in levels or []}
+    if wanted and "any" not in wanted:
+        return wanted <= {"intern", "junior"}
+    return any(keyword_wants_entry_level(kw) for kw in keywords or [])
 
 
 def matches_experience_level(
