@@ -10,10 +10,13 @@ single gain measured (feed nDCG@10 0.546 -> 0.67 on its own).
 Pure functions, no IO: the feed (gosha/recommend.py) and the eval
 (gosha/evaluation.py) call the same code.
 
-Postings are read in order of how much each signal can be trusted:
-1. the title ("Senior", "Junior", "Intern", "Lead", ...);
+A posting's level is read with the hard filters' own detectors
+(gosha/filters.py: the title regexes, says_senior, required_years), so
+the feed and the Discord level filter never disagree about whether a
+posting is junior. In order of how much each signal can be trusted:
+1. the title ("Senior", "Junior", "Intern", "Mid-level", ...);
 2. the board's own label (Job.experience_level: intern/entry/mid/senior);
-3. the years of experience the description asks for ("3+ years of
+3. the years of experience the description requires ("3+ years of
    experience", "minim 2 ani experiență");
 4. entry-level words in the description ("absolvent", "internship").
 """
@@ -22,6 +25,16 @@ from __future__ import annotations
 
 import re
 
+from gosha.filters import (
+    ENTRY_LEVEL_RE,
+    INTERN_RE,
+    JUNIOR_MAX_YEARS,
+    JUNIOR_RE,
+    MID_TITLE_RE,
+    required_years,
+    says_senior,
+)
+
 # Posting levels.
 ENTRY, MID, SENIOR, UNKNOWN = "entry", "mid", "senior", "unknown"
 # CV levels. CV_UNKNOWN: no CV text to read (a user ranked on 👍 alone, or
@@ -29,55 +42,17 @@ ENTRY, MID, SENIOR, UNKNOWN = "entry", "mid", "senior", "unknown"
 STUDENT, JUNIOR, CV_MID, CV_SENIOR = "student", "junior", "mid", "senior"
 CV_UNKNOWN = "unknown"
 
-_SENIOR_TITLE = re.compile(
-    r"(?i)\b(?:senior|sr\.?|lead|principal|staff|director|manager|head|vp|chief|"
-    r"architect|expert|[sș]ef|coordonator|team\s*leader)\b"
-)
-_MID_TITLE = re.compile(r"(?i)\b(?:mid|medior|middle|intermediate|mid-level)\b")
-# \b is Unicode-aware, so "practică" ends where it should. "Intern" must be
-# a whole word: "International Sales" and "Internal Auditor" are not.
-_ENTRY_TITLE = re.compile(
-    r"(?i)\b(?:intern(?:ship)?s?|junior|jr\.?|graduates?|entry.?level|trainees?|"
-    r"traineeship|apprentice(?:ship)?s?|stagiar\w*|stagi[ui]|practic(?:ant\w*|[aă])|"
-    r"absolvent\w*|student\w*|[iî]ncep[aă]tor\w*|debutant\w*|"
-    r"f[aă]r[aă]\s+experien[tț][aă])(?!\w)"
-)
+# Required years from this up read as senior; up to JUNIOR_MAX_YEARS (the
+# junior level's own limit in gosha/filters.py) as entry; between, mid.
+SENIOR_MIN_YEARS = 5
+# Entry-level words in a description, for a posting whose title, label and
+# requirements say nothing. Ranking only: the filters read titles.
 _ENTRY_TEXT = re.compile(
     r"(?i)\b(?:internship|entry.?level|no (?:prior )?experience (?:is )?required|"
     r"recent graduates?|absolvent\w*|f[aă]r[aă]\s+experien[tț][aă]|stagiu|"
     r"program de (?:internship|practic[aă]))(?!\w)"
 )
-# "3+ years", "2-4 years", "minim 2 ani". Only counted with an experience
-# word nearby: "over 20 years on the market" is the company's age, not a
-# requirement.
-_YEARS = re.compile(
-    r"(?i)(\d{1,2})\s*(?:\+|plus)?\s*(?:(?:-|–|to|la)\s*\d{1,2}\s*)?"
-    r"(?:years?|yrs?|ani|de\s+ani)\b"
-)
-_EXPERIENCE_WORD = re.compile(r"(?i)experien|\bexp\b|vechime")
-# A year count followed by this is about the company, not the candidate.
-_COMPANY_AGE = re.compile(r"(?i)^\W*(?:of\s+)?(?:history|on the market|pe pia[tț][aă]|in business)")
 _BOARD_LEVEL = {"intern": ENTRY, "entry": ENTRY, "mid": MID, "senior": SENIOR}
-
-
-def required_years(text: str | None) -> int | None:
-    """The years of experience a posting asks for, if it says.
-
-    The first mention with an experience word within 60 characters: the
-    first is almost always the headline requirement ("3+ years of Java"),
-    later ones qualify it ("1 year with Kafka is a plus").
-    """
-    if not text:
-        return None
-    for m in _YEARS.finditer(text[:4000]):
-        years = int(m.group(1))
-        if not 0 < years < 16:
-            continue
-        window = text[max(0, m.start() - 60): m.end() + 60]
-        if not _EXPERIENCE_WORD.search(window) or _COMPANY_AGE.match(text[m.end():]):
-            continue
-        return years
-    return None
 
 
 def posting_level(
@@ -85,19 +60,19 @@ def posting_level(
 ) -> str:
     """ENTRY, MID, SENIOR or UNKNOWN for one posting."""
     title = title or ""
-    if _ENTRY_TITLE.search(title):
+    if INTERN_RE.search(title) or JUNIOR_RE.search(title) or ENTRY_LEVEL_RE.search(title):
         return ENTRY
-    if _SENIOR_TITLE.search(title):
+    if says_senior(title):
         return SENIOR
-    if _MID_TITLE.search(title):
+    if MID_TITLE_RE.search(title):
         return MID
     if board_level in _BOARD_LEVEL:
         return _BOARD_LEVEL[board_level]
-    years = required_years(description)
+    years = required_years(description or None)
     if years is not None:
-        if years >= 5:
+        if years >= SENIOR_MIN_YEARS:
             return SENIOR
-        if years >= 2:
+        if years > JUNIOR_MAX_YEARS:
             return MID
         return ENTRY
     if description and _ENTRY_TEXT.search(description[:4000]):

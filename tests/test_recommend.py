@@ -550,11 +550,15 @@ class TestWhyThisMatched:
 
 
 @pytest.mark.asyncio
-async def test_feed_attaches_explanations(patched_db, session: AsyncSession, tmp_path):
+async def test_feed_attaches_explanations(
+    patched_db, session: AsyncSession, tmp_path, monkeypatch,
+):
     """End to end: the feed carries the explanation, not just a number."""
     import gosha.cover_letter as cl_mod
 
-    cl_mod.CV_DIR = tmp_path / "cvs"
+    # monkeypatch, not an assignment: user 1's CV outlived this test and
+    # every later feed test's user 1 had it.
+    monkeypatch.setattr(cl_mod, "CV_DIR", tmp_path / "cvs")
     user = User(discord_user_id=20, cv_embedding=vec_to_bytes(unit_vec(0)))
     session.add(user)
     await session.flush()
@@ -609,3 +613,165 @@ def test_tokens_keep_skill_punctuation():
     # Unchanged by the Unicode fix: "+", "#" and inner dots stay part of a
     # term; terms are three characters or longer, as before.
     assert recommend._tokens("C++, Node.js and .NET.") == ["c++", "node.js", "and", "net"]
+
+
+# ── feed hard filters: the user's active searches' location and level ──
+
+
+def _search(user_id: int, locations, levels, *, active=True, remote_ok=False, blacklist=()):
+    from gosha.models import Subscription
+
+    sub = Subscription(user_id=user_id, max_age_days=7, remote_ok=remote_ok, is_active=active)
+    sub.keywords = ["developer"]
+    sub.locations = list(locations)
+    sub.excluded_keywords = []
+    sub.company_blacklist = list(blacklist)
+    sub.experience_levels = list(levels)
+    return sub
+
+
+async def _feed_ids(user_id: int) -> set[int]:
+    items, total = await recommend.get_feed(user_id, per_page=100)
+    assert total == len(items)
+    return {item.job.id for item in items}
+
+
+@pytest.mark.asyncio
+async def test_feed_keeps_what_some_active_search_would_take(patched_db, session: AsyncSession):
+    """Per search, then any: "intern in Bucharest" plus "senior in Cluj"
+    does not admit a Cluj internship, as the DM match stage would not."""
+    user = User(discord_user_id=51, cv_embedding=vec_to_bytes(unit_vec(0)))
+    session.add(user)
+    await session.flush()
+    jobs = {
+        name: make_job(f"https://r.com/s/{name}", 0, title=title, location=where, description="")
+        for name, title, where in [
+            ("cluj_intern", "Software Intern", "Cluj-Napoca"),
+            ("buc_intern", "Software Intern", "București"),
+            ("cluj_senior", "Senior Developer", "Cluj-Napoca"),
+            ("iasi_dev", "Developer", "Iasi"),
+        ]
+    }
+    session.add_all([
+        *jobs.values(),
+        _search(user.id, ["Bucharest"], ["intern"]),
+        _search(user.id, ["Cluj"], ["senior"]),
+    ])
+    await session.commit()
+
+    assert await _feed_ids(user.id) == {jobs["buc_intern"].id, jobs["cluj_senior"].id}
+
+
+@pytest.mark.asyncio
+async def test_paused_searches_do_not_narrow_the_feed_but_their_blacklist_holds(
+    patched_db, session: AsyncSession,
+):
+    user = User(discord_user_id=52, cv_embedding=vec_to_bytes(unit_vec(0)))
+    session.add(user)
+    await session.flush()
+    kept = make_job("https://r.com/p/kept", 0, title="Developer", company="Good", location="Iasi")
+    hidden = make_job("https://r.com/p/hidden", 0, title="Developer", company="Acme", location="Cluj")
+    session.add_all([
+        kept, hidden,
+        _search(user.id, ["Cluj"], ["senior"], active=False, blacklist=["Acme"]),
+    ])
+    await session.commit()
+
+    assert await _feed_ids(user.id) == {kept.id}
+
+
+@pytest.mark.asyncio
+async def test_no_active_search_means_no_scope_filter(patched_db, session: AsyncSession):
+    user = User(discord_user_id=53, cv_embedding=vec_to_bytes(unit_vec(0)))
+    jobs = [
+        make_job("https://r.com/n/a", 0, title="Senior Developer", location="Iasi"),
+        make_job("https://r.com/n/b", 0, title="Intern", location="Timisoara"),
+    ]
+    session.add_all([user, *jobs])
+    await session.commit()
+    assert await _feed_ids(user.id) == {job.id for job in jobs}
+
+
+@pytest.mark.asyncio
+async def test_remote_ok_admits_remote_postings(patched_db, session: AsyncSession):
+    user = User(discord_user_id=54, cv_embedding=vec_to_bytes(unit_vec(0)))
+    session.add(user)
+    await session.flush()
+    remote = make_job("https://r.com/r/remote", 0, title="Developer", location="Remote")
+    elsewhere = make_job("https://r.com/r/far", 0, title="Developer", location="Timisoara")
+    session.add_all([remote, elsewhere, _search(user.id, ["Cluj"], ["any"], remote_ok=True)])
+    await session.commit()
+    assert await _feed_ids(user.id) == {remote.id}
+
+
+@pytest.mark.asyncio
+async def test_scope_filter_leaves_the_keyword_window_whole(
+    patched_db, session: AsyncSession, monkeypatch,
+):
+    """The scope narrows this user's candidates, not the IDF corpus every
+    user and the demo share."""
+    from gosha import lexical
+
+    import gosha.cover_letter
+
+    monkeypatch.setattr(gosha.cover_letter, "load_cv", lambda _uid: "Python developer")
+    user = User(discord_user_id=55, cv_embedding=vec_to_bytes(unit_vec(0)))
+    session.add(user)
+    await session.flush()
+    jobs = [
+        make_job(f"https://r.com/i/{city}", 0, title="Python Developer", location=city,
+                 description="Python, Django")
+        for city in ("Cluj-Napoca", "Iasi", "Timisoara")
+    ]
+    session.add_all([*jobs, _search(user.id, ["Cluj"], ["any"])])
+    await session.commit()
+
+    loaded: list[list[Job]] = []
+    real = recommend.load_candidates
+
+    async def spy(*args, **kwargs):
+        jobs = await real(*args, **kwargs)
+        loaded.append(jobs)
+        return jobs
+
+    monkeypatch.setattr(recommend, "load_candidates", spy)
+    assert await _feed_ids(user.id) == {jobs[0].id}
+    [index] = lexical._indexes.values()
+    assert {k[0] for k in index.keys} == {job.id for job in jobs}
+
+    # The postings scoped out were tokenised for the IDF; their seniority
+    # is never needed, so the next request does not read them again.
+    assert await _feed_ids(user.id) == {jobs[0].id}
+    assert {job.id for job in loaded[-1] if "description" in job.__dict__} == {jobs[0].id}
+
+
+@pytest.mark.asyncio
+async def test_level_scope_reads_each_description_once(
+    patched_db, session: AsyncSession, monkeypatch,
+):
+    """An unmarked title needs its description to tell a graduate posting
+    from one asking for five years; the verdict is cached like the level."""
+    user = User(discord_user_id=56, cv_embedding=vec_to_bytes(unit_vec(0)))
+    session.add(user)
+    await session.flush()
+    graduate = make_job("https://r.com/l/grad", 0, title="QA Engineer", location="Cluj",
+                        description="Fresh graduates welcome.")
+    experienced = make_job("https://r.com/l/exp", 1, title="QA Engineer", location="Cluj",
+                           description="At least 5 years of experience in QA.")
+    session.add_all([graduate, experienced, _search(user.id, ["Cluj"], ["junior"])])
+    await session.commit()
+
+    loaded: list[list[Job]] = []
+    real = recommend.load_candidates
+
+    async def spy(*args, **kwargs):
+        jobs = await real(*args, **kwargs)
+        loaded.append(jobs)
+        return jobs
+
+    monkeypatch.setattr(recommend, "load_candidates", spy)
+    for request in range(2):
+        assert await _feed_ids(user.id) == {graduate.id}
+        read = {job.id for job in loaded[-1] if "description" in job.__dict__}
+        # First request: both read for the verdict; then only the page.
+        assert read == ({graduate.id, experienced.id} if request == 0 else {graduate.id})

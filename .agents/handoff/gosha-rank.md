@@ -256,3 +256,109 @@ held-out; eval.yml paths), TODO 6 (Discord penalty eval), TODO 7 (docs/EVAL.md).
 gosha-pipe on feed hard filters in get_feed (my file) — note get_feed now loads the whole window and filters
 exclusions in Python; any hard filter should filter `candidates`, not `window` (the window is the IDF corpus).
 
+
+## Server session 2 (2026-10-16, after lead commit cc2a29d)
+Lead accepted the window-index redesign and Z_CLIP=3 (a priori, held-out confirmation only). Order from the lead:
+item 7's eval.yml part now; NO baseline regeneration until item 6 lands (code + baselines committed together);
+write the feed hard-filter design (below), implement after item 6; report when 6+7 are done.
+
+### Item 7, CI part: DONE (uncommitted), baselines still pending
+- `.github/workflows/eval.yml`: `paths:` + gosha/lexical.py, gosha/seniority.py, gosha/filters.py (seniority will
+  read levels through the filters' regexes after item 6); recommend.py was already there. New step "Same on the
+  held-out set" (`if: !cancelled()`, pipefail, `--check eval/results/heldout/all-mpnet-base-v2.json`, appended to
+  the step summary). **That baseline file does not exist yet**: the step must be committed together with the
+  regenerated baselines (item 7, after item 6), or CI fails on the missing file.
+- `scripts/eval_ranking.py`: every result now records `postings_sha256` / `personas_sha256` (16-hex sha256 of
+  the files); `check()` fails with "regenerate the baseline" when the baseline's model or fingerprints differ
+  (the held-out set went 253 → 258; a number-only gate compared two different measurements), and warns when a
+  baseline predates fingerprints (all committed ones today: they get regenerated anyway).
+  Test: tests/test_evaluation.py `test_cli_check_refuses_a_baseline_from_another_eval_set`.
+- Consequence for gosha-label: any change to eval/heldout/* must come with a regenerated
+  eval/results/heldout baseline (or CI fails, intentionally).
+
+### Feed hard filters (gosha-pipe TODO 1): PROPOSAL, implement after item 6
+Goal: the web feed shows only postings at least one of the user's searches would accept on location and level,
+as Discord DMs already do (pipeline.passes_filters), ranked as today.
+1. **Rule: per search, then OR.** A posting passes if, for some *active* search s, `location_ok(job, s)` and
+   `matches_experience_level(job.title, s.experience_levels, job.experience_level, job.description)`. Not the
+   union of all locations × union of all levels: "intern in Bucharest" + "senior in Cluj" must not admit Cluj
+   internships. `location_ok` = pipeline._location_ok semantics: no locations → any; else any normalize_location
+   match; plus remote when `remote_ok`.
+2. **Which searches:** active ones only (`Subscription.is_active`). Exclusions (blacklist / excluded words)
+   keep counting paused searches (get_user_exclusions contract: "never show me X" does not pause); location/level
+   are a search's scope and pause with it. **No active search → no hard filter** (CV-only users keep today's feed).
+   Salary / freshness / keywords: NOT applied (the feed is "what fits your CV", the window is already 30 days,
+   keywords are what the ranking replaces). Lead to confirm.
+3. **One implementation:** ask gosha-pipe to move `pipeline._location_ok` into filters as a public pure
+   `filters.search_location_ok(job_location, locations, remote_ok) -> bool` used by pipeline, services/jobs browse
+   and the feed (today it is private to pipeline.py, and services/jobs.py:81 has its own variant).
+4. **Where in get_feed:** after the exclusions, on `candidates` only, never on `window` (the window is the
+   keyword-IDF corpus shared by every user and the demo). The total and the percentiles are then of the filtered
+   set (z-scores were always over the user's own candidates). The newest-first fallback (no vector) is filtered too.
+5. **Cost:** location reads `job.location` (always loaded): memoise per distinct location string per request.
+   The level check needs the description (unmarked titles: `_is_junior` reads required years), which the feed
+   leaves deferred: cache the verdict in an LRU keyed `(*_level_key(job), frozenset(levels))`, like `_level_cache`,
+   and add "level verdict not cached" to `_needs_text` (so the first request of a cycle reads each new
+   description once, later ones only the page). Never cache a verdict computed from a deferred description.
+   Uses the filters' own `required_years` caching if gosha-pipe adds one (their review item: 234 µs/call).
+6. **Empty result:** if the filter leaves nothing, return an empty page with total 0. No silent fallback to
+   unfiltered postings (that is the "irrelevant jobs" complaint). The SPA should say why; optionally an API
+   `?scope=all` to see everything. Both are not my files: lead to decide and route.
+7. **Tests (tests/test_recommend.py):** two searches (Bucharest+intern, Cluj+senior) → Cluj intern excluded,
+   Bucharest intern and Cluj senior kept; paused search ignored for scope but its blacklist still applies;
+   no active search → unfiltered; remote_ok admits "Remote"; filter does not change the window index
+   (`lexical._indexes` key set = whole window); second request reads only the page's descriptions.
+8. **Eval:** the offline feed eval does not model searches (personas have a CV, not searches), so this is not
+   measurable on nDCG; it is a precision rule taken from the DM path. State that in docs/EVAL.md.
+
+### Item 6 (single seniority detector): DONE (uncommitted)
+- gosha-pipe reported filters stable. `gosha/seniority.py` now imports INTERN_RE, JUNIOR_RE, ENTRY_LEVEL_RE,
+  MID_TITLE_RE, says_senior (not SENIOR_RE.search: "Junior IT Project Manager" stays junior), required_years
+  (lru_cached in filters), JUNIOR_MAX_YEARS from gosha.filters; my own title regexes / required_years / company-age
+  code are deleted. Kept ranking-only: `_ENTRY_TEXT` (description entry words), `_BOARD_LEVEL`, cv_level, `_PENALTY`.
+  Order: title entry → says_senior → MID title → board label → required years (≤2 ENTRY, 3–4 MID,
+  ≥SENIOR_MIN_YEARS=5 SENIOR) → description entry words → UNKNOWN. Regexes run on the raw title, as filters does.
+  Dropped my local-only senior words ("coordonator", "team leader"; lead item 9: no local tweaks).
+- Effect on levels: 25/460 postings change. Against the gold `level` field (intern/junior→entry):
+  main 87/102 → **94/102** correct, 2 → 0 entry↔senior flips; held-out 142/148 → **138/152** (more called, fewer right).
+  Most held-out losses are "exactly 2 years required": gold labels **conflict between sets** — main 6 junior / 1 mid,
+  held-out 7 mid / 0 junior. Kept the lead's rule (2 = ENTRY, consistent with the DM junior filter); flagged to lead.
+- nDCG@10 (`--no-feedback`): main 0.743 → **0.750**; held-out(258) 0.624 → **0.617** (noise both ways).
+- Reported to gosha-pipe: required_years misses "…is strongly preferred 3-6 years of … experience" when no period
+  separates the clauses (nice-to-have word bleeds into the next requirement).
+- New tests/test_seniority.py (35 cases: EN+RO titles incl. Șef/Şef, Staff Accountant, Lead Generation, Working
+  Student, International/Internal, Expert contabil, II; description years incl. "2 ani" = entry, company age; CV
+  levels student/junior/mid/senior/unknown; penalty directions).
+
+### Feed hard filters: DONE (uncommitted), as proposed and approved by gosha-pipe
+- `recommend.SearchScope`, `load_search_scopes(user_id)` (active searches only), `in_search_scope(job, scopes, memo)`
+  (per search: `filters.search_location_ok(job.location, s.locations, s.remote_ok)` and
+  `matches_experience_level(...)`; then any), applied in get_feed to `candidates` (never `window`), for both the
+  ranked and newest-first paths. Verdicts cached in `_scope_level_cache` (LRU, same lock/bound, keyed
+  `(*_level_key, levels)`), never from a deferred description; location memoised per request.
+- `_needs_text` split into `_needs_keyword_text` (every window posting: IDF corpus) and `_needs_level_text`
+  (in-scope candidates only, second small load after the scope filter). Before the split, scoped-out postings
+  were re-read every request (caught by test).
+- Test leak fixed: `test_feed_attaches_explanations` assigned `cover_letter.CV_DIR` without monkeypatch, so user 1
+  "had a CV" in every later test.
+- Tests (tests/test_recommend.py): per-search-then-OR, paused search ignored but blacklist holds, no active
+  search → unfiltered, remote_ok, window index unchanged + scoped-out not re-read, level verdict read once.
+- Empty result = empty page, total 0 (no fallback). SPA message / `?scope=all`: not done (not my files) — lead.
+
+### Item 7 baselines: ON HOLD (lead order: only after gosha-pipe says required_years is final)
+- I regenerated before that order arrived and then **reverted**: eval/results/*.json restored to HEAD content
+  (via `git show HEAD:… >`), eval/results/heldout/ removed. Provisional files (with fingerprints) are in the
+  scratchpad, machine-local: /tmp/claude-1001/-home-ubuntu-gosha-agents/5ab8ad8e-f0fd-4b42-bf22-373f67c524bd/scratchpad/provisional_results/
+- Provisional nDCG@10 (with feedback simulation; feed numbers equal the `--no-feedback` ones):
+  main: production 0.750 (0.639–0.851), cosine 0.546, tfidf 0.626; held-out(258): production 0.617 (0.463–0.735),
+  cosine 0.542, tfidf 0.515.
+- To finish when pipe says final: `.venv/bin/python scripts/eval_ranking.py --models all-mpnet-base-v2 tfidf
+  --write-results eval/results` and the same with `--postings eval/heldout/postings.jsonl --personas
+  eval/heldout/personas.jsonl --write-results eval/results/heldout`; check eval inputs are clean vs HEAD first.
+  Commit together: those baselines + eval.yml held-out step + seniority.py/recommend.py + scripts/eval_ranking.py.
+  Stale, not regenerated: all-mpnet-base-v2.title.json, paraphrase-multilingual-*.json (pre-hybrid "feed"
+  semantics, no fingerprints); docs/EVAL.md should label them historical or they get deleted (lead's call).
+- docs/EVAL.md: held-out description + **disclosure** added (Data section and Limitations): negation rule
+  from heldout-ejobs-016, the 8-word-gap rule from a second held-out posting (gosha-pipe to name); held-out
+  seniority-involving numbers slightly optimistic; cosine/TF-IDF rows unaffected. Full results rewrite (TODO 7)
+  after final baselines.

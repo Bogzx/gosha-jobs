@@ -74,6 +74,22 @@ with the CV by `blend_with_user_vector`, feedback by
   plain JSON, one posting per line, so a human pass is cheap and is the
   most valuable next step.
 
+- **Held-out set** (`eval/heldout/`, see its README): 258 postings
+  collected on 2026-10-16 and 10 personas, sharing no posting or persona
+  with the main set. Ranking choices are made on the main set and only
+  reported here; it is never tuned on.
+  - **Disclosure: the held-out set is not perfectly clean for anything
+    that reads seniority.** Two generic rules in
+    `filters.required_years`, which the feed's seniority penalty uses
+    (`gosha/seniority.py`), were written after looking at held-out
+    postings. The negation rule ("not looking for" / "nu căutăm") came from
+    `heldout-ejobs-016`. The 8-word gap between the number and
+    "experience" came from a second held-out posting, which gosha-pipe's
+    handoff (`.agents/handoff/gosha-pipe.md`) is to name, with any others.
+    Held-out numbers involving seniority (the production feed ranking) are
+    therefore slightly optimistic. The cosine-only and TF-IDF rows do not
+    read seniority and are unaffected.
+
 ## Results (2026-10-01)
 
 ### Web feed
@@ -183,6 +199,9 @@ and it double-counted feedback the vector already carried.
   202 postings, so "postings sent per persona" overstates real DM volume.
   The relative changes still hold.
 - **One snapshot of the boards, one day.**
+- **The held-out set has seen a little tuning.** Two `required_years`
+  rules were derived from held-out postings (see Data), so held-out
+  numbers that involve seniority are slightly optimistic.
 
 ## What to try next (not done here)
 

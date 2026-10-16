@@ -21,11 +21,11 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import defer
 from sqlalchemy.orm.attributes import set_committed_value
 
-from gosha import lexical, seniority
+from gosha import filters, lexical, seniority
 from gosha.database import get_session
 from gosha.embeddings import bytes_to_vec, current_model_clause, is_current
 from gosha.matching import build_job_text
-from gosha.models import Application, Job, User, UserJob
+from gosha.models import Application, Job, Subscription, User, UserJob
 
 log = logging.getLogger(__name__)
 
@@ -438,25 +438,132 @@ def posting_level(job: Job) -> str:
     return level
 
 
+class SearchScope(NamedTuple):
+    """Where and at what level one of the user's active searches looks."""
+
+    locations: tuple[str, ...]
+    remote_ok: bool
+    levels: tuple[str, ...]
+
+
+async def load_search_scopes(user_id: int) -> list[SearchScope]:
+    """The scopes of the user's active searches. Paused searches do not
+    narrow the feed (their exclusions still apply: get_user_exclusions)."""
+    async with get_session() as session:
+        result = await session.execute(
+            select(Subscription).where(
+                Subscription.user_id == user_id, Subscription.is_active.is_(True),
+            )
+        )
+        subs = result.scalars().all()
+    return [
+        SearchScope(tuple(s.locations), bool(s.remote_ok), tuple(sorted(s.experience_levels)))
+        for s in subs
+    ]
+
+
+def _restricts_level(levels: tuple[str, ...]) -> bool:
+    """As matches_experience_level reads them: none or "any" is no filter."""
+    wanted = {filters.canonical_level(level) or level.lower() for level in levels}
+    return bool(wanted) and "any" not in wanted
+
+
+# matches_experience_level verdicts per posting and level set: unmarked
+# titles need the description (the years it asks for), which the feed
+# leaves in the database. Same keys, lock and bound as _level_cache.
+_scope_level_cache: OrderedDict[tuple, bool] = OrderedDict()
+
+
+def _scope_level_key(job: Job, levels: tuple[str, ...]) -> tuple | None:
+    key = _level_key(job)
+    return None if key is None else (*key, levels)
+
+
+def _level_matches(job: Job, levels: tuple[str, ...]) -> bool:
+    if not _restricts_level(levels):
+        return True
+    key = _scope_level_key(job, levels)
+    if key is not None:
+        with _level_lock:
+            hit = _scope_level_cache.get(key)
+            if hit is not None:
+                _scope_level_cache.move_to_end(key)
+                return hit
+    description = _loaded_description(job)
+    deferred = description is _DEFERRED
+    ok = filters.matches_experience_level(
+        job.title, list(levels), job.experience_level, None if deferred else description,
+    )
+    if key is not None and not deferred:
+        with _level_lock:
+            _scope_level_cache[key] = ok
+            while len(_scope_level_cache) > lexical.MAX_CACHED:
+                _scope_level_cache.popitem(last=False)
+    return ok
+
+
+def _needs_text_for_scopes(job: Job, scopes: list[SearchScope]) -> bool:
+    """Whether the scope filter has to read this job's description."""
+    for scope in scopes:
+        if not _restricts_level(scope.levels):
+            continue
+        key = _scope_level_key(job, scope.levels)
+        if key is None:
+            return True
+        with _level_lock:
+            if key not in _scope_level_cache:
+                return True
+    return False
+
+
+def in_search_scope(job: Job, scopes: list[SearchScope], location_memo: dict | None = None) -> bool:
+    """Whether some active search would take this posting on location and
+    level, as the Discord match stage does (pipeline.passes_filters): per
+    search, then any of them. "Intern in Bucharest" plus "senior in Cluj"
+    does not admit a Cluj internship. No active search: no restriction.
+    """
+    if not scopes:
+        return True
+    memo = location_memo if location_memo is not None else {}
+    for scope in scopes:
+        where = (job.location, scope.locations, scope.remote_ok)
+        if where not in memo:
+            memo[where] = filters.search_location_ok(
+                job.location, list(scope.locations), scope.remote_ok,
+            )
+        if memo[where] and _level_matches(job, scope.levels):
+            return True
+    return False
+
+
 def clear_caches() -> None:
-    """Forget every cached seniority level, term count and keyword index."""
+    """Forget every cached seniority level, level verdict, term count and
+    keyword index."""
     with _level_lock:
         _level_cache.clear()
+        _scope_level_cache.clear()
     lexical.clear_cache()
 
 
-def _needs_text(job: Job, cv_text: str) -> bool:
-    """Whether ranking this job for a CV with this text has to read its
-    description. Without CV text there is no keyword score and no
-    seniority penalty (seniority.cv_level), so nothing to read."""
-    if not cv_text.strip():
-        return False
+# What ranking for a CV with text reads from a posting's description
+# (without CV text: no keyword score, no seniority penalty, nothing). The
+# keyword terms of every posting in the window, which is the IDF corpus;
+# the seniority level only of the user's own candidates.
+def _needs_keyword_text(job: Job) -> bool:
     key = _cache_key(job)
+    return key is None or not lexical.is_cached(key)
+
+
+def _needs_level_text(job: Job) -> bool:
+    key = _level_key(job)
     if key is None:
         return True
     with _level_lock:
-        level_known = _level_key(job) in _level_cache
-    return not level_known or not lexical.is_cached(key)
+        return key not in _level_cache
+
+
+def _deferred(job: Job) -> bool:
+    return _loaded_description(job) is _DEFERRED
 
 
 async def get_feed(
@@ -464,7 +571,9 @@ async def get_feed(
 ) -> tuple[list[FeedItem], int]:
     """Ranked FeedItems for the user's feed, plus the total count.
 
-    Jobs the user already gave feedback on or applied to are excluded.
+    Jobs the user already gave feedback on or applied to are excluded, and
+    so is what none of the user's active searches would take on location
+    and level (in_search_scope); with no active search, nothing is.
     Without any personalization signal (no current CV vector and no 👍;
     see apply_feedback), falls back to newest-first with None scores.
     """
@@ -521,6 +630,26 @@ async def get_feed(
             j for j in candidates if passes_user_exclusions(j, blacklist, excluded)
         ]
 
+    # Descriptions are read only where nothing is cached yet: after the
+    # first request of a scrape cycle, a handful, not ~2,000.
+    scopes = await load_search_scopes(user_id)
+    ranks_on_text = user_vector is not None and bool(cv_text.strip())
+    if not with_description:
+        in_candidates = {id(j) for j in candidates}
+        await load_descriptions([
+            j for j in window
+            if (ranks_on_text and _needs_keyword_text(j))
+            or (id(j) in in_candidates and _needs_text_for_scopes(j, scopes))
+        ])
+    if scopes:
+        # The candidates only: the window stays the keyword-IDF corpus.
+        memo: dict = {}
+        candidates = [j for j in candidates if in_search_scope(j, scopes, memo)]
+    if ranks_on_text and not with_description:
+        await load_descriptions([
+            j for j in candidates if _deferred(j) and _needs_level_text(j)
+        ])
+
     start = (page - 1) * per_page
     if user_vector is None:
         candidates.sort(
@@ -532,10 +661,6 @@ async def get_feed(
             await load_descriptions(page_jobs)
         return [FeedItem(job, None, None, [], []) for job in page_jobs], len(candidates)
 
-    if not with_description:
-        # Only postings this process has not tokenised yet: after the first
-        # request of a scrape cycle that is a handful, not ~2,000.
-        await load_descriptions([j for j in window if _needs_text(j, cv_text)])
     # Building the keyword index is a CPU pass over every new posting:
     # off the event loop.
     ranked = await asyncio.to_thread(_order, candidates, user_vector, cv_text, window)
@@ -675,7 +800,7 @@ def _lexical_text(job: Job) -> str | None:
     """What the keyword index reads for a job, as the embedding does.
 
     None when the description was not loaded: the index then uses the
-    term counts it cached for this posting (see _needs_text), or, if they
+    term counts it cached for this posting (see _needs_keyword_text), or, if they
     were evicted meanwhile, scores it 0 for this request and caches
     nothing (lexical.LexicalIndex.complete).
     """
