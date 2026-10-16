@@ -285,16 +285,16 @@ def test_linkedin_alone_asks_for_more_results():
     assert mixed["results_wanted"] == scraper.RESULTS_PER_TERM
 
 
-async def test_one_failing_board_fails_the_route(monkeypatch):
-    """Indeed and LinkedIn are separate calls now; either raising still moves
-    the search to the next route, as the single combined call did."""
+async def test_a_failing_board_is_retried_alone_on_the_next_route(monkeypatch):
+    """Indeed raising on the tunnel must not throw away LinkedIn's rows, nor
+    send LinkedIn (which 429s) a second time: only Indeed tries the next route."""
     monkeypatch.setenv("SCRAPE_DIRECT", "1")
-    monkeypatch.setattr(scraper.random, "shuffle", lambda routes: None)
+    monkeypatch.setattr(scraper.random, "shuffle", lambda routes: None)  # tunnel first
     seen: list[tuple] = []
 
     def fake_scrape_jobs(**kwargs):
         seen.append((kwargs["site_name"][0], kwargs["proxies"]))
-        if kwargs["proxies"] and kwargs["site_name"] == ["linkedin"]:
+        if kwargs["proxies"] and kwargs["site_name"] == ["indeed"]:
             raise ConnectionError("tunnel blocked")
         return pd.DataFrame([{"job_url": f"https://x/{kwargs['site_name'][0]}"}])
 
@@ -303,7 +303,33 @@ async def test_one_failing_board_fails_the_route(monkeypatch):
         _Tunnels(), "python", "Cluj-Napoca, Romania", 7, ["indeed", "linkedin"],
     )
     assert sorted(df["job_url"]) == ["https://x/indeed", "https://x/linkedin"]
-    assert ("linkedin", None) in seen
+    tunnel = "socks5://127.0.0.1:1080"
+    assert len(seen) == 3
+    assert set(seen) == {("indeed", tunnel), ("linkedin", tunnel), ("indeed", None)}
+
+
+async def test_rows_of_working_boards_survive_when_a_board_fails_everywhere(
+    monkeypatch, caplog,
+):
+    monkeypatch.setenv("SCRAPE_DIRECT", "1")
+    seen: list[tuple] = []
+
+    def fake_scrape_jobs(**kwargs):
+        seen.append((kwargs["site_name"][0], kwargs["proxies"]))
+        if kwargs["site_name"] == ["glassdoor"]:
+            raise RuntimeError("403")
+        return pd.DataFrame([{"job_url": f"https://x/{kwargs['site_name'][0]}"}])
+
+    monkeypatch.setattr(scraper, "scrape_jobs", fake_scrape_jobs)
+    with caplog.at_level("WARNING", logger="gosha.scraper"):
+        df = await scraper._scrape_single(
+            _Tunnels(), "python", "Cluj-Napoca, Romania", 7,
+            ["indeed", "linkedin", "glassdoor"],
+        )
+    assert sorted(df["job_url"]) == ["https://x/indeed", "https://x/linkedin"]
+    assert [b for b, _ in seen].count("glassdoor") == 2  # tunnel, then direct
+    assert [b for b, _ in seen].count("linkedin") == 1
+    assert "glassdoor" in caplog.text and "403" in caplog.text
 
 
 class _FakeLinkedIn:

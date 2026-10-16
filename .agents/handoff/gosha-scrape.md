@@ -356,6 +356,18 @@ All uncommitted, in the working tree. `tests/test_scraper_jobspy.py` 49 passed; 
   twice per cycle), garbage locations searched ('kra', 'mun', 'llocation:cluj' → 19 Glassdoor errors
   per cycle), and a keyword stored as 'computer science internship — 19 intern/junior roles'.
 
+11. **Per-board routes (lead follow-up to e6fdc92)** — `gosha/scraper.py` `_scrape_single`: every board
+   (Glassdoor included, with its city-only location) is one JobSpy call, gathered with
+   `return_exceptions=True`. Rows from boards that answered are kept; only the boards that raised try the
+   next route; each failure is logged (`<board> failed for … via <route>`), and boards that fail on every
+   route get one ERROR. Behaviour change: Glassdoor used to be skipped after one failure; it now tries the
+   next route like the others. Tests: `test_a_failing_board_is_retried_alone_on_the_next_route`
+   (indeed raises on the tunnel → linkedin called once, indeed retried direct, both rows returned),
+   `test_rows_of_working_boards_survive_when_a_board_fails_everywhere`. Full suite 1095 passed, 9 skipped.
+
+Lead decision (e6fdc92): keep the cache, keep LinkedIn at 30; raise to 60 only after a deployed cycle
+shows search-429s down (owner deploys).
+
 ### Proposed next steps (need lead OK)
 a. Keep the cache (9). Expected: LinkedIn job-page requests per cycle from ~1,000+ to roughly the
    number of jobs not seen in the last 24 h (~50–150 after the first cycle).

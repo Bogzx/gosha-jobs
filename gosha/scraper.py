@@ -261,75 +261,61 @@ async def _scrape_single(
         return pd.DataFrame()
 
     random.shuffle(proxies)
-    gd_location = city_only(location)
 
-    # One call per board: Glassdoor needs a city-only location, and LinkedIn
-    # takes more results than the others (LINKEDIN_RESULTS_PER_TERM).
-    gd_boards = [b for b in boards if b == "glassdoor"]
-    main_boards = [b for b in boards if b != "glassdoor"]
-
-    last_error: Exception | None = None
-    for proxy in proxies:
-        try:
-            log.info(
-                "Searching '%s' in '%s' (max_age=%dd) via %s",
-                search_term, location, max_age_days, proxy or "direct (server IP)",
+    def call(board: str, proxy: str | None):
+        # One call per board: Glassdoor needs a city-only location, and
+        # LinkedIn takes its own LINKEDIN_RESULTS_PER_TERM.
+        if board == "glassdoor":
+            kwargs = jobspy_kwargs(
+                [board], search_term, city_only(location), max_age_days,
+                proxy, glassdoor_country(location),
             )
-            loop = asyncio.get_running_loop()
-            frames: list[pd.DataFrame] = []
+        else:
+            kwargs = jobspy_kwargs(
+                [board], search_term, location, max_age_days,
+                proxy, indeed_country(location),
+            )
+        return partial(scrape_jobs, **kwargs)
 
-            if main_boards:
-                # Concurrently, as one JobSpy call ran them; any board raising
-                # fails the route, as it did then.
-                frames.extend(await asyncio.gather(*(
-                    loop.run_in_executor(
-                        None,
-                        partial(
-                            scrape_jobs,
-                            **jobspy_kwargs(
-                                [board], search_term, location, max_age_days,
-                                proxy, indeed_country(location),
-                            ),
-                        ),
-                    )
-                    for board in main_boards
-                )))
+    # A board that raises tries the next route on its own: the boards that
+    # answered keep their rows and are not asked again (LinkedIn 429s).
+    pending = list(boards)
+    frames: list[pd.DataFrame] = []
+    loop = asyncio.get_running_loop()
+    for proxy in proxies:
+        if not pending:
+            break
+        route = proxy or "direct (server IP)"
+        log.info(
+            "Searching '%s' in '%s' (max_age=%dd) on %s via %s",
+            search_term, location, max_age_days, ",".join(pending), route,
+        )
+        results = await asyncio.gather(
+            *(loop.run_in_executor(None, call(board, proxy)) for board in pending),
+            return_exceptions=True,
+        )
+        failed: list[str] = []
+        for board, result in zip(pending, results):
+            if isinstance(result, BaseException):
+                log.warning(
+                    "%s failed for '%s' in '%s' via %s: %s",
+                    board, search_term, location, route, result,
+                )
+                failed.append(board)
+            elif result is not None and not result.empty:
+                frames.append(result)
+        pending = failed
 
-            if gd_boards:
-                try:
-                    df_gd: pd.DataFrame = await loop.run_in_executor(
-                        None,
-                        partial(
-                            scrape_jobs,
-                            **jobspy_kwargs(
-                                gd_boards, search_term, gd_location,
-                                max_age_days, proxy, glassdoor_country(location),
-                            ),
-                        ),
-                    )
-                    frames.append(df_gd)
-                except Exception as gd_exc:
-                    log.warning(
-                        "Glassdoor failed for '%s': %s", search_term, gd_exc,
-                    )
-
-            frames = [f for f in frames if not f.empty]
-            if not frames:
-                return pd.DataFrame()
-
-            df = pd.concat(frames, ignore_index=True)
-            log.info("Found %d results for '%s' in '%s'", len(df), search_term, location)
-            return df
-
-        except Exception as exc:
-            log.error("Route %s failed for '%s': %s", proxy or "direct", search_term, exc)
-            last_error = exc
-
-    log.error(
-        "All proxies failed for '%s' in '%s'. Last error: %s",
-        search_term, location, last_error,
-    )
-    return pd.DataFrame()
+    if pending:
+        log.error(
+            "All routes failed for %s on '%s' in '%s'",
+            ",".join(pending), search_term, location,
+        )
+    if not frames:
+        return pd.DataFrame()
+    df = pd.concat(frames, ignore_index=True)
+    log.info("Found %d results for '%s' in '%s'", len(df), search_term, location)
+    return df
 
 
 async def scrape_jobs_raw(
