@@ -146,3 +146,19 @@ Deploy checklist update: step 4 → SCRAPE_BROWSER_FALLBACK is ON by owner decis
   tracking → gosha-health; ranges labelled by lower bound → gosha-label.
 - Review results (delivery): prod DM precision ~0.5 strict; threshold not the lever; gates are. Details in
   scratchpad review-delivery/ (session-local) and forwarded to gosha-pipe/rank/scrape.
+
+## Owner decisions + review results (2026-10-16 ~15:50 UTC)
+- Entry-level rule (owner): intern-only searches get ONLY training positions (internship, traineeship,
+  apprenticeship, working student, graduate programme); junior roles only when the search chose junior; never
+  mid/senior. → gosha-pipe (shared filters), gosha-rank (eval uses the same functions).
+- Eval: mid postings → FILTER, don't regrade (owner). Labels unchanged.
+- ALERT_DM_USER_IDS set in prod .env from ADMIN_DISCORD_IDS (owner confirmed it is @Bogdanila); backup of .env made.
+- Backups (owner): nightly local backup /home/ubuntu/backups/gosha/backup.sh via crontab 03:10 UTC: pg_dump -Fc
+  (verified by pg_restore --list) + data/ (CVs, state) tarred from inside gosha-bot; 14 days; first run 15:47 OK.
+  Off-box copy still missing (needs a restic remote from the owner).
+- Operations review: prod runs as intended (all scheduled jobs on time, model loaded, 0 5xx); WIP imports and
+  starts in the prod image; no schema/dependency changes; rollback safe. Deploy checklist corrections:
+  data/scrape_health.json does not exist in prod (drop that step); GitHub secrets DISCORD_BOT_TOKEN +
+  ALERT_DM_USER_IDS still to add; freeze the branch and re-run pytest + ruff + both eval --check on the exact
+  merge commit; after deploy check /api/v1/health/freshness, "Using semantic matching", DM counts.
+- .agents/ added to .dockerignore.

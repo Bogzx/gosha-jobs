@@ -25,3 +25,6 @@ docs/
 
 # Local-testing sign-in backdoor — must never exist in a production image
 gosha/api/debug_login.py
+
+# Multi-agent working notes and probes: repo-only
+.agents/
