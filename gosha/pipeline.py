@@ -13,6 +13,7 @@ import asyncio
 import functools
 import logging
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -26,6 +27,7 @@ from gosha.database import get_session
 from gosha.dedup import normalize_key
 from gosha.filters import (
     canonical_keyword,
+    city_only,
     fold,
     clean_location,
     filter_dataframe,
@@ -988,6 +990,55 @@ MAX_DMS_PER_SEARCH = 5
 MAX_DMS_PER_COMPANY = 3
 
 
+def _title_words(title: str | None) -> str | None:
+    """The title case-, space- and punctuation-folded, if 3+ words long."""
+    words = re.findall(r"[a-z0-9]+", fold(title or ""))
+    return " ".join(words) if len(words) >= 3 else None
+
+
+def _city(location: str | None) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", fold(city_only(location or ""))))
+
+
+def _same_posting_for_dm(a: Job, b: Job) -> bool:
+    """One posting for DM purposes: the dedup rule (gosha.dedup), the same
+    title + employer key, or the same 3+ word title in the same city
+    whatever the employer is called on each board."""
+    from gosha.dedup import normalize_key, same_posting
+
+    if same_posting(a.title, a.company, b.title, b.company, a.description, b.description):
+        return True
+    key = normalize_key(a.title or "", a.company or "")
+    if key and key == normalize_key(b.title or "", b.company or ""):
+        return True
+    title = _title_words(a.title)
+    city = _city(a.location)
+    return bool(title and city) and title == _title_words(b.title) and city == _city(b.location)
+
+
+async def _dmed_jobs(user_ids: list[int]) -> dict[int, list[Job]]:
+    """user id -> the jobs already DM'd to them, within the dedup window."""
+    from gosha.dedup import WINDOW_DAYS
+
+    if not user_ids:
+        return {}
+    since = datetime.now(timezone.utc) - timedelta(days=WINDOW_DAYS)
+    async with get_session() as session:
+        rows = await session.execute(
+            select(UserJob.user_id, Job)
+            .join(Job, UserJob.job_id == Job.id)
+            .where(
+                UserJob.user_id.in_(user_ids),
+                UserJob.dm_status == UserJob.DM_SENT,
+                UserJob.dm_sent_at >= since,
+            )
+        )
+        out: dict[int, list[Job]] = {}
+        for user_id, job in rows.all():
+            out.setdefault(user_id, []).append(job)
+    return out
+
+
 def _best_first(row: tuple) -> tuple:
     uj = row[0]
     score = uj.relevance_score
@@ -1055,6 +1106,7 @@ async def deliver_pending(bot: JobBot) -> int:
     by_user: dict[int, list[tuple[UserJob, Job, User, Subscription]]] = {}
     for row in rows:
         by_user.setdefault(row[2].id, []).append(row)
+    dmed = await _dmed_jobs(list(by_user))
 
     sent = 0
     closed_dms: list[int] = []  # discord ids whose DMs are closed
@@ -1062,7 +1114,8 @@ async def deliver_pending(bot: JobBot) -> int:
     for items in by_user.values():
         statuses: dict[int, str] = {}
         sendable: list[tuple[UserJob, Job, User, Subscription]] = []
-        seen_titles: set[tuple[str, str]] = set()
+        # What this user was already DM'd, then what this batch keeps.
+        seen_jobs: list[Job] = list(dmed.get(items[0][2].id, ()))
         # Best first, before the duplicate check below: in id order the
         # copy kept was the older one, whatever its score, and the DMs
         # went out in the order the rows were written. Unscored (regex
@@ -1079,12 +1132,14 @@ async def deliver_pending(bot: JobBot) -> int:
             if not is_fresh_enough(job, sub.max_age_days):
                 statuses[uj.id] = UserJob.DM_SKIPPED
                 continue
-            # Same title + company from two boards in one batch: one DM.
-            key = ((job.title or "").lower().strip(), (job.company or "").lower().strip())
-            if key in seen_titles:
+            # One posting, one DM: a copy from another board, in this batch
+            # (best first, so the better-scoring copy is the one kept) or
+            # already DM'd. Companies differ between boards ("Ascom UMS" /
+            # "ascom", "MMC Corporate" / "Marsh").
+            if any(_same_posting_for_dm(job, other) for other in seen_jobs):
                 statuses[uj.id] = UserJob.DM_SKIPPED
                 continue
-            seen_titles.add(key)
+            seen_jobs.append(job)
             sendable.append((uj, job, user, sub))
 
         # The caps defer: what does not fit stays pending for the next

@@ -37,6 +37,13 @@
 - pipeline.prefilter, shared with gosha-rank's eval.
 - Apply-click button (gosha-health) and same_posting dedup guard (gosha-scrape).
 
+**Pre-release duplicate fix** (after 148f7d0; commit-ready: gosha/pipeline.py, tests/test_deliver.py):
+- `deliver_pending` treats two postings as one DM (`_same_posting_for_dm`) if dedup.same_posting or normalize_key says so, or the folded title of 3+ words is identical and the city is the same, whatever the company.
+- It checks within the batch (best-first, so the higher score is kept) and against the user's DMs already sent in the dedup window (`_dmed_jobs`).
+- Tests: the Ascom and Marsh pairs, in one batch and across cycles.
+- Would-send v2 (fresh read-only export 16:29:57 UTC, same procedure): 46 rows, 28 first-cycle and 18 deferred. 0 duplicate title+city per user, 0 same_posting pairs. Removed vs v1: (25, 7444) and (25, 7211), the lower-scoring copies.
+- Suite: 1580 passed, 9 skipped; ruff clean.
+
 **For the commit message:**
 - Deferred rows queued before the release are on the cosine scale, about 0.03–0.08 above a DM score for the same posting. They sort slightly ahead for a cycle or two. Harmless.
 - Country-only "Romania" postings now reach city searches only with remote_ok (product rule f). The delivery labels count them as relevant, so a little recall is lost to that rule.

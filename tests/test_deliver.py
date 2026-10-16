@@ -447,3 +447,80 @@ async def test_unscored_matches_go_after_scored_ones(patched_db, session, monkey
     assert await pipeline.deliver_pending(_Bot()) == 1
     statuses = await _statuses(session)
     assert statuses[ids[1]] == "sent" and statuses[ids[0]] == "pending"
+
+
+# ── One posting, one DM: copies from two boards (pre-release review) ──
+
+ASCOM = [
+    ("InternSoftware Engineer", "Ascom UMS", "Cluj-Napoca, Cluj, Romania", "linkedin"),
+    ("InternSoftware Engineer", "ascom", "Cluj-Napoca, România", "bestjobs"),
+]
+MARSH = [
+    ("Junior Full-Stack Engineer, Generative AI @ Marsh Tech", "MMC Corporate",
+     "Cluj-Napoca, România", "bestjobs"),
+    ("Junior Full-Stack Engineer, Generative AI @ Marsh Tech", "Marsh",
+     "Cluj-Napoca, CJ, Romania", "indeed"),
+]
+
+
+async def _copies(session, user, sub, specs, scores, status=UserJob.DM_PENDING):
+    ids = []
+    for (title, company, location, source), score in zip(specs, scores):
+        job = Job(url=f"https://d.test/copy/{source}/{len(title)}/{score}", title=title,
+                  company=company, location=location, source=source)
+        session.add(job)
+        await session.flush()
+        session.add(UserJob(user_id=user.id, job_id=job.id, subscription_id=sub.id,
+                            relevance_score=score, dm_status=status,
+                            dm_sent_at=datetime.now(timezone.utc) if status == UserJob.DM_SENT else None))
+        ids.append(job.id)
+    await session.commit()
+    return ids
+
+
+@pytest.mark.asyncio
+async def test_two_board_copies_in_one_batch_are_one_dm_the_better_one(
+    patched_db, session, monkeypatch,
+):
+    user, sub, _jobs, _rows = await _setup(session, n_jobs=0)
+    ascom = await _copies(session, user, sub, ASCOM, [0.4472, 0.454])
+    marsh = await _copies(session, user, sub, MARSH, [0.3845, 0.3794])
+    calls = _fake_dm(monkeypatch, [])
+
+    assert await pipeline.deliver_pending(_Bot()) == 2
+    statuses = await _statuses(session)
+    assert statuses[ascom[1]] == "sent" and statuses[ascom[0]] == "skipped"  # 0.454 wins
+    assert statuses[marsh[0]] == "sent" and statuses[marsh[1]] == "skipped"  # 0.3845 wins
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pair", [ASCOM, MARSH], ids=["ascom", "marsh"])
+async def test_a_copy_of_a_posting_already_dmed_is_not_sent(
+    patched_db, session, monkeypatch, pair,
+):
+    user, sub, _jobs, _rows = await _setup(session, n_jobs=0)
+    await _copies(session, user, sub, pair[:1], [0.45], status=UserJob.DM_SENT)  # cycle 1
+    (later,) = await _copies(session, user, sub, pair[1:], [0.50])  # cycle 2
+    calls = _fake_dm(monkeypatch, [])
+
+    assert await pipeline.deliver_pending(_Bot()) == 0
+    assert (await _statuses(session))[later] == "skipped" and calls == []
+
+
+@pytest.mark.asyncio
+async def test_same_title_in_another_city_or_a_short_title_is_not_a_copy(
+    patched_db, session, monkeypatch,
+):
+    user, sub, _jobs, _rows = await _setup(session, n_jobs=0)
+    await _copies(session, user, sub, [
+        # Another city and employer spelling: two postings. (Same employer in
+        # two cities is one posting for gosha.dedup, which ignores cities.)
+        ("Junior Full-Stack Engineer, Generative AI @ Marsh Tech", "MMC Corporate",
+         "Iași, Romania", "bestjobs"),
+        ("Junior Full-Stack Engineer, Generative AI @ Marsh Tech", "Marsh", "Cluj-Napoca", "indeed"),
+        ("QA Engineer", "Acme", "Cluj-Napoca", "ejobs"),
+        ("QA Engineer", "Beta", "Cluj-Napoca", "bestjobs"),
+    ], [0.5, 0.49, 0.48, 0.47])
+    _fake_dm(monkeypatch, [])
+    assert await pipeline.deliver_pending(_Bot()) == 4
