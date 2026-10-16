@@ -74,7 +74,7 @@ def test_collector_scrub_removes_contact_details():
 def test_postings_schema_and_counts():
     email = load_collector()._EMAIL
     data = rows(POSTINGS)
-    assert len(data) == 253
+    assert len(data) == 258
     for row in data:
         assert KEYS <= set(row) <= KEYS | {"note"}, row["id"]
         assert row["id"].startswith(f"heldout-{row['source']}-")
@@ -86,7 +86,7 @@ def test_postings_schema_and_counts():
     assert len({r["id"] for r in data}) == len(data)
     assert len({r["url"] for r in data}) == len(data)
     assert {f for r in data for f in r["families"]} == set(ev.FAMILIES)
-    assert len(ev.load_postings(POSTINGS)) == 253
+    assert len(ev.load_postings(POSTINGS)) == 258
 
 
 def test_postings_disjoint_from_main_set():
