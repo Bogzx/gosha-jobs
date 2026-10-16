@@ -51,7 +51,14 @@ export interface JobList {
   total: number
   page: number
   per_page: number
+  /** Feed only: the user's active searches narrowed it (location + level). */
+  scoped?: boolean
+  /** Feed only: how many postings that narrowing hid. */
+  hidden_by_scope?: number
 }
+
+/** Feed scope: only what the user's active searches would take, or everything. */
+export type FeedScope = 'searches' | 'all'
 
 export interface JobSummary {
   id: number

@@ -566,17 +566,43 @@ def _deferred(job: Job) -> bool:
     return _loaded_description(job) is _DEFERRED
 
 
+class FeedPage(NamedTuple):
+    """One page of the feed and how the search scope shaped it."""
+
+    items: list[FeedItem]
+    total: int
+    # The user's active searches narrowed the feed (scope "searches" and at
+    # least one active search), and how many postings that hid.
+    scoped: bool
+    hidden_by_scope: int
+
+
+FEED_SCOPES = ("searches", "all")
+
+
 async def get_feed(
     user_id: int, page: int = 1, per_page: int = 50,
 ) -> tuple[list[FeedItem], int]:
-    """Ranked FeedItems for the user's feed, plus the total count.
+    """Ranked FeedItems for the user's feed, plus the total count (see
+    get_feed_page, scoped to the user's active searches)."""
+    result = await get_feed_page(user_id, page=page, per_page=per_page)
+    return result.items, result.total
+
+
+async def get_feed_page(
+    user_id: int, page: int = 1, per_page: int = 50, scope: str = "searches",
+) -> FeedPage:
+    """One ranked page of the user's feed.
 
     Jobs the user already gave feedback on or applied to are excluded, and
-    so is what none of the user's active searches would take on location
-    and level (in_search_scope); with no active search, nothing is.
-    Without any personalization signal (no current CV vector and no 👍;
-    see apply_feedback), falls back to newest-first with None scores.
+    with scope "searches" so is what none of the user's active searches
+    would take on location and level (in_search_scope); with no active
+    search, or scope "all", nothing is. Without any personalization signal
+    (no current CV vector and no 👍; see apply_feedback), falls back to
+    newest-first with None scores.
     """
+    if scope not in FEED_SCOPES:
+        raise ValueError(f"scope must be one of {FEED_SCOPES}")
     user_vector, liked_mean = await build_user_signal(user_id)
 
     async with get_session() as session:
@@ -632,7 +658,7 @@ async def get_feed(
 
     # Descriptions are read only where nothing is cached yet: after the
     # first request of a scrape cycle, a handful, not ~2,000.
-    scopes = await load_search_scopes(user_id)
+    scopes = await load_search_scopes(user_id) if scope == "searches" else []
     ranks_on_text = user_vector is not None and bool(cv_text.strip())
     if not with_description:
         in_candidates = {id(j) for j in candidates}
@@ -641,10 +667,14 @@ async def get_feed(
             if (ranks_on_text and _needs_keyword_text(j))
             or (id(j) in in_candidates and _needs_text_for_scopes(j, scopes))
         ])
+    hidden_by_scope = 0
     if scopes:
         # The candidates only: the window stays the keyword-IDF corpus.
         memo: dict = {}
+        before = len(candidates)
         candidates = [j for j in candidates if in_search_scope(j, scopes, memo)]
+        hidden_by_scope = before - len(candidates)
+    scoped = bool(scopes)
     if ranks_on_text and not with_description:
         await load_descriptions([
             j for j in candidates if _deferred(j) and _needs_level_text(j)
@@ -659,7 +689,10 @@ async def get_feed(
         page_jobs = candidates[start : start + per_page]
         if not with_description:
             await load_descriptions(page_jobs)
-        return [FeedItem(job, None, None, [], []) for job in page_jobs], len(candidates)
+        return FeedPage(
+            [FeedItem(job, None, None, [], []) for job in page_jobs], len(candidates),
+            scoped, hidden_by_scope,
+        )
 
     # Building the keyword index is a CPU pass over every new posting:
     # off the event loop.
@@ -667,9 +700,9 @@ async def get_feed(
     page_rows = ranked[start : start + per_page]
     if not with_description:
         await load_descriptions([job for job, _, _ in page_rows])
-    return (
+    return FeedPage(
         _explain(page_rows, len(ranked), cv_text=cv_text, liked_mean=liked_mean),
-        len(ranked),
+        len(ranked), scoped, hidden_by_scope,
     )
 
 

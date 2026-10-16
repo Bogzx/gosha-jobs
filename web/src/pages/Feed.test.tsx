@@ -166,6 +166,64 @@ describe('Feed', () => {
     consoleError.mockRestore()
   })
 
+  describe('scope', () => {
+    // Scoped by default: only what the active searches take. scope=all
+    // returns everything.
+    function serveFeed(scoped: JobList, all: JobList) {
+      const fallback = get.getMockImplementation()!
+      get.mockImplementation(async (path: string) => {
+        const [route, qs] = path.split('?')
+        if (route !== '/feed') return fallback(path)
+        return new URLSearchParams(qs).get('scope') === 'all' ? all : scoped
+      })
+    }
+    const page = (items: Job[], extra: Partial<JobList>): JobList => ({
+      items, total: items.length, page: 1, per_page: 25, ...extra,
+    })
+
+    it('says the feed is narrowed and toggles to everything and back', async () => {
+      serveFeed(
+        page([JOBS[0]], { scoped: true, hidden_by_scope: 2 }),
+        page(JOBS, { scoped: false, hidden_by_scope: 0 }),
+      )
+      renderFeed()
+      expect(await screen.findByText(/Matching your active searches/)).toBeInTheDocument()
+      expect(card('Python Developer')).toBeInTheDocument()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Show all' }))
+      expect(get).toHaveBeenCalledWith('/feed?page=1&per_page=25&scope=all')
+      expect(await screen.findByText(/Showing every posting/)).toBeInTheDocument()
+      await screen.findByRole('button', { name: /QA Intern/ })
+
+      await userEvent.click(screen.getByRole('button', { name: 'Only my searches' }))
+      expect(await screen.findByText(/Matching your active searches/)).toBeInTheDocument()
+    })
+
+    it('explains an empty scoped feed and offers the rest', async () => {
+      serveFeed(
+        page([], { scoped: true, hidden_by_scope: 3 }),
+        page(JOBS, { scoped: false, hidden_by_scope: 0 }),
+      )
+      renderFeed()
+      expect(
+        await screen.findByText(/3 postings are outside your active searches' locations and levels/),
+      ).toBeInTheDocument()
+      expect(screen.queryByText('Nothing here yet')).not.toBeInTheDocument()
+
+      // Both the line above the list and the empty state offer it.
+      const [first] = screen.getAllByRole('button', { name: 'Show all' })
+      await userEvent.click(first)
+      await screen.findByRole('button', { name: /QA Intern/ })
+    })
+
+    it('says nothing about scope when no search narrowed the feed', async () => {
+      serveFeed(page(JOBS, { scoped: false, hidden_by_scope: 0 }), page(JOBS, {}))
+      renderFeed()
+      await screen.findByRole('button', { name: /QA Intern/ })
+      expect(screen.queryByText(/Matching your active searches/)).not.toBeInTheDocument()
+    })
+  })
+
   it('searches once typing pauses, keeping the list up meanwhile', async () => {
     renderFeed()
     await screen.findByRole('button', { name: /Python Developer/ })

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Loader2, SlidersHorizontal, Sparkles } from 'lucide-react'
-import type { Job, JobFilters } from '../api/types'
+import type { FeedScope, Job, JobFilters } from '../api/types'
 import { FilterPanel } from '../components/FilterPanel'
 import { JobCard } from '../components/JobCard'
 import { JobDetail } from '../components/JobDetail'
@@ -21,13 +21,16 @@ export default function Feed() {
   const [filters, setFilters] = useState<JobFilters>({})
   const [selected, setSelected] = useState<Job | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
+  // The feed shows what the user's active searches would take (location +
+  // level) unless they ask for everything.
+  const [scope, setScope] = useState<FeedScope>('searches')
 
   // The search and salary boxes apply once typing pauses rather than
   // fetching per keystroke; until then the current list stays up.
   const q = useDebouncedValue(filters.q, TYPING_DEBOUNCE_MS)
   const salaryMin = useDebouncedValue(filters.salary_min, TYPING_DEBOUNCE_MS)
   const settled = q === filters.q && salaryMin === filters.salary_min
-  const query = useJobList(mode, { ...filters, q, salary_min: salaryMin }, settled)
+  const query = useJobList(mode, { ...filters, q, salary_min: salaryMin }, settled, scope)
 
   const jobs = useMemo(() => {
     // Pages are offsets into a list that shifts as jobs are scraped or
@@ -42,6 +45,21 @@ export default function Feed() {
       })
   }, [query.data])
   const total = query.data?.pages[0]?.total
+  const scoped = mode === 'feed' && query.data?.pages[0]?.scoped === true
+  const hiddenByScope = scoped ? (query.data?.pages[0]?.hidden_by_scope ?? 0) : 0
+  const changeScope = (next: FeedScope) => {
+    setScope(next)
+    setSelected(null)
+  }
+  const showAll = (
+    <button
+      type="button"
+      onClick={() => changeScope('all')}
+      className="text-moss underline underline-offset-2 hover:text-go"
+    >
+      Show all
+    </button>
+  )
 
   // Desktop shows the first job until the user picks one, so the detail
   // pane is never empty. Phones open the sheet only on a tap: the fallback
@@ -141,6 +159,24 @@ export default function Feed() {
           </Link>
         )}
 
+        {mode === 'feed' && scope === 'searches' && scoped && (
+          <p className="mb-3 text-sm text-ink-soft">
+            Matching your active searches · {showAll}
+          </p>
+        )}
+        {mode === 'feed' && scope === 'all' && (
+          <p className="mb-3 text-sm text-ink-soft">
+            Showing every posting ·{' '}
+            <button
+              type="button"
+              onClick={() => changeScope('searches')}
+              className="text-moss underline underline-offset-2 hover:text-go"
+            >
+              Only my searches
+            </button>
+          </p>
+        )}
+
         {query.isPending ? (
           <div className="flex justify-center py-20">
             <Loader2 className="animate-spin text-ink-faint" aria-label="Loading" />
@@ -151,6 +187,14 @@ export default function Feed() {
             onRetry={() => void query.refetch()}
             retrying={query.isFetching}
           />
+        ) : jobs.length === 0 && hiddenByScope > 0 ? (
+          <div className="card-press p-8 text-center">
+            <p className="headline text-xl">Nothing matches your searches yet</p>
+            <p className="mt-1 text-sm text-ink-soft">
+              {hiddenByScope === 1 ? '1 posting is' : `${hiddenByScope} postings are`} outside
+              your active searches' locations and levels. {showAll}
+            </p>
+          </div>
         ) : jobs.length === 0 ? (
           <div className="card-press p-8 text-center">
             <p className="headline text-xl">Nothing here yet</p>

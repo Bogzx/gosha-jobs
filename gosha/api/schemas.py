@@ -85,6 +85,15 @@ class JobListOut(BaseModel):
     per_page: int
 
 
+class FeedListOut(JobListOut):
+    """The feed page, plus whether the user's active searches narrowed it
+    (location + level, gosha.recommend.in_search_scope) and how many
+    postings that hid; `?scope=all` drops the narrowing."""
+
+    scoped: bool
+    hidden_by_scope: int
+
+
 class DemoPersonaOut(BaseModel):
     """A synthetic sample CV the public demo ranks jobs for."""
 

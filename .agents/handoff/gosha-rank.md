@@ -362,3 +362,26 @@ as Discord DMs already do (pipeline.passes_filters), ranked as today.
   from heldout-ejobs-016, the 8-word-gap rule from a second held-out posting (gosha-pipe to name); held-out
   seniority-involving numbers slightly optimistic; cosine/TF-IDF rows unaffected. Full results rewrite (TODO 7)
   after final baselines.
+
+## Session 3 (2026-10-16, after lead commit bf5bb9f): lead decisions (a)–(c) DONE, uncommitted
+Still held back by the lead until baselines: eval.yml, scripts/eval_ranking.py, tests/test_evaluation.py (in tree).
+- (a) Feed scope API + SPA (web/ is mine for this change only):
+  - `recommend.get_feed_page(user_id, page, per_page, scope="searches"|"all") -> FeedPage(items, total, scoped,
+    hidden_by_scope)`; `get_feed()` unchanged signature (wraps it). `scoped` = scope "searches" and ≥1 active search.
+  - `gosha/api/feed.py`: `?scope=searches|all` (Literal, 422 otherwise); response `FeedListOut` (new in
+    gosha/api/schemas.py, extends JobListOut) adds `scoped`, `hidden_by_scope`. Tests: tests/api/test_feed.py
+    (+2: scoped + hidden count + scope=all + 422; no active search → not scoped).
+  - SPA: types.ts `JobList.scoped?/hidden_by_scope?`, `FeedScope`; useJobs.ts `useJobList(mode, filters, enabled,
+    scope)` (query key `['jobs', mode, filters, scope]`, adds `&scope=all`); Feed.tsx: line "Matching your active
+    searches · Show all", in all-mode "Showing every posting · Only my searches", empty scoped feed with hidden>0
+    → "Nothing matches your searches yet / N postings are outside your active searches' locations and levels. Show all".
+    Feed.test.tsx +3 tests. `npm ci` (registry only), `npx vitest run` 35/35, `npm run lint` clean, `npm run build` ok.
+    package.json has no "test" script; vitest runs via npx.
+- (b) eval/results/archive/: all-mpnet-base-v2.title.json, paraphrase-multilingual-mpnet-base-v2{,_seq512}.json moved
+  (plain mv, not git mv) + 3-line README; docs/EVAL.md links the archive under the 2026-10-01 table.
+- (c) docs/EVAL.md Limitations: "exactly 2 years" label conflict (main 6 junior/1 mid; held-out 7 mid/0 junior),
+  product rule 2 = junior, no relabelling; for the human label pass.
+- Held-out is now **261** postings (gosha-label): regenerate on the 261 when gosha-pipe says required_years final.
+- Full suite 1283 passed, 9 skipped (2 freshness failures seen once were another agent mid-edit; 25/25 on rerun).
+Waiting on: gosha-pipe "required_years final" → regenerate baselines (main + held-out 261, mpnet + tfidf) → tell lead.
+Then: TODO 7 docs/EVAL.md full results rewrite with the final numbers; TODO 6 (Discord penalty eval).

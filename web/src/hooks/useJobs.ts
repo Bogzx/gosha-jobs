@@ -7,7 +7,7 @@ import {
   type InfiniteData,
 } from '@tanstack/react-query'
 import { api } from '../api/client'
-import type { Application, Job, JobFilters, JobList } from '../api/types'
+import type { Application, FeedScope, Job, JobFilters, JobList } from '../api/types'
 
 const PER_PAGE = 25
 
@@ -31,12 +31,18 @@ function filtersToParams(filters: JobFilters, page: number): string {
  * The previous list stays on screen while new filters load (or are held
  * back with `enabled`), instead of blanking to a spinner.
  */
-export function useJobList(mode: 'feed' | 'browse', filters: JobFilters, enabled = true) {
+export function useJobList(
+  mode: 'feed' | 'browse',
+  filters: JobFilters,
+  enabled = true,
+  scope: FeedScope = 'searches',
+) {
   return useInfiniteQuery({
-    queryKey: ['jobs', mode, filters],
+    queryKey: ['jobs', mode, filters, scope],
     queryFn: ({ pageParam }) => {
-      const qs = filtersToParams(mode === 'feed' ? {} : filters, pageParam)
-      return api.get<JobList>(mode === 'feed' ? `/feed?${qs}` : `/jobs?${qs}`)
+      if (mode === 'browse') return api.get<JobList>(`/jobs?${filtersToParams(filters, pageParam)}`)
+      const qs = filtersToParams({}, pageParam)
+      return api.get<JobList>(`/feed?${qs}${scope === 'all' ? '&scope=all' : ''}`)
     },
     initialPageParam: 1,
     getNextPageParam: (last) =>

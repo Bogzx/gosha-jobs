@@ -102,6 +102,10 @@ with the CV by `blend_with_user_vector`, feedback by
 | `paraphrase-multilingual-mpnet-base-v2` | 128 | 0.485 (0.398–0.578) | 0.317 | 0.538 | 0.271 | 0.484 | 0.528 | 0.491 | 0.465 |
 | `paraphrase-multilingual-mpnet-base-v2`, window raised to 512 | 512 | 0.414 (0.309–0.516) | 0.227 | 0.572 | 0.221 | 0.414 | 0.377 | 0.392 | 0.494 |
 
+The title-only and multilingual rows are archived in
+[`eval/results/archive/`](../eval/results/archive/): they predate the
+hybrid feed ranking and are not gated by CI.
+
 What this says, in order of confidence:
 
 1. **The embedding ranking does not beat keyword matching on this set.**
@@ -199,6 +203,14 @@ and it double-counted feedback the vector already carried.
   202 postings, so "postings sent per persona" overstates real DM volume.
   The relative changes still hold.
 - **One snapshot of the boards, one day.**
+- **The two sets label "exactly 2 years required" differently.** Among
+  postings whose level comes from the years they ask for, those asking
+  for exactly 2 are labelled 6 junior / 1 mid in the main set and 7 mid /
+  0 junior in the held-out set. The product rule is 2 = junior (the
+  Discord junior filter, `filters.JUNIOR_MAX_YEARS`, and the feed's
+  seniority both use it), so the held-out set scores those 7 as level
+  errors. Neither set has been relabelled; this is listed for the human
+  label pass.
 - **The held-out set has seen a little tuning.** Two `required_years`
   rules were derived from held-out postings (see Data), so held-out
   numbers that involve seniority are slightly optimistic.
