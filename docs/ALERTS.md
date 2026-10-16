@@ -17,7 +17,7 @@ listed. One switch turns it all off.
 | A user's DMs are closed, so their matches cannot be delivered | delivery (`gosha/pipeline.py` → `report_closed_dms`) | once per user, "recovered" when a DM reaches them again |
 | `scrape_cycle`, `deadlink_check`, `cv_retention` or `data_quality_check` raises, is skipped or misses its run | APScheduler listener in `gosha/main.py` | at once |
 | The bot's event loop is wedged | heartbeat watchdog (`gosha/heartbeat.py`) | just before it restarts the bot (DM over Discord's REST API, no event loop needed); at most once an hour |
-| The bot is crashed or crash-looping, the server or DB is down | `scripts/site_watchdog.py` on GitHub Actions, every 30 min | site unreachable, or no scrape cycle for 3h ("no new jobs" is the bot's own check above, not repeated here) |
+| The bot is crashed or crash-looping, the server or DB is down | `scripts/site_watchdog.py` on GitHub Actions, every 30 min | site unreachable, or no scrape cycle finished for 2 × the scrape interval + 1h (9h with prod's 4h schedule; "no new jobs" is the bot's own check above, not repeated here) |
 | The daily live smoke of every board fails | `.github/workflows/scraper-smoke.yml` | when the set of failing sources changes, and on recovery |
 
 A condition that stays broken is repeated once per `ALERT_COOLDOWN_MINUTES`
@@ -65,13 +65,21 @@ Repository → Settings → Secrets and variables → Actions:
   workflows DM you as the bot through Discord's REST API.
 - Secret `ALERT_DM_USER_IDS` — your numeric ID from step 1.
 - Optional variables: `ALERTS_ENABLED` (see below), `GOSHA_PUBLIC_URL`
-  (default `https://gosha.bogdantruta.com`), `WATCHDOG_SCRAPE_STALE_HOURS`
-  (3), `WATCHDOG_REMIND_HOURS` (6).
+  (default `https://gosha.bogdantruta.com`), `WATCHDOG_SCRAPE_STALE_HOURS`,
+  `WATCHDOG_REMIND_HOURS` (6).
+
+The "no scrape cycle" limit follows the bot's schedule by itself: the bot
+records its `SCRAPE_INTERVAL_MINUTES` with every cycle, the freshness
+endpoint reports it, and the watchdog allows 2 × that + 1h (a cycle is
+recorded ~35–60 min after it starts, so with a 4h schedule the newest one
+is normally up to ~4h old). If the endpoint does not report it (an older
+deploy) the limit is 9h. `WATCHDOG_SCRAPE_STALE_HOURS` can only raise the
+limit, never lower it below that.
 
 Without both secrets the site watchdog skips itself. Run it once by hand
 (Actions → Site watchdog → Run workflow) to check. It reads the public
 `GET /api/v1/health/freshness` (timestamps of the last scrape cycle and
-newest job, nothing else, cached 60s), so deploy the current code first.
+newest job, the scrape interval, nothing else, cached 60s), so deploy the current code first.
 
 GitHub disables scheduled workflows in a repository with no activity for
 60 days. A site-watchdog run is red while something is failing that you

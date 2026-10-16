@@ -15,6 +15,12 @@ process needed) when:
 * the site does not answer               (key site:down)
 * no scrape cycle finished for N hours   (key site:scrape_stale)
 
+N follows the bot's schedule: max(WATCHDOG_SCRAPE_STALE_HOURS or 3,
+2 × scrape interval + 1h), the interval coming from the freshness endpoint
+(9h when an older deploy does not report it). A cycle is recorded when its
+scrape stage ends, so with cycles every 4h the newest record is normally up
+to ~4h old; a fixed 3h limit paged twice per cycle gap.
+
 "No new job for a day" is not judged here: the bot's hourly data-quality
 check (data:no_new_jobs) knows whether anyone is searching, and while the
 bot is dead this watchdog's scrape_stale already covers it. Judging it in
@@ -33,8 +39,8 @@ run is green: otherwise a long outage meant a failure email every 30 min.
 
 Env: GOSHA_PUBLIC_URL (default https://gosha.bogdantruta.com),
 DISCORD_TOKEN (the bot token), ALERT_DM_USER_IDS (comma-separated numeric
-user IDs), ALERTS_ENABLED, WATCHDOG_SCRAPE_STALE_HOURS (3),
-WATCHDOG_REMIND_HOURS (6).
+user IDs), ALERTS_ENABLED, WATCHDOG_SCRAPE_STALE_HOURS (3; only ever
+raises the schedule-derived limit), WATCHDOG_REMIND_HOURS (6).
 """
 
 from __future__ import annotations
@@ -72,6 +78,21 @@ FLAP_WINDOW_SECONDS = 3600
 
 Fetch = Callable[[str], tuple[int, bytes]]
 
+DEFAULT_SCRAPE_STALE_HOURS = 3.0
+# An older deploy's freshness endpoint does not report the interval; prod
+# runs every 4h, so assume that (2 × 4h + 1h) rather than a limit that
+# pages on every gap between cycles.
+UNKNOWN_INTERVAL_STALE_HOURS = 9.0
+
+
+def scrape_stale_limit_hours(configured: float | None, interval_minutes: object) -> float:
+    """Hours without a finished cycle before the bot is called dead."""
+    floor = UNKNOWN_INTERVAL_STALE_HOURS
+    if isinstance(interval_minutes, int) and not isinstance(interval_minutes, bool) \
+            and interval_minutes > 0:
+        floor = 2 * interval_minutes / 60 + 1
+    return max(configured or DEFAULT_SCRAPE_STALE_HOURS, floor)
+
 
 def http_get(url: str) -> tuple[int, bytes]:
     request = urllib.request.Request(url, headers={"User-Agent": "gosha-site-watchdog"})
@@ -100,9 +121,13 @@ def evaluate(
     base_url: str,
     fetch: Fetch = http_get,
     now: datetime | None = None,
-    scrape_stale_hours: float = 3.0,
+    scrape_stale_hours: float | None = None,
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """Probe the site → (failing, cleared) condition maps for the Alerter."""
+    """Probe the site → (failing, cleared) condition maps for the Alerter.
+
+    `scrape_stale_hours` is the configured limit (WATCHDOG_SCRAPE_STALE_HOURS);
+    the one applied is never below 2 × the bot's scrape interval + 1h.
+    """
     now = now or datetime.now(timezone.utc)
     base = base_url.rstrip("/")
     failing: dict[str, str] = {}
@@ -142,14 +167,15 @@ def evaluate(
     last_cycle = _parse_time(data.get("last_scrape_cycle_at")) or _parse_time(
         data.get("last_job_seen_at")
     )
+    limit = scrape_stale_limit_hours(scrape_stale_hours, data.get("scrape_interval_minutes"))
     if last_cycle is None:
         failing[KEY_SCRAPE] = "No scrape cycle has ever been recorded."
     else:
         age = (now - last_cycle).total_seconds()
-        if age > scrape_stale_hours * 3600:
+        if age > limit * 3600:
             failing[KEY_SCRAPE] = (
                 f"**No scrape cycle has finished for {_hours(age)}** (last: "
-                f"{last_cycle:%Y-%m-%d %H:%M} UTC, limit {scrape_stale_hours:g}h). "
+                f"{last_cycle:%Y-%m-%d %H:%M} UTC, limit {limit:g}h). "
                 f"The bot is crashed, crash-looping, hung or stuck in a cycle: "
                 f"`docker compose -f docker-compose.prod.yml ps` / `logs bot`."
             )
@@ -182,7 +208,7 @@ def main(argv: list[str] | None = None, fetch: Fetch = http_get) -> int:
 
     failing, cleared = evaluate(
         args.url, fetch,
-        scrape_stale_hours=_env_float("WATCHDOG_SCRAPE_STALE_HOURS", 3.0),
+        scrape_stale_hours=_env_float("WATCHDOG_SCRAPE_STALE_HOURS", 0.0) or None,
     )
     alerter = Alerter(
         cooldown_seconds=_env_float("WATCHDOG_REMIND_HOURS", 6.0) * 3600,

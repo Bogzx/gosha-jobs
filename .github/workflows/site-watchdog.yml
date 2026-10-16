@@ -11,7 +11,8 @@ name: Site watchdog
 # ALERT_DM_USER_IDS (the owner's numeric Discord user ID). Optional
 # repository variables: ALERTS_ENABLED (anything but blank/true/1/yes/on
 # switches it off),
-# GOSHA_PUBLIC_URL, WATCHDOG_SCRAPE_STALE_HOURS (3), WATCHDOG_REMIND_HOURS (6).
+# GOSHA_PUBLIC_URL, WATCHDOG_SCRAPE_STALE_HOURS (only raises the limit,
+# which defaults to 2 x the bot's scrape interval + 1h), WATCHDOG_REMIND_HOURS (6).
 # Without both secrets, or with alerts switched off, the job skips itself.
 
 on:

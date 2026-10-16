@@ -6,7 +6,8 @@ or its server is gone" without credentials. The bot container has no HTTP
 port; the database is the only thing both sides share, so the API answers
 from there.
 
-Only timestamps and one count — nothing about users, searches or postings.
+Only timestamps, one count and the scrape interval — nothing about users,
+searches or postings.
 Cached briefly so an unauthenticated endpoint cannot be turned into a
 query-per-request load on the database.
 """
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from datetime import datetime, timezone
 
@@ -52,18 +54,37 @@ async def _compute() -> dict:
         last_seen = (await session.execute(select(func.max(Job.last_seen_at)))).scalar()
 
     cycle_jobs = None
+    interval = None
     if cycle is not None:
         try:
-            cycle_jobs = int(json.loads(cycle[1] or "{}").get("total"))
+            payload = json.loads(cycle[1] or "{}")
         except (ValueError, TypeError):
-            cycle_jobs = None
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        cycle_jobs = _positive_int(payload.get("total"), allow_zero=True)
+        interval = _positive_int(payload.get("interval_minutes"))
+    if interval is None:
+        # Events written before the bot recorded its interval: the API
+        # reads the same .env, so its SCRAPE_INTERVAL_MINUTES is the bot's.
+        interval = _positive_int(os.getenv("SCRAPE_INTERVAL_MINUTES", "").strip() or None)
     return {
         "now": datetime.now(timezone.utc).isoformat(),
         "last_scrape_cycle_at": _iso(cycle[0]) if cycle is not None else None,
         "last_scrape_cycle_jobs": cycle_jobs,
         "last_new_job_at": _iso(last_new),
         "last_job_seen_at": _iso(last_seen),
+        # How often a cycle starts; the watchdog allows 2 × this + 1h.
+        "scrape_interval_minutes": interval,
     }
+
+
+def _positive_int(value: object, allow_zero: bool = False) -> int | None:
+    try:
+        number = int(value)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return None
+    return number if number > 0 or (allow_zero and number == 0) else None
 
 
 async def scrape_freshness() -> dict:

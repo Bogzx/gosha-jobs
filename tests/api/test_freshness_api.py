@@ -45,8 +45,37 @@ async def test_freshness_reports_last_cycle_and_newest_job(client, session):
     # Timestamps and one count — nothing about users, searches or postings.
     assert set(body) == {
         "now", "last_scrape_cycle_at", "last_scrape_cycle_jobs",
-        "last_new_job_at", "last_job_seen_at",
+        "last_new_job_at", "last_job_seen_at", "scrape_interval_minutes",
     }
+
+
+@pytest.mark.asyncio
+async def test_freshness_reports_the_interval_the_bot_ran_with(client, session, monkeypatch):
+    from gosha.events import Event
+
+    monkeypatch.setenv("SCRAPE_INTERVAL_MINUTES", "60")  # the bot's event wins
+    event = Event(event_type="scrape.cycle")
+    event.payload = {"total": 0, "sources": 3, "interval_minutes": 240}
+    session.add(event)
+    await session.commit()
+    body = (await client.get("/api/v1/health/freshness")).json()
+    assert body["scrape_interval_minutes"] == 240
+    assert body["last_scrape_cycle_jobs"] == 0
+
+
+@pytest.mark.asyncio
+async def test_freshness_interval_falls_back_to_the_shared_env(client, session, monkeypatch):
+    from gosha.events import Event
+
+    event = Event(event_type="scrape.cycle")
+    event.payload = {"total": 5, "sources": 3}  # written by an older bot
+    session.add(event)
+    await session.commit()
+    monkeypatch.setenv("SCRAPE_INTERVAL_MINUTES", "240")
+    assert (await client.get("/api/v1/health/freshness")).json()["scrape_interval_minutes"] == 240
+    freshness.reset_cache()
+    monkeypatch.delenv("SCRAPE_INTERVAL_MINUTES")
+    assert (await client.get("/api/v1/health/freshness")).json()["scrape_interval_minutes"] is None
 
 
 @pytest.mark.asyncio

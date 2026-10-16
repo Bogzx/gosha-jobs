@@ -440,6 +440,12 @@ async def publish_scrape_report(bot: Any, alert_channel_id: int, report: Any) ->
             {"total": 0, "sources": 0, "idle": True} if idle
             else {"total": int(report.total), "sources": len(report.per_source)}
         )
+        # The interval this bot really runs with: the site watchdog derives
+        # its "no cycle for too long" limit from it (via the freshness
+        # endpoint), so a 4-hour schedule is not called dead after 3 hours.
+        interval = getattr(getattr(bot, "settings", None), "scrape_interval_minutes", None)
+        if isinstance(interval, int) and interval > 0:
+            payload["interval_minutes"] = interval
         await get_event_store().emit("scrape.cycle", payload=payload)
     except Exception as exc:
         log.warning("Could not record the scrape.cycle event: %s", exc)

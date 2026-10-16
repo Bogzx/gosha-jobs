@@ -501,6 +501,30 @@ async def test_a_report_is_judged_once(monkeypatch):
     assert events[0] == {"total": 0, "sources": 1}
 
 
+@pytest.mark.asyncio
+async def test_cycle_event_carries_the_bots_scrape_interval(monkeypatch):
+    """The site watchdog derives its stale limit from it (4h prod schedule)."""
+    from gosha import alerts
+    from gosha.scrape_health import ScrapeHealth
+
+    events: list[dict] = []
+
+    class Store:
+        async def emit(self, event_type, payload=None, **kw):
+            events.append(payload)
+
+    monkeypatch.setattr("gosha.events.get_event_store", lambda: Store())
+    bot = FakeBot()
+    bot.settings.scrape_interval_minutes = 240
+    report = ScrapeHealth().record_cycle(["ejobs"], {"ejobs": 5})
+    await alerts.publish_scrape_report(bot, 0, report)
+    await alerts.publish_scrape_report(bot, 0, report)  # idle re-publish
+    assert events == [
+        {"total": 5, "sources": 1, "interval_minutes": 240},
+        {"total": 0, "sources": 0, "idle": True, "interval_minutes": 240},
+    ]
+
+
 # ── Undelivered alerts are retried, not counted as said ──────────────
 
 
@@ -550,3 +574,29 @@ async def test_scrape_report_retried_when_the_dm_fails(monkeypatch):
     bot.users[OWNER].fail = False
     await alerts.publish_scrape_report(bot, 0, health.record_cycle(["ejobs"], {}))
     assert len(bot.dms(OWNER)) == 1 and "0 jobs" in bot.dms(OWNER)[0]
+
+
+def test_four_hour_cycle_overrun_pages_once_then_recovers():
+    """Prod: cycles every 4h, normally 35–60 min. One that is still running
+    at the next start (APScheduler MAX_INSTANCES) is abnormal: one page,
+    "recovered" when it finishes, nothing for normal cycles after."""
+    from apscheduler.events import (
+        EVENT_JOB_EXECUTED,
+        EVENT_JOB_MAX_INSTANCES,
+        JobExecutionEvent,
+        JobSubmissionEvent,
+    )
+
+    clock = Clock()
+    alerter = Alerter(cooldown_seconds=6 * 3600, clock=clock)
+    jobs = {"scrape_cycle"}
+    skipped = JobSubmissionEvent(EVENT_JOB_MAX_INSTANCES, "scrape_cycle", "default", [])
+    ran = JobExecutionEvent(EVENT_JOB_EXECUTED, "scrape_cycle", "default", None)
+
+    page = alerter.decide(*scheduler_event_conditions(skipped, jobs))  # 4h mark, still running
+    assert len(page.raised) == 1 and "still going" in page.raised[0]
+    clock.t += 30 * 60
+    assert alerter.decide(*scheduler_event_conditions(ran, jobs)).recovered
+    for _ in range(6):  # a day of normal cycles
+        clock.t += 4 * 3600
+        assert not alerter.decide(*scheduler_event_conditions(ran, jobs))

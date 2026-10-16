@@ -49,9 +49,59 @@ def test_server_down_is_reported():
 
 def test_hung_or_crashed_bot_is_reported():
     """The API is up but no cycle has finished for hours: the bot is gone."""
-    failing, cleared = wd.evaluate(BASE, fetcher(freshness=fresh(cycle_age_h=7)), now=NOW)
+    data = fresh(cycle_age_h=7)
+    data["scrape_interval_minutes"] = 60
+    failing, cleared = wd.evaluate(BASE, fetcher(freshness=data), now=NOW)
     assert "No scrape cycle has finished for 7.0h" in failing[wd.KEY_SCRAPE]
+    assert "limit 3h" in failing[wd.KEY_SCRAPE]
     assert wd.KEY_DOWN in cleared
+
+
+def _with_interval(cycle_age_h, interval):
+    data = fresh(cycle_age_h=cycle_age_h)
+    if interval is not None:
+        data["scrape_interval_minutes"] = interval
+    return fetcher(freshness=data)
+
+
+def test_four_hour_schedule_gap_is_not_a_dead_bot():
+    """Prod starts a cycle every 4h; the newest record is up to ~4h old."""
+    failing, _ = wd.evaluate(BASE, _with_interval(4.0, 240), now=NOW)
+    assert failing == {}
+    failing, _ = wd.evaluate(BASE, _with_interval(8.9, 240), now=NOW)
+    assert failing == {}
+
+
+def test_four_hour_schedule_pages_after_two_missed_cycles():
+    failing, _ = wd.evaluate(BASE, _with_interval(9.2, 240), now=NOW)
+    assert "limit 9h" in failing[wd.KEY_SCRAPE]
+
+
+def test_unknown_interval_assumes_nine_hours_not_three():
+    """An older deploy's endpoint does not report the interval."""
+    assert wd.evaluate(BASE, _with_interval(8.5, None), now=NOW)[0] == {}
+    failing, _ = wd.evaluate(BASE, _with_interval(9.5, None), now=NOW)
+    assert "limit 9h" in failing[wd.KEY_SCRAPE]
+
+
+def test_configured_limit_only_ever_raises_the_schedule_floor():
+    assert wd.scrape_stale_limit_hours(None, 240) == 9
+    assert wd.scrape_stale_limit_hours(2, 240) == 9  # cannot page on a normal gap
+    assert wd.scrape_stale_limit_hours(12, 240) == 12
+    assert wd.scrape_stale_limit_hours(None, 60) == 3
+    assert wd.scrape_stale_limit_hours(None, None) == 9
+    assert wd.scrape_stale_limit_hours(None, "240") == 9  # junk → the safe default
+    assert wd.scrape_stale_limit_hours(None, True) == 9
+
+
+def test_main_reads_the_configured_limit(tmp_path, dm_env, monkeypatch):
+    sent, _ = dm_env
+    monkeypatch.setenv("WATCHDOG_SCRAPE_STALE_HOURS", "12")
+    monkeypatch.setattr(wd, "datetime", _FrozenDatetime)
+    state = tmp_path / "s.json"
+    assert wd.main(["--url", BASE, "--state-file", str(state)],
+                   fetch=_with_interval(10, 240)) == 0
+    assert sent == []
 
 
 def test_no_new_jobs_is_left_to_the_bot():
