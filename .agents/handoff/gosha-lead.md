@@ -134,3 +134,15 @@ pipe (c5cc7bc corrections checkpoint). Full suite 1237 passed / 9 skipped; ruff 
 - End-to-end review launched: 5 read-only reviewers (delivery, scraping, feed, operations, product);
   shared context: scratchpad review_context.md.
 Deploy checklist update: step 4 → SCRAPE_BROWSER_FALLBACK is ON by owner decision (already in prod .env).
+
+## Prod writes by owner decision (2026-10-16 ~13:40 UTC) — rollback info
+- subscriptions #16 ["Cluj-Napoca","Romania"]→["Cluj-Napoca"], #17 ["Bucuresti","Romania"]→["Bucuresti"].
+- subscriptions #16–#20 keywords '["computer science internship — 19 intern/junior roles"]' (literal — escape
+  in the text) → '["computer science internship"]'.
+- 1,201 active LinkedIn jobs with US locations set is_active=false (none deleted); ids in scratchpad
+  deact/ROLLBACK_reactivate_these_ids_20261016.txt. European non-Romanian rows (Munich, Kraków, …) kept by the
+  approved rule "outside Romania/Europe/remote". Active jobs: 1,629 → 428.
+- Owner decisions: monthly empty-search nudge (default OFF until flipped after deploy) + Apply-click redirect
+  tracking → gosha-health; ranges labelled by lower bound → gosha-label.
+- Review results (delivery): prod DM precision ~0.5 strict; threshold not the lever; gates are. Details in
+  scratchpad review-delivery/ (session-local) and forwarded to gosha-pipe/rank/scrape.
