@@ -326,7 +326,10 @@ def baseline_combos(cycle: int = 0) -> list[BaselineCombo]:
     """The baseline searches for scrape cycle number `cycle` (no I/O).
 
     `cycle` is for a later rotation over more searches; every cycle gets
-    the same searches today.
+    the same searches today. Before adding a rotation, tell gosha-pipe:
+    searches that change every cycle keep the native boards in the
+    scrape-health grace period (gosha/scrape_health.py), so rotating combos
+    must stay out of the pipeline's searches_by_source.
     """
     if not baseline_enabled():
         return []

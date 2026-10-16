@@ -409,6 +409,9 @@ All uncommitted, in the working tree. `tests/test_scraper_jobspy.py` 49 passed; 
    `refreshed = row.get("date_posted_is_refresh") is True`; for an existing row with a refresh date set
    `posted_at = min(existing.posted_at, new posted_at, existing.first_seen_at)` (naive datetimes as UTC);
    other boards replace the date as before; new rows unchanged. The 8 rows heal on their next sighting.
+   gosha-pipe implemented the hook (tests/test_pipeline.py::test_refresh_dates_never_move_posted_at_forward), reading
+   the flag with `isinstance(v, (bool, np.bool_))`: my spec's `is True` was a bug (a pandas bool column yields
+   numpy.bool_, so it was always False).
    Full suite at the time: 1241 passed, 9 skipped, 2 failed in `tests/test_filters_accuracy.py::test_required_years`
    (gosha-pipe's in-flight red tests; `filters.py` untouched by us).
 
@@ -514,7 +517,78 @@ are left out (Indeed: 9 rows for python @ Cluj; Glassdoor has no Romanian domain
 5. Health: baseline combos make sources attempted every cycle (steadier yields); `searches_by_source`
    changes once on rollout, so gosha-health's per-source baselines re-learn — tell gosha-health.
 
+### Pipeline side as implemented by gosha-pipe (2026-10-16)
+`pipeline._with_baseline` + `run_scrape_stage`, behind SCRAPE_BASELINE (default off); runs with zero subscriptions;
+`boards=()` skips JobSpy and counts no JobSpy board attempted; baseline rows go through the normal match.
+`cycle = int(time.time() // (4 * 3600))`. Tests: `tests/test_pipeline_baseline.py`. Deviations from this spec
+(both accepted): (1) merge key is (keyword, canonical place, max_age_days), so windows stay separate queries
+(lead's rule: a 3-day search must not share a capped 14/30-day query); a sub "junior developer"/cluj/7d does not
+drop baseline cluj/14d. (2) Each baseline combo is inserted right after the last subscription combo for the same
+place, so the eJobs browse / Hipo catalog 10-min caches answer it.
+**Before adding any rotation to `baseline_combos(cycle)` (e.g. Tier B):** tell gosha-pipe first (its TODO 11).
+A set of searches that changes every cycle would keep the native boards in gosha-health's grace period
+forever, so collapse detection would go blind. gosha-pipe will then keep rotating combos out of
+`searches_by_source` (or gosha-health adds a separate parameter). Tier A does not rotate, so nothing to do today.
+Risk (gosha-pipe's TODO 6): in regex-fallback mode generic keywords already match every job in their city;
+baseline rows enlarge that pool.
+
 ### Acceptance
 - After one deployed cycle: rows upserted per source from baseline combos, and how many are new.
 - Feed: for each eval persona, how many of the feed's top 20 are student-level and in the persona's city,
   before vs after (gosha-rank's eval harness). No live probe for this without lead OK.
+
+## Live-request rule (lead, 2026-10-16, corrected)
+- No live board request from this server without the lead's OK, and no approvals while a prod cycle runs.
+- Cycles start every 4 h at :26 UTC (00:26, 04:26, 08:26, 12:26, 16:26, 20:26) and last 35+ min. A cycle
+  is running if the last `=== Scrape cycle started ===` in `docker logs --since 5h gosha-bot` (read-only)
+  has no later `Scrape health:` line.
+- Log facts (read-only, 2026-10-16 ~13:00): prod JobSpy uses BOTH routes, since SCRAPE_DIRECT=true adds the
+  server IP as a route: last 72 h, 1,814 searches "via direct" vs 1,779 "via socks5://127.0.0.1:1080". So
+  JobSpy traffic (LinkedIn included) partly comes from this server's IP; native boards use it always.
+  BestJobs: no HTTP 403 in the last 120 h of logs up to the 08:26 cycle (every hour 200/307;
+  `bestjobs=274→52` in that cycle's health line). The 12:26 cycle had not reached the native phase yet.
+  Waiting for the lead's go to analyse the 12:26 cycle's BestJobs result from logs only.
+
+## BestJobs 403 from this host (2026-10-16 ~13:15 UTC, offline + prod logs, no probes)
+Observation: prod's 12:26 cycle got `bestjobs=274→52` (200s until ~13:05), while gosha-label's two runs from
+this host's shell (~12:30, and 12:42–13:00: 10 searches) got 403 on every BestJobs search; laptop runs with the
+WIP code also got 403, and so did my Cluj measurements earlier (httpx and requests; curl and curl_cffi got 200).
+**Hypothesis "the WIP HTTP client changes make BestJobs refuse us": rejected on the code.**
+- Prod runs `main` = 5490d6a (image gosha-bot:latest, built 2026-10-12). `git diff 5490d6a HEAD -- gosha/scrapers/`:
+  with `SCRAPE_BROWSER_FALLBACK` unset, `base.http_client()` builds exactly the old client:
+  `httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True, transport=None)`;
+  `transport=None` is httpx's default; USER_AGENT/DEFAULT_HEADERS unchanged. bestjobs.py: only the client
+  construction and the estimatedSalary line; URL/params unchanged (gosha-label's 403'd URL
+  `/v1/jobs?keyword=.net+developer&location=bucharest-romania` has the same shape as prod's 200s).
+- No HTTP/2, cookie or redirect change. gosha-label's `run_targeted.py` only wraps
+  `httpx.AsyncHTTPTransport.handle_async_request` with a lock + 5.5 s gap (no header/TLS change), fallback off.
+- Deploy inputs unchanged: no diff in constraints.txt, requirements*.txt, Dockerfile (pyproject: ruff exclude only).
+  httpx 0.28.1 / httpcore 1.0.9 / h11 0.16.0 pinned on both sides.
+**Same egress, different runtime.** Host and container leave by the same route (`ip route get 35.244.184.128` →
+enp0s6, no Tailscale exit node; container on docker NAT, IPv6 off; BestJobs is IPv4-only, 35.244.184.128 = a
+Google Cloud LB); no *_PROXY env on either side. The difference is the Python runtime and so the TLS ClientHello:
+prod = Debian `python:3.11-slim` CPython 3.11.17 with the image's system OpenSSL; ours = uv's
+python-build-standalone CPython 3.11.16 (`~/.local/share/uv/python/cpython-3.11.16-linux-aarch64-gnu`) with bundled
+OpenSSL 3.5.9. Most likely cause: BestJobs' edge refuses this runtime's TLS fingerprint (consistent with curl/
+curl_cffi succeeding where Python failed in Cluj). **Not yet confirmed.**
+**Consequence:** deploying this branch should not break BestJobs (same image base, pins and request); BestJobs
+numbers measured from the uv venv (agents, laptop, CI-like local runs) are not valid evidence of prod behaviour.
+**Fix proposal:** no scraper change; keep SCRAPE_BROWSER_FALLBACK off. For agents' live measurements, run them in
+the prod runtime: `docker run --rm -v $PWD:/w:ro -w /w gosha-bot:latest python …` (throwaway container from the
+image, the running containers untouched). Optional (ours): `scripts/smoke_scrapers.py` prints the runtime
+(Python build + `ssl.OPENSSL_VERSION`) next to a 403 so it is attributable.
+**Confirmation (needs lead OK, outside a cycle, e.g. 14:00–16:00):** 2 requests to api.bestjobs.eu, ≥60 s apart, one
+`http_client().get(API_URL, params={"keyword": "junior developer", "location": "cluj-napoca-romania"})` each (no
+adapter search, so no detail fetches): (a) WIP code mounted read-only into a throwaway `gosha-bot:latest`
+container; (b) the same script in the host .venv. Expected (a) 200, (b) 403. If (a) is 403 too, one more: 5490d6a
+code in the same image.
+**Confirmed (lead-approved, 2 of the 3 allowed GETs, 13:11:25 and 13:12:38 UTC, no cycle running).** The same script
+(`.agents/handoff/gosha-scrape-probes/bj_probe.py.txt`: one `http_client().get` to
+`/v1/jobs?keyword=junior+developer&location=cluj-napoca-romania`, list endpoint only, fallback asserted off), with the WIP code:
+- (a) throwaway `docker run --rm --name gosha-agents-probe --network bridge` from `gosha-bot:latest`, code mounted
+  read-only, no env file: CPython 3.11.17, OpenSSL 3.5.7 → **200**, HTTP/1.1, `server: nginx`, `via: Varnish, 1.1 google`, 25 items.
+- (b) host `.venv`: CPython 3.11.16 (uv standalone), OpenSSL 3.5.9 → **403**, no `server`/`via` header (refused at
+  Google's front end before BestJobs' nginx), body "403 Forbidden".
+- (c) not needed.
+Conclusion: the runtime (its TLS handshake) decides, not our code. Deploying this branch keeps BestJobs working.
+Recipe for live checks in the prod image: `.agents/README.md` → "Live checks against job boards".

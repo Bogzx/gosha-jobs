@@ -38,6 +38,28 @@ file; a change in someone else's file is requested through
 - Ranking changes are validated on both `eval/postings.jsonl` and
   `eval/heldout/`; never tune on the held-out set.
 
+## Live checks against job boards: run them in the prod image
+
+The agents' `.venv` is uv's standalone CPython (3.11.16, bundled OpenSSL 3.5.9).
+Prod runs Debian `python:3.11-slim` (CPython 3.11.17, OpenSSL 3.5.7). BestJobs'
+Google front end refuses the venv's TLS handshake and accepts prod's. On 2026-10-16
+13:11–13:12 UTC, the same request, the same code and the same IP gave **200 from the
+prod image and 403 from the venv**. So a board measured from the venv is not evidence
+of what prod sees. Run live checks in a throwaway container from the prod image instead:
+
+```bash
+# Only with gosha-lead's OK, never while a prod cycle runs (see the handoffs' timing rule).
+docker run --rm -i --name gosha-agents-probe --network bridge --entrypoint python \
+  -v "$PWD":/w:ro -w /w -e PYTHONPATH=/w -e PYTHONDONTWRITEBYTECODE=1 \
+  gosha-bot:latest - < /path/to/your_script.py > /path/to/output.txt
+```
+
+- No `--env-file`, no secrets, no database, and no volume other than the read-only code mount.
+- Never touch the running `gosha-bot`, `gosha-api`, `gosha-postgres` or `gosha-caddy` containers.
+- The script comes in on stdin and its output goes to stdout. The mount is read-only, so it cannot write files.
+- The image has `main`'s installed packages. Branch code that needs a new dependency will not import there.
+- Print `sys.version` and `ssl.OPENSSL_VERSION` with every result, so it can be attributed.
+
 ## Resume on the server
 
 ```bash

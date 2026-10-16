@@ -1,0 +1,22 @@
+"""One BestJobs list request with the adapter's own client; prints the runtime and the status."""
+import asyncio, datetime, os, platform, ssl, sys
+import httpx
+from gosha.scrapers import bestjobs
+from gosha.scrapers.base import browser_fallback_enabled, http_client
+
+assert not browser_fallback_enabled()
+
+async def main():
+    print("time", datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"))
+    print("python", sys.version.split()[0], platform.python_implementation(), sys.executable)
+    print("openssl", ssl.OPENSSL_VERSION, "| httpx", httpx.__version__)
+    async with http_client() as client:
+        r = await client.get(bestjobs.API_URL, params={"keyword": "junior developer", "location": "cluj-napoca-romania"})
+    print("url", r.request.url)
+    print("status", r.status_code, r.http_version, "server=", r.headers.get("server"), "via=", r.headers.get("via"))
+    if r.status_code == 200:
+        print("items", len(r.json().get("items", r.json().get("data", [])) or []))
+    else:
+        print("body", r.text[:200].replace("\n", " "))
+
+asyncio.run(main())
