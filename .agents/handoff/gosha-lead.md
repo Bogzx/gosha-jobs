@@ -122,3 +122,15 @@ pipe (c5cc7bc corrections checkpoint). Full suite 1237 passed / 9 skipped; ruff 
    LINKEDIN_RESULTS_PER_TERM to 60.
 4. SCRAPE_BASELINE stays off until the pipe hook is reviewed; SCRAPE_BROWSER_FALLBACK stays off (BestJobs works from prod).
 5. Owner decisions: subscriptions #24 ["iasi","kra","mun"] and #25 ["llocation:Cluj"] (prod rows untouched).
+
+## Owner decisions applied (2026-10-16 ~13:20 UTC)
+- #2 Subscriptions fixed in PROD (only rows touched): #24 ["iasi","kra","mun"] → ["iasi"] (kra/mun matched
+  nothing; user can re-add a real city), #25 ["llocation:Cluj"] → ["Cluj"]. Backup of all subscriptions:
+  scratchpad subs_backup_20261016T1315.tsv (session-local; values above are the full rollback).
+- #3 SCRAPE_BROWSER_FALLBACK=true appended to /home/ubuntu/gosha/.env (backup .env.bak-20261016T1316). No restart;
+  the running 5490d6a code ignores it; active after deploy, and only after a BestJobs 403. Note: BestJobs works
+  from prod today (venv 403s were the agents' TLS fingerprint, confirmed with 2 requests).
+- #4 "Exactly 2 years = junior" applied to both label sets (gosha-label), then baselines regenerated (gosha-rank).
+- End-to-end review launched: 5 read-only reviewers (delivery, scraping, feed, operations, product);
+  shared context: scratchpad review_context.md.
+Deploy checklist update: step 4 → SCRAPE_BROWSER_FALLBACK is ON by owner decision (already in prod .env).
