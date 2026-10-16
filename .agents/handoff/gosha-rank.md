@@ -668,3 +668,14 @@ Key numbers (provisional):
   low-n), scoped-feed table with paired CIs, full-feed held-out CI (−0.015..+0.153), limitations (place, few interns,
   modelled searches), next steps. README L91/L93 rewritten.
 - Post-release: places in the eval sets (board fetches, lead OK), step 4 feed dedup (normalize_key), gosha-label note.
+
+## CURRENT STATE (2026-10-16 18:05 UTC): RELEASED — standing by
+- main = 1fe6243, deployed 18:05 UTC (lead: first cycle's 20 DMs all verified relevant by hand). All my Session 7–8 work
+  is committed (DM score in fe6bb17); nothing of mine is uncommitted.
+- Open, NOT started (lead: no new work, no live requests until told):
+  1. Baselines predate 03e5314 → 1fe6243 (filters.py / pipeline.py +166/−12: "experienced"-only and description-less
+     roles out of junior searches, AI-training gig sites, non-CS plant roles). The DM pools come from pipeline.prefilter,
+     so `eval_ranking.py --check` (main and held-out) may have moved. Run both checks first; regenerate baselines if needed.
+  2. Places in the eval sets (needs board fetches = lead OK; gosha-label owns the data).
+  3. Feed dedup by title+company with gosha-scrape's normalize_key.
+  4. Note to gosha-label: its option 3 (score only what the product shows) is what the DM and scoped-feed evals now do.

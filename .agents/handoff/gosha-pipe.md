@@ -1,4 +1,4 @@
-# POST-DEPLOY FIX (gosha-pipe, 2026-10-16 ~18:00 UTC) — for gosha-lead, on top of 9b09080
+# POST-DEPLOY FIX (gosha-pipe, 2026-10-16 ~18:00 UTC) — RELEASED: committed in 1fe6243, main deployed 18:05 UTC; the lead verified the first cycle's 20 DMs by hand, all relevant
 
 The lead judged the 65 DMs of the first 03e5314 cycle (17:35): 51 right, 14 wrong. Fixes, each tested on the real titles and text (tests/test_dm_postdeploy.py):
 - **A, "experienced" wording → not junior** (`filters.asks_experienced`, applied in `_asks_junior_years`, so for the junior level, the board's "entry" label and title_is_relevant alike). Patterns: "looking for / seeking / hiring an experienced", "experienced and motivated <role>" (not "… team/colleagues"), "proven … experience as/in <role>", "proven track record", "căutăm un … experimentat". Skipped when the sentence is a nice-to-have (either side, "Preferred qualifications: …") or negated. "Proven experience working with Excel" (tools) does not count. Also `_YEARS_RE` reads "4y+ of experience" (NTT DATA's Java posting).
@@ -274,7 +274,8 @@ Each item has tests with the real prod titles:
 - Before the rule I also ran old-vs-new aggregate level splits on eval/heldout, which printed the titles of postings whose years changed (the two above). From now on, only eval/postings.jsonl.
 
 ## In progress (exact state)
-Nothing half-applied. Full suite: 1527+ passed, 9 skipped; ruff clean (2026-10-16, server, after the DM relevance round).
+Nothing in progress; working tree clean at 0e80e02 (all my work is committed, last in 1fe6243, deployed 18:05 UTC 2026-10-16). Full suite 1643 passed, 9 skipped; ruff clean. Standing by per the lead: no new work, no live requests.
+Watch after release: rows held back for want of a description stay pending until it arrives or DM_RETRY_WINDOW (2 days) ends. Flagged, not changed: months are not parsed as years ("min. 24 luni").
 
 ## Remaining TODO (prioritized)
 1. **Web feed hard filters**: owned and being implemented by gosha-rank in recommend.py (their handoff "Feed hard filters"). Rule agreed: per active search, `search_location_ok` AND `matches_experience_level`, OR'ed; candidates only, never the window. Nothing for me unless they ask.
