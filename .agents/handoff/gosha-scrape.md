@@ -365,6 +365,21 @@ All uncommitted, in the working tree. `tests/test_scraper_jobspy.py` 49 passed; 
    (indeed raises on the tunnel → linkedin called once, indeed retried direct, both rows returned),
    `test_rows_of_working_boards_survive_when_a_board_fails_everywhere`. Full suite 1095 passed, 9 skipped.
 
+12. **Invisible characters and double-escaped entities (lead review points 5 and 6)** —
+   `gosha/scrapers/base.py` `_INVISIBLE_RE`/`strip_invisible` (Cf chars incl. U+200B–200F, U+2060–2064,
+   U+FEFF, soft hyphen, bidi, tag chars; variation selectors U+FE00–FE0F and U+E0100–E01EF; C0/C1 controls
+   except tab/newline) and `RawJob.__post_init__` (cleans title/company/location/description for every native
+   adapter); `gosha/scrapers/details.py` `html_to_text` now unescapes up to twice more while entities remain
+   (Hipo JSON-LD is escaped twice: "&amp;amp;", "&amp;nbsp;", "&amp;#8203;"), strips tags that only appear after
+   decoding (strict tag regex, so "R&D <3" survives), then strips invisibles; `gosha/scraper.py`
+   `scrape_jobs_raw` cleans JobSpy's text columns. Held-out set: entities 29 → 0 postings, invisibles 43 → 0.
+   Prod (read-only, active rows): eJobs **54/64** watermarked, LinkedIn 18/1373, BestJobs 4/88, Indeed 1/19;
+   Hipo 8/20 with entities. Stored rows are fixed only when re-scraped with a changed description
+   (pipeline.py upsert); a one-off backfill is the pipeline/migrate owner's call.
+   Tests: `tests/scrapers/test_text_cleaning.py` (18, incl. the exact eJobs string from heldout-ejobs-013).
+   Note on 11: Glassdoor's "location '…' not found" returns None in jobspy (log only, no exception), so
+   unresolvable locations are NOT retried on later routes.
+
 Lead decision (e6fdc92): keep the cache, keep LinkedIn at 30; raise to 60 only after a deployed cycle
 shows search-429s down (owner deploys).
 
@@ -383,5 +398,4 @@ e. Ask gosha-pipe to dedupe identical keyword×location combos per cycle and dro
 TODO 3 ("junior X" fallback for Indeed): design only so far — expand_keyword gives 1 term for
 "junior java" (Indeed 0) but 19 for "computer science internship"; a stripped variant for every term
 would double searches. Plan: Indeed-only stripped variant, at most 2 per keyword. Not started.
-Lead review points 5 (invisible Unicode in eJobs), 6 (Hipo description entities), 7a (baseline
-catalog) still open.
+Lead review points 5 and 6: done (item 12). 7a (baseline catalog, with gosha-pipe) still open.

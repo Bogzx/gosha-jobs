@@ -38,6 +38,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from gosha.scrapers.base import strip_invisible
+
 log = logging.getLogger(__name__)
 
 DETAIL_TTL_SECONDS = 24 * 3600
@@ -52,13 +54,29 @@ _budget: dict[str, tuple[float, int]] = {}
 
 _BREAK_RE = re.compile(r"</p>|</div>|</li>|</h\d>|<br\s*/?>", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
+# After unescaping, only what is plainly a tag: "R&amp;D &lt;3" stays "R&D <3".
+_DECODED_TAG_RE = re.compile(r"</?[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*)?/?>")
+_ENTITY_RE = re.compile(r"&(?:[a-zA-Z][a-zA-Z0-9]{1,31}|#\d{1,7}|#[xX][0-9a-fA-F]{1,6});")
 
 
 def html_to_text(markup: str | None) -> str:
-    """Readable plain text from an HTML fragment, paragraph breaks kept."""
+    """Readable plain text from an HTML fragment, paragraph breaks kept.
+
+    Hipo's JSON-LD escapes its text twice ("Quality &amp;amp; Compliance",
+    "&amp;nbsp;"), and some boards ship escaped markup ("&lt;p&gt;"): up to
+    two more unescapes while entities remain, then any tags that decoded.
+    Invisible characters are dropped (base.strip_invisible).
+    """
     text = _BREAK_RE.sub("\n", markup or "")
     text = _TAG_RE.sub(" ", text)
-    text = html_lib.unescape(text).replace("\xa0", " ")
+    text = html_lib.unescape(text)
+    for _ in range(2):
+        if not _ENTITY_RE.search(text):
+            break
+        text = html_lib.unescape(text)
+    if _DECODED_TAG_RE.search(text):
+        text = _DECODED_TAG_RE.sub(" ", _BREAK_RE.sub("\n", text))
+    text = strip_invisible(text).replace("\xa0", " ")
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r" *\n *", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -28,6 +29,25 @@ HTTP_TIMEOUT = 25.0
 # rarely put "junior" in the title while the board files them as
 # entry-level, so title-only filtering threw most of them away.
 EXPERIENCE_LEVELS = ("intern", "entry", "mid", "senior")
+
+# Characters that render as nothing: format characters (category Cf: zero-
+# width space/joiners, word joiner, BOM, soft hyphen, bidi controls, tag
+# characters), variation selectors, and control characters other than tab
+# and newline. eJobs ends description lines with a watermark of variation
+# selectors and zero-width spaces ("Cloud & AWS\ufe01\ufe00\u200b..."), and
+# RemoteOK has stray C1 controls; they became TF-IDF tokens, embedding
+# noise and part of the dedup key.
+_INVISIBLE_RE = re.compile(
+    "[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u00ad\u0600-\u0605\u061c\u06dd\u070f"
+    "\u08e2\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f"
+    "\ufe00-\ufe0f\ufeff\ufff9-\ufffb\U000110bd\U0001bca0-\U0001bca3"
+    "\U0001d173-\U0001d17a\U000e0001\U000e0020-\U000e007f\U000e0100-\U000e01ef]"
+)
+
+
+def strip_invisible(text: str) -> str:
+    """`text` without characters that render as nothing (see _INVISIBLE_RE)."""
+    return _INVISIBLE_RE.sub("", text)
 
 # Hosts that refused a plain request (403) and answered one made with a
 # browser's TLS fingerprint. Process-wide, so the refused request is paid
@@ -174,6 +194,13 @@ class RawJob:
     source: str = "unknown"
     # One of EXPERIENCE_LEVELS when the board says so; None otherwise.
     experience_level: str | None = None
+
+    def __post_init__(self) -> None:
+        # Every adapter's text goes through here on its way to the pipeline.
+        for name in ("title", "company", "location", "description"):
+            value = getattr(self, name)
+            if isinstance(value, str):
+                setattr(self, name, strip_invisible(value).strip())
 
     def to_record(self) -> dict[str, Any]:
         """Column names match what gosha.pipeline.upsert_jobs reads."""

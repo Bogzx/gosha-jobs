@@ -18,6 +18,7 @@ import pandas as pd
 from jobspy import scrape_jobs
 
 from gosha.filters import city_only, expand_keyword, normalize_location
+from gosha.scrapers.base import strip_invisible
 
 if TYPE_CHECKING:
     from gosha.ssh_tunnels import SSHTunnelManager
@@ -362,6 +363,13 @@ async def scrape_jobs_raw(
     url_col = "job_url" if "job_url" in merged.columns else "link"
     if url_col in merged.columns:
         merged = merged.drop_duplicates(subset=[url_col], keep="first")
+
+    # The native adapters clean their text in RawJob; JobSpy's rows here.
+    for column in ("title", "company", "location", "description"):
+        if column in merged.columns:
+            merged[column] = merged[column].map(
+                lambda v: strip_invisible(v).strip() if isinstance(v, str) else v
+            )
 
     if "job_level" in merged.columns:
         merged["experience_level"] = merged["job_level"].map(experience_level_from_job_level)
