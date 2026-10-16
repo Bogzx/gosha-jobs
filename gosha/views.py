@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import discord
 
@@ -251,50 +254,186 @@ def build_job_embed_with_buttons(
     user_job_id: int,
     relevance_score: float | None = None,
     match_info: str | None = None,
+    scored_with_cv: bool = False,
 ) -> tuple[discord.Embed, JobFeedbackView]:
     """Build a Discord embed + feedback buttons for a job delivery.
 
-    Returns (embed, view) tuple.
+    The score is a DM score (gosha.matching.dm_match_label) unless the
+    user's CV was blended in, which keeps the cosine scale (match_label).
+
+    Every value is whitespace-clean and non-empty (Discord refuses the
+    whole message over one empty field). Returns (embed, view) tuple.
     """
     # Discord limits: title 256 chars, field value 1024 chars, description 4096 chars
-    title = (job.title[:253] + "...") if len(job.title or "") > 256 else job.title
     embed = discord.Embed(
-        title=title,
-        url=job.url,
+        title=_clip(_one_line(job.title) or "Untitled role", 256),
+        url=_web_url(job.url),
         color=discord.Color.green(),
     )
-    company = (job.company[:100] + "...") if len(job.company or "") > 100 else job.company
-    embed.add_field(name="Company", value=company or "Unknown", inline=True)
-    embed.add_field(name="Location", value=(job.location or "N/A")[:100], inline=True)
+    embed.add_field(name="Company", value=_clip(_one_line(job.company) or "Unknown", 100), inline=True)
+    embed.add_field(name="Location", value=_short_places(job.location), inline=True)
+    embed.add_field(name="Salary", value=_salary(job), inline=True)
+    embed.add_field(name="Posted", value=_posted(job), inline=True)
 
-    if job.salary_min or job.salary_max:
-        parts = []
-        if job.salary_min:
-            parts.append(f"{job.salary_min:,.0f}")
-        if job.salary_max:
-            parts.append(f"{job.salary_max:,.0f}")
-        salary = " - ".join(parts)
-        if job.salary_currency:
-            salary += f" {job.salary_currency}"
-        embed.add_field(name="Salary", value=salary, inline=True)
-    else:
-        embed.add_field(name="Salary", value="Not listed", inline=True)
+    description = _snippet(job.description, 300, job.title)
+    if description:
+        embed.add_field(name="Description", value=description, inline=False)
 
-    if job.description:
-        desc = (
-            job.description[:300] + "..."
-            if len(job.description) > 300
-            else job.description
-        )
-        embed.add_field(name="Description", value=desc, inline=False)
+    from gosha.matching import dm_match_label, match_label
 
-    from gosha.matching import match_label
-
-    label = match_label(relevance_score)
+    label = (match_label if scored_with_cv else dm_match_label)(relevance_score)
     footer = f"Source: {job.source}" + (f" | {label}" if label else "") + f" | Job #{job.id}"
     if match_info:
         footer += f" | Matched: {match_info}"
     embed.set_footer(text=footer[:2048])
 
-    view = JobFeedbackView(user_job_id, job_url=job.url, job_id=job.id)
+    from gosha.clicks import apply_url
+
+    # The Apply button goes through the click-tracking redirect; the title
+    # link stays the posting's own.
+    view = JobFeedbackView(user_job_id, job_url=apply_url(user_job_id, job.url), job_id=job.id)
     return embed, view
+
+
+# ── DM field formatting ───────────────────────────────────────────────
+
+# The boards date postings in Romanian local time.
+_BOARD_TZ = ZoneInfo("Europe/Bucharest")
+_PERIOD_WORD = {
+    "hourly": "hour", "daily": "day", "weekly": "week", "monthly": "month",
+    "yearly": "year", "annual": "year", "annually": "year",
+}
+
+
+def _one_line(text: str | None) -> str:
+    return " ".join(str(text).split()) if text else ""
+
+
+def _clip(text: str, limit: int) -> str:
+    """At most `limit` characters, cut at a word with an ellipsis."""
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1].rsplit(" ", 1)[0].rstrip(" ,;-–")
+    return (cut or text[: limit - 1]) + "…"
+
+
+def _web_url(url: str | None) -> str | None:
+    """The posting's link, if Discord will take it: a bad one fails the DM."""
+    url = (url or "").strip()
+    return url if re.match(r"https?://[^\s]+$", url) else None
+
+
+def _short_places(location: str | None, limit: int = 100) -> str:
+    """"Cluj-Napoca, Iași, Sibiu +4 more" for a board listing many cities."""
+    text = _one_line(location)
+    if not text:
+        return "N/A"
+    if len(text) <= limit:
+        return text
+    places = [p.strip() for p in text.split(",") if p.strip()]
+    shown: list[str] = []
+    for i, place in enumerate(places):
+        rest = f" +{len(places) - i} more"
+        if len(", ".join([*shown, place])) + len(f" +{len(places) - i - 1} more") > limit:
+            return ", ".join(shown) + rest if shown else _clip(text, limit)
+        shown.append(place)
+    return ", ".join(shown)
+
+
+def _amount(value: float | None) -> str | None:
+    return f"{value:,.0f}" if value else None
+
+
+def _salary(job) -> str:
+    """"4,500 – 6,500 EUR / month", with "≈ … RON / month" for other
+    currencies or periods: "17 - 98 USD" (hourly) and "4,500 - 6,500 EUR"
+    (monthly) used to look alike."""
+    low, high = _amount(job.salary_min), _amount(job.salary_max)
+    if not (low or high):
+        return "Not listed"
+    if low and high:
+        text = low if low == high else f"{low} – {high}"
+    else:
+        text = f"from {low}" if low else f"up to {high}"
+    currency = _one_line(job.salary_currency)
+    if currency:
+        text += f" {currency}"
+    period = _PERIOD_WORD.get((job.salary_period or "").strip().lower())
+    if period:
+        text += f" / {period}"
+    ron_low = _amount(getattr(job, "salary_monthly_min_ron", None))
+    ron_high = _amount(getattr(job, "salary_monthly_max_ron", None))
+    already_ron = currency.upper() == "RON" and period in (None, "month")
+    if (ron_low or ron_high) and not already_ron:
+        if ron_low and ron_high and ron_low != ron_high:
+            ron = f"{ron_low} – {ron_high}"
+        else:
+            ron = ron_low or ron_high
+        text += f"\n≈ {ron} RON / month"
+    return text
+
+
+def _days_ago(when: datetime | None) -> int | None:
+    if when is None:
+        return None
+    if when.tzinfo is None:  # SQLite hands back naive UTC
+        when = when.replace(tzinfo=timezone.utc)
+    today = datetime.now(_BOARD_TZ).date()
+    return max(0, (today - when.astimezone(_BOARD_TZ).date()).days)
+
+
+def _posted(job) -> str:
+    """"3 days ago" from the board's date; else when we first saw it."""
+    days = _days_ago(job.posted_at)
+    if days is not None:
+        return "Today" if days == 0 else "Yesterday" if days == 1 else f"{days} days ago"
+    days = _days_ago(job.first_seen_at)
+    if days is None:
+        return "Unknown"
+    return "First seen today" if days == 0 else (
+        "First seen yesterday" if days == 1 else f"First seen {days} days ago"
+    )
+
+
+# Invisible characters scraped along with the text (zero-width spaces,
+# joiners, BOMs, soft hyphens).
+_INVISIBLE_RE = re.compile("[\u00ad\u200b-\u200f\u2060\ufeff]")
+_MARKDOWN_RE = re.compile(r"\*\*|__|[*`]|^\s*#+\s*|^\s*[-•·]\s+", re.M)
+# Where the role itself is described, as headings in English and Romanian.
+_ROLE_HEADING_RE = re.compile(
+    r"(?im)^\s*(?:what you(?:'| wi)ll (?:do|be doing)|(?:key |your |main )?responsibilities|"
+    r"(?:about )?the role|your role|role overview|job description|your tasks|tasks|"
+    r"responsabilit[aăâ][tț]i|ce vei face|atribu[tț]ii|sarcini|descrierea (?:jobului|postului)|"
+    r"rolul (?:t[aă]u|nostru)|despre (?:rol|job|post))\b[^\n]{0,30}?:?\s*$"
+)
+# Paragraphs about the company, not the role.
+_ABOUT_RE = re.compile(
+    r"(?i)^\s*(?:about (?!the role)|despre (?:noi|companie)|who we are|cine suntem|"
+    r"our company|compania noastr[aă]|company description|descrierea companiei|location\b)"
+)
+
+
+def _snippet(description: str | None, limit: int, title: str | None = None) -> str:
+    """The role's own description, plain: what follows a "What you'll do" /
+    "Responsabilități" heading when there is one, else the text without
+    its leading "About us" paragraphs or the title repeated. Production DMs
+    opened with "**About MindMaze Therapeutics**"."""
+    if not description:
+        return ""
+    text = _MARKDOWN_RE.sub("", _INVISIBLE_RE.sub("", str(description)))
+    heading = _ROLE_HEADING_RE.search(text)
+    if heading and text[heading.end():].strip():
+        text = text[heading.end():]
+    else:
+        paragraphs = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
+        title_key = _one_line(title).lower()
+        while len(paragraphs) > 1 and (
+            _ABOUT_RE.match(paragraphs[0])
+            or _one_line(paragraphs[0].split("\n")[0]).lower() == title_key
+        ):
+            paragraphs.pop(0)
+        text = "\n\n".join(paragraphs)
+    text = _one_line(text)
+    if not text:
+        return ""
+    return discord.utils.escape_markdown(_clip(text, limit))

@@ -152,3 +152,33 @@ async def test_jobs_no_scrape_returns_any_more_expire(patched_db, session, monke
     assert gone.is_active is False
     assert still_listed.is_active is True
 
+
+
+@pytest.mark.asyncio
+async def test_full_catalog_boards_expire_after_two_weeks_unseen(patched_db, session):
+    """eJobs' IT browse and Hipo's city catalog are crawled whole: a posting
+    missing from them for 14 days is gone (prod, 2026-10-16: hipo 9/20 and
+    ejobs 6/64 active rows unseen that long). Keyword-search boards keep 30
+    days: a live posting can drop out of their results by ranking alone."""
+    now = datetime.now(timezone.utc)
+
+    def unseen(source: str, days: int) -> Job:
+        job = make_job(f"https://{source}.test/{days}", source=source, days_old=60)
+        job.last_seen_at = now - timedelta(days=days)
+        return job
+
+    rows = {
+        ("ejobs", 15): unseen("ejobs", 15), ("hipo", 15): unseen("hipo", 15),
+        ("ejobs", 10): unseen("ejobs", 10),
+        ("linkedin", 15): unseen("linkedin", 15), ("bestjobs", 15): unseen("bestjobs", 15),
+        ("linkedin", 31): unseen("linkedin", 31),
+    }
+    session.add_all(rows.values())
+    await session.commit()
+
+    assert await deadlinks.expire_unseen_jobs() == 3
+    for job in rows.values():
+        await session.refresh(job)
+    assert {key for key, job in rows.items() if not job.is_active} == {
+        ("ejobs", 15), ("hipo", 15), ("linkedin", 31),
+    }

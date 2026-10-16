@@ -1,0 +1,46 @@
+# The Discord DM score's panel of everyday job searches (gosha/matching.py
+# DM_PANEL, docs/EVAL.md "Discord DMs"). One search per line; "#" starts a
+# comment. Written by hand from common Romanian job-board categories, IT and
+# non-IT. Never the users' searches or the eval personas' keywords
+# (tests/test_matching.py checks the latter). Changing it changes every DM
+# score: re-run scripts/eval_ranking.py and re-pick the DM constants.
+software developer
+web developer
+backend developer
+game developer
+full stack developer
+IT security specialist
+QA tester
+system administrator
+database administrator
+data engineer
+IT support
+network administrator
+project manager
+business analyst
+UI/UX designer
+accountant
+auditor
+economist
+sales representative
+agent vanzari
+bank teller
+call center operator
+HR specialist
+recruiter
+marketing specialist
+graphic designer
+logistics coordinator
+warehouse worker
+driver
+electrician
+mechanical engineer
+civil engineer
+nurse
+receptionist
+administrative assistant
+translator
+teacher
+cook
+financial analyst
+lawyer

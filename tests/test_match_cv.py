@@ -213,13 +213,17 @@ def test_match_label_never_shows_a_percentage():
 
 
 async def test_dm_footer_shows_the_label_not_a_raw_score():
+    from gosha.matching import DM_STRONG_MATCH_AT
     from gosha.views import build_job_embed_with_buttons
 
     job = make_job("on_cv")
     job.id = 7
-    embed, _view = build_job_embed_with_buttons(job, user_job_id=1, relevance_score=0.47)
+    embed, _view = build_job_embed_with_buttons(job, user_job_id=1, relevance_score=0.40)
     assert "%" not in embed.footer.text
     assert "Good match" in embed.footer.text and "Job #7" in embed.footer.text
+    # On the DM score's scale (matching.dm_match_label), not the cosine's.
+    embed, _view = build_job_embed_with_buttons(job, user_job_id=1, relevance_score=DM_STRONG_MATCH_AT)
+    assert "Strong match" in embed.footer.text
 
 
 async def test_stored_score_is_the_blended_cosine_feedback_included(

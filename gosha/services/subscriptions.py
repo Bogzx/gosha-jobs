@@ -12,6 +12,7 @@ from gosha.database import get_session
 from gosha.domain.errors import NotFoundError, TierLimitError, ValidationError
 from gosha.filters import (
     EXPERIENCE_LEVEL_CHOICES,
+    canonical_keyword,
     canonical_level,
     clean_location,
     fold,
@@ -38,6 +39,16 @@ class SubscriptionInput:
 
 def _clean_list(values: list[str], cap: int = 50) -> list[str]:
     return [v.strip() for v in values if v and v.strip()][:cap]
+
+
+def _clean_keywords(values: list[str]) -> list[str]:
+    """Keywords without a suggestion label's description (canonical_keyword)."""
+    keywords: list[str] = []
+    for value in _clean_list(values):
+        keyword = canonical_keyword(value)
+        if keyword and keyword.lower() not in (k.lower() for k in keywords):
+            keywords.append(keyword)
+    return keywords
 
 
 def clean_levels(values: list[str], stored: list[str] | None = None) -> list[str]:
@@ -117,7 +128,7 @@ async def list_subscriptions(user_id: int) -> list[Subscription]:
 
 
 async def create_subscription(user: User, data: SubscriptionInput) -> Subscription:
-    keywords = _clean_list(data.keywords)
+    keywords = _clean_keywords(data.keywords)
     locations = clean_locations(data.locations)
     if not keywords or not locations:
         raise ValidationError("At least one keyword and one location are required.")
@@ -210,7 +221,7 @@ async def update_subscription(
     sub = await get_own_subscription(user.id, subscription_id)
 
     keywords = (
-        _clean_list(patch["keywords"]) if patch.get("keywords") is not None
+        _clean_keywords(patch["keywords"]) if patch.get("keywords") is not None
         else sub.keywords
     )
     locations = (

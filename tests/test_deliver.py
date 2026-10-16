@@ -203,9 +203,14 @@ async def test_dms_per_user_are_capped_best_first(patched_db, session, monkeypat
 
     assert await pipeline.deliver_pending(_Bot()) == 2
     statuses = await _statuses(session)
-    assert [statuses[j] for j in jobs] == ["skipped", "skipped", "skipped", "sent", "sent"]
+    # The rest wait for the next cycle instead of being dropped for good
+    # (production lost 8 good Cluj matches of one user's first batch).
+    assert [statuses[j] for j in jobs] == ["pending", "pending", "pending", "sent", "sent"]
     assert len(calls) == 2
     assert texts and "**3** more matches" in texts[0]
+    assert await pipeline.deliver_pending(_Bot()) == 2  # next cycle: the next best
+    statuses = await _statuses(session)
+    assert [statuses[j] for j in jobs] == ["pending", "sent", "sent", "sent", "sent"]
 
 
 @pytest.mark.asyncio
@@ -365,3 +370,80 @@ async def test_regex_matching_honours_the_board_level(patched_db, session):
     await session.commit()
 
     assert await pipeline.run_match_stage([job]) == 1
+
+
+async def _matches(session, user, sub, specs):
+    """Pending deliveries for (title, company, score, posted days ago)."""
+    ids = []
+    for i, (title, company, score, days) in enumerate(specs):
+        job = Job(url=f"https://d.test/m/{sub.id}/{i}", title=title, company=company,
+                  location="Cluj-Napoca", source="ejobs",
+                  posted_at=datetime.now(timezone.utc) - timedelta(days=days))
+        session.add(job)
+        await session.flush()
+        session.add(UserJob(user_id=user.id, job_id=job.id, subscription_id=sub.id,
+                            relevance_score=score, dm_status=UserJob.DM_PENDING))
+        ids.append(job.id)
+    await session.commit()
+    return ids
+
+
+@pytest.mark.asyncio
+async def test_a_search_sends_at_most_five_a_cycle_and_defers_the_rest(
+    patched_db, session, monkeypatch,
+):
+    user, sub, _jobs, rows = await _setup(session, n_jobs=0)
+    ids = await _matches(session, user, sub, [
+        (f"Role {i}", f"Co{i}", 0.40 + i / 100, 0) for i in range(8)
+    ])
+    calls = _fake_dm(monkeypatch, [])
+    monkeypatch.setattr(pipeline, "_send_text", lambda *a: asyncio.sleep(0))
+
+    assert await pipeline.deliver_pending(_Bot()) == 5
+    statuses = await _statuses(session)
+    assert [statuses[j] for j in ids] == ["pending"] * 3 + ["sent"] * 5  # best five
+    assert await pipeline.deliver_pending(_Bot()) == 3
+    assert len(calls) == 8
+
+
+@pytest.mark.asyncio
+async def test_one_company_gets_at_most_three_dms_a_batch(patched_db, session, monkeypatch):
+    user, sub, _jobs, _rows = await _setup(session, n_jobs=0)
+    ids = await _matches(session, user, sub, [
+        (f"Role {i}", "Endava", 0.50 + i / 100, 0) for i in range(4)
+    ] + [("Other", "Acme", 0.45, 0)])
+    _fake_dm(monkeypatch, [])
+    monkeypatch.setattr(pipeline, "_send_text", lambda *a: asyncio.sleep(0))
+
+    assert await pipeline.deliver_pending(_Bot()) == 4
+    statuses = await _statuses(session)
+    assert statuses[ids[0]] == "pending"  # Endava's fourth, the weakest of its four
+    assert statuses[ids[4]] == "sent"
+
+
+@pytest.mark.asyncio
+async def test_a_deferred_match_is_rechecked_when_its_turn_comes(
+    patched_db, session, monkeypatch,
+):
+    """Deferred, it may have gone stale; the search window still holds."""
+    user, sub, _jobs, _rows = await _setup(session, n_jobs=0)
+    sub.max_age_days = 7
+    await session.commit()
+    ids = await _matches(session, user, sub, [("Fresh", "A", 0.5, 1), ("Stale", "B", 0.6, 9)])
+    calls = _fake_dm(monkeypatch, [])
+    assert await pipeline.deliver_pending(_Bot()) == 1
+    statuses = await _statuses(session)
+    assert statuses[ids[0]] == "sent" and statuses[ids[1]] == "skipped"
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_unscored_matches_go_after_scored_ones(patched_db, session, monkeypatch):
+    user, sub, _jobs, _rows = await _setup(session, n_jobs=0)
+    monkeypatch.setattr(pipeline, "MAX_DMS_PER_SEARCH", 1)
+    ids = await _matches(session, user, sub, [("Regex", "A", None, 0), ("Scored", "B", 0.3, 0)])
+    _fake_dm(monkeypatch, [])
+    monkeypatch.setattr(pipeline, "_send_text", lambda *a: asyncio.sleep(0))
+    assert await pipeline.deliver_pending(_Bot()) == 1
+    statuses = await _statuses(session)
+    assert statuses[ids[1]] == "sent" and statuses[ids[0]] == "pending"

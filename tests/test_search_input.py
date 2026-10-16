@@ -50,6 +50,23 @@ def test_clean_location(typed, cleaned):
     assert clean_location(typed) == cleaned
 
 
+@pytest.mark.parametrize("typed, places", [
+    # "City, Country" typed into one option is one place: split on the
+    # comma it became ["Cluj-Napoca", "Romania"], a nationwide search.
+    ("Cluj-Napoca, Romania", ["Cluj-Napoca, Romania"]),
+    ("Cluj, RO", ["Cluj, RO"]),
+    ("cluj, iasi", ["cluj", "iasi"]),
+    ("Romania, Cluj", ["Romania", "Cluj"]),
+    ("Cluj; Bucharest, Romania", ["Cluj", "Bucharest, Romania"]),
+    ("remote, cluj", ["remote", "cluj"]),
+    ("", []),
+])
+def test_split_locations(typed, places):
+    from gosha.filters import split_locations
+
+    assert split_locations(typed) == places
+
+
 def test_suggestions_include_romanian_towns():
     from gosha.filters import place_suggestions
 
@@ -151,6 +168,13 @@ async def test_the_bot_stores_what_the_matcher_can_use(patched_db, session):
     assert "kra" in sent[0]
 
     sent.clear()
+    await cog.subscribe.callback(
+        cog, _interaction(9203, sent), keyword="python", location="Cluj-Napoca, Romania",
+    )
+    (sub,) = await _stored(session, 9203)
+    assert sub.locations == ["Cluj-Napoca, Romania"]  # one place, not nationwide
+
+    sent.clear()
     await cog.subscribe.callback(cog, _interaction(9202, sent), keyword="python", location="mun")
     assert await _stored(session, 9202) == []
     assert "mun" in sent[0]
@@ -222,3 +246,43 @@ async def test_searches_sharing_a_place_are_scraped_once(patched_db, session, mo
         ("python", "cluj", 7, ("indeed", "linkedin")),
         ("python", "cluj-napoca", 14, ("indeed",)),
     ]
+
+
+# ── Keywords saved as the autocomplete label ──────────────────────────
+
+
+@pytest.mark.parametrize("typed, keyword", [
+    # Five active production searches store the label of the bot's
+    # suggestion, which was then searched literally instead of expanded.
+    ("computer science internship — 19 intern/junior roles", "computer science internship"),
+    ("cs entry level — 11 junior/graduate/trainee roles", "cs entry level"),
+    ("software engineering – 9 dev roles (frontend, backend, etc.)", "software engineering"),
+    ("Python Developer", "Python Developer"),
+    ("full-stack developer", "full-stack developer"),
+])
+def test_canonical_keyword(typed, keyword):
+    from gosha.filters import canonical_keyword, expand_keyword
+
+    assert canonical_keyword(typed) == keyword
+    assert expand_keyword(typed) == expand_keyword(keyword)
+
+
+async def test_a_labelled_keyword_is_saved_and_scraped_as_the_keyword(
+    patched_db, session, monkeypatch,
+):
+    user = await _user(session, 9601)
+    sub = await subs_service.create_subscription(user, subs_service.SubscriptionInput(
+        keywords=["computer science internship — 19 intern/junior roles"], locations=["cluj"],
+    ))
+    assert sub.keywords == ["computer science internship"]
+
+    legacy = await _user(session, 9602)
+    await _legacy_search(session, legacy, locations=["cluj"])
+    row = (await session.execute(select(Subscription).where(Subscription.user_id == legacy.id))).scalar_one()
+    row.keywords = ["computer science internship — 19 intern/junior roles"]
+    await session.commit()
+
+    combos = pipeline._scrape_combos(
+        list((await session.execute(select(Subscription))).scalars().all())
+    )
+    assert {combo[0] for combo in combos} == {"computer science internship"}

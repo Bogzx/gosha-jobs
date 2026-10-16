@@ -14,6 +14,7 @@ from sqlalchemy import func, select, update
 
 from gosha.database import get_session
 from gosha.domain.errors import ValidationError
+from gosha.filters import canonical_keyword
 from gosha.models import Subscription, User, get_tier_limits, plan_lines
 
 if TYPE_CHECKING:
@@ -208,14 +209,15 @@ class SubscriptionCog(commands.Cog):
     ) -> None:
         try:
             # Cap individual values to prevent abuse
-            keywords = [k.strip()[:100] for k in keyword.split(",") if k.strip()][:20]
+            keywords = [canonical_keyword(k)[:100] for k in keyword.split(",") if canonical_keyword(k)][:20]
             excluded = [e.strip()[:100] for e in exclude.split(",") if e.strip()][:20] if exclude else []
             # As the website saves them: "llocation:Cluj" is Cluj, "kra" and
             # "fresher" are refused instead of stored to match nothing.
+            from gosha.filters import split_locations
             from gosha.services.subscriptions import clean_levels, clean_locations
             try:
                 locations = clean_locations(
-                    [loc[:100] for loc in location.split(",")][:20]
+                    [loc[:100] for loc in split_locations(location)][:20]
                 )
                 exp_levels = clean_levels([e[:20] for e in experience.split(",")][:5])
             except ValidationError as exc:
@@ -459,12 +461,13 @@ class SubscriptionCog(commands.Cog):
 
                 changes = []
                 if keyword:
-                    sub.keywords = [k.strip()[:100] for k in keyword.split(",") if k.strip()][:20]
+                    sub.keywords = [canonical_keyword(k)[:100] for k in keyword.split(",") if canonical_keyword(k)][:20]
                     changes.append(f"keywords={sub.keywords}")
+                from gosha.filters import split_locations
                 from gosha.services.subscriptions import clean_levels, clean_locations
                 try:
                     new_locations = clean_locations(
-                        [loc[:100] for loc in location.split(",")][:20]
+                        [loc[:100] for loc in split_locations(location)][:20]
                     ) if location else None
                     new_levels = clean_levels(
                         [e[:20] for e in experience.split(",")][:5]

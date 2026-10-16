@@ -16,8 +16,10 @@ from gosha.filters import (
     keyword_wants_entry_level,
     keyword_wants_tech,
     location_matches,
+    looks_like_an_ad,
     matches_company_blacklist,
     matches_excluded_keywords,
+    matches_excluded,
     matches_experience_level,
     normalize_location,
     required_years,
@@ -53,9 +55,9 @@ def located(job_location: str, search: str) -> bool:
     ("Worldwide", "remote"),
     ("Telemuncă", "remote"),
     ("de acasă", "remote"),
-    # Nationwide postings are open to someone in any Romanian city.
-    ("Romania", "cluj"),
-    ("România (Remote)", "iasi"),
+    # A search for the country takes the country-level postings.
+    ("Romania", "romania"),
+    ("România (Remote)", "romania"),
 ])
 def test_locations_that_should_match(job_location, search):
     assert located(job_location, search)
@@ -200,6 +202,27 @@ def test_nationwide_postings_do_not_reach_foreign_city_searches():
     assert not located("Romania", "remote")
 
 
+@pytest.mark.parametrize("job_location", [
+    "Romania", "România (Remote)", "Remote, Romania", "Hybrid - Romania", "Remote (RO)",
+])
+def test_a_city_search_takes_country_level_postings_only_with_remote_ok(job_location):
+    """Product review on prod data: "Romania"-only postings added 8-12 mostly
+    unrelated candidates ("Freelance Viral AI Template Creator") to each Cluj
+    and Timisoara intern search."""
+    assert not search_location_ok(job_location, ["cluj"])
+    assert search_location_ok(job_location, ["cluj"], remote_ok=True)
+    assert search_location_ok(job_location, ["romania"])
+    if "remote" not in job_location.lower() and "(ro)" not in job_location.lower():
+        # Not remote: no reason to offer it to a Berlin search.
+        assert not search_location_ok(job_location, ["berlin"], remote_ok=True)
+
+
+def test_remote_postings_reach_a_city_search_only_with_remote_ok():
+    assert not search_location_ok("Remote", ["cluj"])
+    assert not search_location_ok("Worldwide", ["timisoara"])
+    assert search_location_ok("Remote", ["cluj"], remote_ok=True)
+
+
 # ── Excluded keywords and blacklists ──────────────────────────────────
 
 
@@ -301,8 +324,9 @@ def test_tech_keywords_still_filter():
     ("Data Analyst (fără experiență)", None, None),
     ("Dezvoltator Software Începător", None, None),
     ("Software Engineer, New Grad", None, None),
-    # The board's label.
-    ("Python Developer", "entry", "Minimum 5 years"),
+    # The board's label, when the posting does not ask for more.
+    ("Python Developer", "entry", "Python, Django, SQL."),
+    ("Python Developer", "entry", None),
 ])
 def test_junior_level_takes(title, label, description):
     assert matches_experience_level(title, ["junior"], label, description)
@@ -322,6 +346,11 @@ def test_junior_level_takes(title, label, description):
     ("Backend Developer", None, "At least three (3) years of professional experience."),
     # The board says so.
     ("Python Developer", "senior", None),
+    # eJobs and BestJobs file postings as entry-level along with the other
+    # levels the employer ticked: 28 of 52 wrong production DMs came
+    # through that label. The years asked for still count.
+    ("Python Developer", "entry", "Minimum 5 years of experience with Python."),
+    ("IT Channel EMEA Data Analyst", "entry", "3+ years of experience in data analysis."),
     # Internships are the intern level's.
     ("Software Engineer Intern", None, None),
 ])
@@ -544,3 +573,183 @@ def test_search_location_ok_is_one_rule_for_match_browse_and_feed():
 ])
 def test_required_years_reads_one_clause(description, years):
     assert required_years(description) == years
+
+
+# ── CS-family keywords want CS titles (product review, prod queue) ────
+
+
+@pytest.mark.parametrize("title", [
+    "Game Tester - Cluj-Napoca Office - Day & Night Shift",
+    "Business Developer",
+    "Business Developer in Bistrița-Năsăud | Cluj",
+    "Romanian Linguistic Evaluator & Functional Tester",
+    "Freelance Viral AI Template Creator",
+    "AI video creator",
+    "Video Data Annotation Specialist - AI Training",
+    "Customer Support with English & DE/NL/PL/IT",
+    "Programator CNC",
+    "Working Student Industrial Engineering",
+])
+def test_non_cs_titles_do_not_reach_a_cs_internship_search(title):
+    # Filed as entry-level by the board, which used to be enough.
+    assert not title_is_relevant(title, "computer science internship", "entry")
+    assert not title_is_relevant(title, "computer science internship", "intern")
+
+
+@pytest.mark.parametrize("title", [
+    "Software Engineer Intern", "Junior QA Tester", "QA Game Tester Intern",
+    "Data Analyst Intern", "Game Developer Intern", "Working Student Software Development",
+    "Internship - Backend Developer (Java)", "Stagiu IT - Dezvoltator Software",
+])
+def test_cs_intern_titles_still_reach_it(title):
+    assert title_is_relevant(title, "computer science internship", "intern")
+
+
+# ── Excluded level words read the title only ──────────────────────────
+
+
+@pytest.mark.parametrize("excluded, senior_title", [
+    (["senior"], "Senior Java Developer"), (["Senior"], "Senior Java Developer"),
+    (["lead"], "Tech Lead Java"), (["sr"], "Sr. Java Developer"),
+    (["manager"], "Engineering Manager"), (["senior level"], "Java Developer, Senior Level"),
+])
+def test_an_excluded_level_word_is_about_the_title(excluded, senior_title):
+    """Excluding "senior" removed 4 of the eval set's 26 intern/junior
+    postings: their descriptions say "mentored by senior engineers"."""
+    description = (
+        "You will be mentored by senior engineers and a team lead "
+        "(manager: Ana, Sr. PM), senior level guidance."
+    )
+    assert not matches_excluded("Junior Java Developer", description, excluded)
+    assert matches_excluded(senior_title, description, excluded)
+
+
+def test_other_excluded_words_still_read_the_description():
+    assert matches_excluded("Account Executive", "Sales targets, B2B sales", ["sales"])
+    assert matches_excluded("Developer", "Night shifts required", ["night shifts"])
+    assert not matches_excluded("Developer", None, ["sales"])
+
+
+def test_the_entry_label_does_not_override_the_years_for_a_keyword_either():
+    asks = "Minimum 4 years of experience in QA."
+    assert not title_is_relevant("QA Engineer", "junior qa", "entry", asks)
+    assert title_is_relevant("QA Engineer", "junior qa", "entry", "Manual testing.")
+
+
+@pytest.mark.parametrize("title, passes", [
+    # Only the board's label says entry-level: the title must be CS itself.
+    ("Consultant IT SAP IS-U (Telemuncă) (ID 593)", False),
+    ("Specialist in continut web si digital", False),
+    ("Python Developer", True),
+    ("QA Engineer", True),
+    ("Junior IT Support", True),  # the title says junior itself
+])
+def test_a_board_entry_label_needs_a_cs_title(title, passes):
+    for label in ("entry", "intern"):
+        assert title_is_relevant(title, "computer science internship", label) is passes
+
+
+# ── Production DMs judged wrong (delivery review, 2026-10-16) ─────────
+
+
+def test_it_in_a_list_of_language_codes_is_italian():
+    title = "Oportunitati BPO: HU / DE / NL / FR / IT / ES -Remote&Hibrid"
+    assert not title_is_relevant(title, "computer science internship", "entry")
+    assert not title_is_relevant("Customer Care DE/NL/PL/IT", "junior developer")
+    assert title_is_relevant("Junior IT Support", "computer science internship")
+    assert title_is_relevant("IT Intern / Helpdesk", "computer science internship")
+    assert title_is_relevant("AI/ML Technical Lead", "computer science")  # not codes
+
+
+def test_a_pharma_qa_role_is_not_software_qa():
+    pharma = (
+        "Studii superioare: Facultatea de Chimie, Farmacie. Minim 2-3 ani experiență în "
+        "Producție sau QC. Eliberarea seriilor conform GMP."
+    )
+    assert not title_is_relevant("QA Specialist", "computer science internship", "entry", pharma)
+    software = "Manual and automated testing of web apps; Selenium, API tests."
+    assert title_is_relevant("QA Specialist", "computer science internship", "entry", software)
+    assert title_is_relevant("QA Specialist", "computer science internship", "entry", None)
+
+
+@pytest.mark.parametrize("title, company", [
+    ("Programe de internship, trainee sau joburi entry-level in IT", "JumpStart - A GenZ Career Hub"),
+    ("Internship opportunities in IT", "Some Career Hub"),
+    ("Joburi IT pentru studenti", "Acme"),
+])
+def test_career_hub_ads_are_not_jobs(title, company):
+    assert looks_like_an_ad(title, company)
+
+
+@pytest.mark.parametrize("title, company", [
+    ("Software Engineering Internship", "Bitdefender"),
+    ("Junior Java Developer", "Endava"),
+    ("Internship Program - Data Science", "ING Hubs Romania"),
+    # A recruiter called "Career Hub" posting a real role (eval set).
+    ("Reporting Analyst", "Career Hub"),
+])
+def test_real_postings_are_not_ads(title, company):
+    assert not looks_like_an_ad(title, company)
+
+
+def test_an_oregon_remote_posting_is_us_only():
+    assert not located("Remote, OR, USA", "remote")
+    assert located("Bucharest or Remote (EU)", "remote")
+
+
+@pytest.mark.parametrize("title", [
+    "Software Engineer Backend(Django)", "QA/Test Engineer", "Data Engineer",
+])
+def test_an_internship_keyword_follows_the_searchs_levels(title):
+    """6 of 22 production searches ask for intern AND junior under the
+    "computer science internship" keyword; untitled junior tech roles never
+    got past the internship keyword."""
+    kw = "computer science internship"
+    assert title_is_relevant(title, kw, None, None, ["intern", "junior"])
+    assert not title_is_relevant(title, kw, None, None, ["intern"])
+    assert not title_is_relevant(title, kw)  # no levels known: strict as before
+    assert not title_is_relevant(
+        title, kw, None, "Minimum 4 years of experience.", ["intern", "junior"],
+    )
+
+
+# ── Owner rule: intern-only searches get training positions only ──────
+
+
+TRAINING = [
+    "Working Student Data Engineering", "Graduate Programme IT", "Trainee SAP Consultant",
+    "Software Engineering Internship", "Stagiu de practică IT", "Apprenticeship Software Developer",
+    "Student Programme - Data Analytics",
+]
+JUNIOR = ["Junior Java Developer", "Software Engineer Backend(Django)", "Graduate Software Engineer"]
+
+
+@pytest.mark.parametrize("title", TRAINING)
+def test_an_intern_only_search_takes_training_positions(title):
+    kw = "computer science internship"
+    assert matches_experience_level(title, ["intern"])
+    assert title_is_relevant(title, kw, None, None, ["intern"])
+
+
+@pytest.mark.parametrize("title", JUNIOR)
+def test_an_intern_only_search_takes_no_junior_or_unmarked_role(title):
+    kw = "computer science internship"
+    assert not matches_experience_level(title, ["intern"])
+    # The scrape filter too, not only the match stage.
+    assert not title_is_relevant(title, kw, None, None, ["intern"])
+    # Not through an "entry" label either.
+    assert not title_is_relevant(title, kw, "entry", None, ["intern"])
+    assert not matches_experience_level(title, ["intern"], "entry")
+
+
+@pytest.mark.parametrize("title", TRAINING + JUNIOR)
+def test_with_junior_chosen_junior_roles_join_the_training_ones(title):
+    kw = "computer science internship"
+    assert matches_experience_level(title, ["intern", "junior"])
+    assert title_is_relevant(title, kw, None, None, ["intern", "junior"])
+
+
+@pytest.mark.parametrize("title", ["Senior Java Developer", "Medior QA Engineer", "Software Engineer II"])
+def test_mid_and_senior_reach_neither(title):
+    for levels in (["intern"], ["intern", "junior"], ["junior"]):
+        assert not matches_experience_level(title, levels)

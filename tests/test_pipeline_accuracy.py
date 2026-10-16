@@ -416,7 +416,7 @@ async def test_searches_are_reported_per_board_that_ran_them(patched_db, session
 
 def test_place_and_age_are_checked_before_the_description_is_read(monkeypatch):
     read: list[str] = []
-    for name in ("matches_experience_level", "matches_excluded_keywords"):
+    for name in ("matches_experience_level", "matches_excluded"):
         real = getattr(pipeline, name)
         monkeypatch.setattr(
             pipeline, name, lambda *a, _real=real, _n=name, **k: read.append(_n) or _real(*a, **k),
@@ -430,7 +430,7 @@ def test_place_and_age_are_checked_before_the_description_is_read(monkeypatch):
     assert not pipeline.job_matches_subscription(stale, sub)
     assert read == []
     assert pipeline.job_matches_subscription(make_job("Java Developer"), sub)
-    assert set(read) == {"matches_experience_level", "matches_excluded_keywords"}
+    assert set(read) == {"matches_experience_level", "matches_excluded"}
 
 
 def test_a_description_is_read_for_its_years_once_per_cycle_not_per_search():
@@ -447,3 +447,245 @@ def test_a_description_is_read_for_its_years_once_per_cycle_not_per_search():
             job.title, sub.keywords, None, job.description,
         )
     assert required_years.cache_info().misses == 1
+
+
+# ── Regex fallback (model down): no flood ─────────────────────────────
+
+
+async def test_without_the_model_a_search_gets_what_its_own_scrape_found(
+    patched_db, session, monkeypatch,
+):
+    """With the semantic model down, a generic keyword ("accountant")
+    passes every title, so its search was sent every job in its city that
+    any other search had scraped. In regex mode a search now gets only the
+    jobs its own queries returned (and passed the scrape-stage filter)."""
+    from gosha.scrape_health import ScrapeHealth
+
+    for discord_id, keyword in ((7201, "accountant"), (7202, "java developer")):
+        user = User(discord_user_id=discord_id)
+        session.add(user)
+        await session.flush()
+        sub = Subscription(user_id=user.id, max_age_days=7)
+        sub.keywords = [keyword]
+        sub.locations = ["cluj"]
+        sub.boards = ["linkedin"]
+        session.add(sub)
+    await session.commit()
+
+    found = {
+        "accountant": [("Accountant", "https://j.test/acc")],
+        "java developer": [("Java Developer", "https://j.test/java")],
+    }
+
+    async def jobspy(_tunnels, keyword, location, max_age_days, boards=None):
+        return pd.DataFrame([
+            {"job_url": url, "title": title, "company": "Acme", "location": "Cluj-Napoca",
+             "site": "linkedin", "description": "", "date_posted": NOW}
+            for title, url in found[keyword]
+        ])
+
+    monkeypatch.setattr("gosha.scraper.scrape_jobs_raw", jobspy)
+    monkeypatch.setattr("gosha.scrapers.registry.get_extra_scrapers", lambda: [])
+    scraped_for: dict = {}
+    jobs = await pipeline.run_scrape_stage(_NoTunnels(), ScrapeHealth(), scraped_for=scraped_for)
+    assert len(jobs) == 2
+
+    await pipeline.run_match_stage(jobs, None, scraped_for=scraped_for)
+
+    rows = (await session.execute(
+        select(User.discord_user_id, Job.title).select_from(UserJob)
+        .join(User, User.id == UserJob.user_id).join(Job, Job.id == UserJob.job_id)
+    )).all()
+    assert sorted(rows) == [(7201, "Accountant"), (7202, "Java Developer")]
+
+
+async def test_without_scrape_provenance_regex_mode_keeps_the_relevance_gate(
+    patched_db, session,
+):
+    """Called without the record (old callers), the match is as before."""
+    matches = await pipeline.match_jobs_for_subscription(
+        make_sub("python developer"), [make_job("Python Developer"), make_job("Accountant")],
+    )
+    assert titles(matches) == {"Python Developer"}
+
+
+def test_excluding_senior_keeps_a_junior_posting_that_mentions_seniors():
+    sub = make_sub("java developer", ["junior"])
+    sub.excluded_keywords = ["senior"]
+    mentored = "You will be mentored by senior engineers."
+    assert pipeline.job_matches_subscription(
+        make_job("Junior Java Developer", description=mentored), sub,
+    )
+    assert not pipeline.job_matches_subscription(
+        make_job("Senior Java Developer", description=mentored), sub,
+    )
+
+
+async def test_a_junior_manager_title_reaches_an_entry_keyword_search():
+    """TODO 9: SENIOR_RE's "manager" rejected "Junior IT Project Manager"
+    for entry keywords; says_senior lets the explicit "junior" win."""
+    sub = make_sub("junior project manager", ["junior"])
+    matches = await pipeline.match_jobs_for_subscription(
+        sub, [make_job("Junior IT Project Manager"), make_job("Senior IT Project Manager")],
+    )
+    assert titles(matches) == {"Junior IT Project Manager"}
+
+
+async def test_the_dm_names_the_search_by_its_keyword_not_its_label(
+    patched_db, session, monkeypatch,
+):
+    sub_id, _ids = await _pending(session, [("Python Developer", "Acme", 0.6)], discord_id=7301)
+    sub = await session.get(Subscription, sub_id)
+    sub.keywords = ["computer science internship — 19 intern/junior roles"]
+    await session.commit()
+    footers: list[str] = []
+
+    async def fake(bot, discord_id, embed, view=None):
+        footers.append(embed.footer.text)
+        return pipeline.DM_SENT
+
+    monkeypatch.setattr(pipeline, "_dm_user", fake)
+    assert await pipeline.deliver_pending(_Bot()) == 1
+    assert "Matched: computer science internship in cluj" in footers[0]
+    assert "—" not in footers[0]
+
+
+async def test_the_scrape_filter_and_the_match_follow_each_searchs_levels(
+    patched_db, session, monkeypatch,
+):
+    from gosha.scrape_health import ScrapeHealth
+
+    for discord_id, levels in ((7401, ["intern", "junior"]), (7402, ["intern"])):
+        user = User(discord_user_id=discord_id)
+        session.add(user)
+        await session.flush()
+        sub = Subscription(user_id=user.id, max_age_days=7)
+        sub.keywords = ["computer science internship"]
+        sub.locations = ["cluj"]
+        sub.boards = ["linkedin"]
+        sub.experience_levels = levels
+        session.add(sub)
+    await session.commit()
+
+    async def jobspy(_tunnels, keyword, location, max_age_days, boards=None):
+        return pd.DataFrame([
+            {"job_url": f"https://j.test/{i}", "title": title, "company": "Acme",
+             "location": "Cluj-Napoca", "site": "linkedin", "description": "", "date_posted": NOW}
+            for i, title in enumerate(["Software Engineer Backend(Django)", "Software Engineer Intern"])
+        ])
+
+    monkeypatch.setattr("gosha.scraper.scrape_jobs_raw", jobspy)
+    monkeypatch.setattr("gosha.scrapers.registry.get_extra_scrapers", lambda: [])
+    jobs = await pipeline.run_scrape_stage(_NoTunnels(), ScrapeHealth())
+    assert {job.title for job in jobs} == {"Software Engineer Backend(Django)", "Software Engineer Intern"}
+
+    # Regex mode (these jobs have no embeddings): each search's own levels.
+    await pipeline.run_match_stage(jobs, None, scraped_for=pipeline.last_scraped_for)
+    rows = (await session.execute(
+        select(User.discord_user_id, Job.title).select_from(UserJob)
+        .join(User, User.id == UserJob.user_id).join(Job, Job.id == UserJob.job_id)
+    )).all()
+    assert sorted(rows) == [
+        (7401, "Software Engineer Backend(Django)"), (7401, "Software Engineer Intern"),
+        (7402, "Software Engineer Intern"),
+    ]
+
+
+async def test_a_reposted_copy_of_an_expired_dm_is_not_sent_again(patched_db, session):
+    """gosha.dedup groups a posting with its reposts (Undelucram's copy of a
+    Continental Anvelope job); once the copy a user was DM'd expires,
+    normalize_key (title + employer) no longer ties the two together."""
+    user = User(discord_user_id=7501)
+    session.add(user)
+    await session.flush()
+    old = Job(url="https://d.test/repost", title="Software Engineer", company="Undelucram",
+              description="Continental Anvelope cauta un Software Engineer in Timisoara.",
+              location="Timisoara", source="bestjobs", is_active=False)
+    new = Job(url="https://d.test/original", title="Software Engineer",
+              company="Continental Anvelope", location="Timisoara", source="ejobs")
+    other = Job(url="https://d.test/other", title="Software Engineer", company="Bitdefender",
+                location="Timisoara", source="ejobs")
+    session.add_all([old, new, other])
+    await session.flush()
+    session.add(UserJob(user_id=user.id, job_id=old.id, dm_status=UserJob.DM_SENT,
+                        delivered_at=datetime.now(timezone.utc) - timedelta(days=3)))
+    await session.commit()
+
+    items = [{"user_id": user.id, "job_id": job.id, "subscription_id": None, "score": 0.5}
+             for job in (new, other)]
+    posting_of = {job.id: (job.title, job.company, job.description) for job in (new, other)}
+    kept = await pipeline._one_per_duplicate_group(
+        items, {new.id: new.id, other.id: other.id}, {}, posting_of,
+    )
+    assert [item["job_id"] for item in kept] == [other.id]
+
+
+async def test_prefilter_is_what_the_match_stage_scores():
+    """gosha.evaluation (gosha-rank) uses prefilter for its DM pool: the
+    same hard filters and keyword gate as the match stage."""
+    sub = make_sub("computer science internship", ["intern"])
+    jobs = [
+        make_job("Software Engineering Intern"), make_job("Junior Java Developer"),
+        make_job("Working Student Data Engineering"),
+        make_job("Software Engineering Intern II", location="Berlin, Germany"),
+    ]
+    kept = pipeline.prefilter(sub, jobs)
+    assert [job.title for job in kept] == ["Software Engineering Intern", "Working Student Data Engineering"]
+    matches = await pipeline.match_jobs_for_subscription(sub, jobs)
+    assert [job for job, _score in matches] == kept
+
+
+# ── DM score (gosha-rank: query minus 0.25 × a panel mean) ────────────
+
+
+class _DMMatcher(FakeMatcher):
+    """No cosine passes `threshold`; the DM score has its own threshold."""
+
+    threshold = 2.0
+    cv_threshold = 2.0
+    dm_threshold = 0.5
+
+    def __init__(self, dm_query_result=ON_QUERY):
+        self.dm_calls: list[tuple] = []
+        self._dm = dm_query_result
+
+    def dm_query(self, query_emb, locations, experience_levels):
+        self.dm_calls.append((tuple(locations), tuple(experience_levels or ())))
+        return self._dm
+
+    is_dm_match = SemanticMatcher.is_dm_match
+
+
+def _off_query_job(title: str) -> Job:
+    job = make_job(title)
+    off = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+    off[1] = 1.0
+    job.embedding = vec_to_bytes(off)
+    return job
+
+
+async def test_a_search_without_a_cv_is_filtered_on_the_dm_threshold():
+    matcher = _DMMatcher()
+    sub = make_sub("python developer")
+    matches = await pipeline.match_jobs_for_subscription(
+        sub, [make_job("Python Developer"), _off_query_job("Python Engineer")], matcher,
+    )
+    assert titles(matches) == {"Python Developer"}  # 1.0 >= 0.5; the other scores 0
+    assert matcher.dm_calls == [(("cluj",), ("any",))]
+    # The stored score is the DM score itself.
+    assert [round(score, 3) for _job, score in matches] == [1.0]
+
+
+async def test_without_a_dm_query_the_plain_cosine_threshold_applies():
+    matches = await pipeline.match_jobs_for_subscription(
+        make_sub("python developer"), [make_job("Python Developer")], _DMMatcher(None),
+    )
+    assert matches == []  # cosine 1.0 < threshold 2.0
+
+
+async def test_a_cv_search_keeps_the_blended_cosine():
+    matcher = _DMMatcher()
+    matches = await pipeline.match_jobs_for_subscription(
+        make_sub("python developer"), [make_job("Python Developer")], matcher, ON_QUERY,
+    )
+    assert matches == [] and matcher.dm_calls == []  # cv_threshold 2.0, no DM query

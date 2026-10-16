@@ -295,13 +295,19 @@ NON_CS_DOMAIN_RE = re.compile(
     # ("Tehnician Infrastructura IT & CCTV", "Inginer Mentenanta").
     r"tehnician\w*|technicians?|cctv|mentenan\w*|mecanic\w*|"
     r"construc(?:tii|ții|tion)\w*|[sș]antier\w*|instala[tț]i\w*|laborator\w*|"
-    r"bim|revit)\b"
+    r"bim|revit|"
+    # Matched TECH_RE through "Developer", "Tester", "AI" or "IT" (Italy's
+    # code), and reached CS internship searches in production.
+    r"business\s+develop\w*|game\s+test\w*|linguist\w*|locali[sz]ation|evaluators?|"
+    r"annotat\w*|creators?|customer\s+(?:support|service|care)|call\s+cent\w*|"
+    r"industrial|cnc|bpo)\b"
 )
 
 # Unambiguous CS signals that override a negative-domain hit
 # ("Junior Software Engineer - Process Automation" is still ours).
 STRONG_CS_RE = re.compile(
-    r"(?i)\b(?:software|develop(?:er|ment)|programm(?:er|ing)|programator\w*|"
+    r"(?i)\b(?:software|(?<!business )(?<!sales )develop(?:er|ment)|programm(?:er|ing)|"
+    r"programator(?!\w*\s+cnc)\w*|"
     r"dezvoltator\w*|front.?end|back.?end|full.?stack|devops|cyber|"
     r"python|java(?:script)?|typescript|\bqa\b|\bsdet\b|"
     r"data\s+(?:scien|analy|engineer)|machine.?learning|informatic\w*)"
@@ -358,7 +364,23 @@ def search_location_ok(
         return True
     if any(location_matches(job_location, _match_subs(loc)) for loc in locations):
         return True
-    return remote_ok and location_matches(job_location, _match_subs("remote"))
+    if not remote_ok:
+        return False
+    # A posting naming only the country ("Romania", "România (Remote)") has
+    # no city: for a Romanian city search it is one more remote-ish option,
+    # so only with remote_ok. Taken by every city search, it added 8-12
+    # mostly unrelated candidates per Cluj or Timisoara search (prod, 2026-10).
+    return location_matches(job_location, _match_subs("remote")) or (
+        is_romania_only(job_location)
+        and any(p in _ROMANIAN_PLACES for loc in locations for p in map(_place, _match_subs(loc)))
+    )
+
+
+def is_romania_only(job_location: str | None) -> bool:
+    """A location naming Romania and no city: "Romania", "Remote, RO"."""
+    if not job_location or pd.isna(job_location):
+        return False
+    return _ROMANIA_ONLY_RE.fullmatch(_place(str(job_location))) is not None
 
 
 @functools.lru_cache(maxsize=1024)
@@ -411,6 +433,33 @@ def clean_location(location: str) -> str | None:
     return text
 
 
+def split_locations(text: str) -> list[str]:
+    """Places typed into one field, separated by commas or semicolons.
+
+    A country (or country code) right after a place belongs to it: "Cluj-
+    Napoca, Romania" is one place. Split on the comma it was stored as
+    ["Cluj-Napoca", "Romania"], and "Romania" made the search nationwide.
+    """
+    places: list[str] = []
+    joined = False  # the last place already carries its country
+    for part in re.split(r"[,;]", text or ""):
+        part = part.strip()
+        if not part:
+            continue
+        key = _place(part)
+        is_country = key in _COUNTRY_NAMES or key in _COUNTRY_CODES
+        last_is_country = bool(places) and (
+            _place(places[-1]) in _COUNTRY_NAMES or _place(places[-1]) in _COUNTRY_CODES
+        )
+        if is_country and places and not joined and not last_is_country:
+            places[-1] = f"{places[-1]}, {part}"
+            joined = True
+            continue
+        places.append(part)
+        joined = False
+    return places
+
+
 def place_suggestions(fragment: str, limit: int = 3) -> list[str]:
     """Known places starting with `fragment`: "kra" → ["Krakow"], "bac" →
     ["Bacau"]."""
@@ -442,8 +491,17 @@ def is_romanian_location(location: str) -> bool:
     return key not in LOCATION_ALIASES
 
 
+def canonical_keyword(keyword: str) -> str:
+    """The keyword without a suggestion label's description: the bot's
+    autocomplete shows "computer science internship — 19 intern/junior
+    roles", and a user who typed it rather than picking it stored it, then
+    searched the boards for it literally instead of the 19 terms."""
+    return re.sub(r"\s+[—–]\s+.*$", "", str(keyword)).strip()
+
+
 def expand_keyword(keyword: str) -> list[str]:
     """Return a list of specific search terms for a broad keyword."""
+    keyword = canonical_keyword(keyword)
     normalized = keyword.lower().strip()
     return KEYWORD_EXPANSIONS.get(normalized, [keyword])
 
@@ -465,11 +523,7 @@ def location_matches(job_location: str, match_substrings: list[str]) -> bool:
         for sub in match_substrings if sub
     ):
         return True
-    # "Romania" with no city is a nationwide (usually remote-in-Romania)
-    # posting: open to someone searching any Romanian city.
-    return _ROMANIA_ONLY_RE.fullmatch(loc) is not None and any(
-        _place(sub) in _ROMANIAN_PLACES for sub in match_substrings if sub
-    )
+    return False
 
 
 # Where the cities the aliases name are. A posting that names a country
@@ -560,7 +614,10 @@ _REMOTE_REGION_RE = re.compile(
 
 # Places in one location string: "Cluj-Napoca / Munich, Germany",
 # "Bucharest or Remote (USA)". Never inside brackets ("Remote (USA/Europe)").
-_PLACE_SEPARATOR_RE = re.compile(r"\s*(?:[/;|&]|\b(?:or|sau|and|si)\b)\s*(?![^()]*\))")
+# "or" only between places, not Oregon's code in "Remote, OR, USA".
+_PLACE_SEPARATOR_RE = re.compile(
+    r"(?:\s*[/;|&]\s*|(?<![,\s])\s+(?:or|sau|and|si)\s+)(?![^()]*\))"
+)
 _COMMA_OUTSIDE_BRACKETS_RE = re.compile(r",(?![^()]*\))")
 _BRACKETED_RE = re.compile(r"\([^()]*\)")
 # Romanian cities in the historic region of Moldova: "Iași, Moldova" is
@@ -684,7 +741,7 @@ def keyword_wants_tech(keyword: str) -> bool:
     itself ("civil engineer", "marketing data"): holding those to CS
     titles rejected every posting they were looking for.
     """
-    kw = keyword.lower().strip()
+    kw = canonical_keyword(keyword).lower()
     if kw in KEYWORD_EXPANSIONS:
         return True
     if not _TECH_KEYWORD_RE.search(kw):
@@ -697,6 +754,7 @@ def title_is_relevant(
     keyword: str,
     experience_level: str | None = None,
     description: str | None = None,
+    levels: list[str] | None = None,
 ) -> bool:
     """Check if a job title is relevant for the given subscription keyword.
 
@@ -710,7 +768,9 @@ def title_is_relevant(
     label). A junior one ("junior developer", "absolvent") also takes the
     unmarked postings the junior level takes (_is_junior, with
     `description` for the years asked): requiring the word "junior" kept
-    a handful of the eval set's student-level postings.
+    a handful of the eval set's student-level postings. So does an
+    internship keyword when the search's `levels` also ask for junior
+    (6 of 22 production searches): "Software Engineer Backend(Django)".
     """
     if not title or pd.isna(title):
         return False
@@ -721,20 +781,51 @@ def title_is_relevant(
     if not want_entry and not want_tech:
         return True  # No filtering for generic keywords
 
-    if want_entry:
-        board_says_entry = experience_level in ("intern", "entry")
+    if want_entry and _training_only(keyword, levels):
+        # Owner rule: an internship search without the junior level gets
+        # training positions only (internship, traineeship, apprenticeship,
+        # working student, graduate programme, stagiu/practică), from the
+        # title or the board's own "intern" label. No junior, unmarked or
+        # "entry"-labelled regular jobs.
+        training = INTERN_RE.search(title) or (
+            experience_level == "intern"
+            and (not want_tech or STRONG_CS_RE.search(title))
+        )
+        if not training or says_senior(title):
+            return False
+    elif want_entry:
+        # The board's label, when the years asked for agree (_is_junior).
+        board_says_entry = experience_level == "intern" or (
+            experience_level == "entry" and _asks_junior_years(title, description)
+        )
+        # Nor the label alone for a tech search: it must be a CS title
+        # ("Consultant IT SAP" filed entry-level by eJobs is not).
+        if board_says_entry and want_tech and not (
+            ENTRY_LEVEL_RE.search(title) or STRONG_CS_RE.search(title)
+        ):
+            board_says_entry = False
         says_entry = (
             (board_says_entry or ENTRY_LEVEL_RE.search(title))
             and not says_senior(title)
         )
+        junior_too = not _INTERN_KEYWORD_RE.search(keyword) or _wants_junior(levels)
         if not says_entry and not (
-            not _INTERN_KEYWORD_RE.search(keyword)
-            and _is_junior(title.lower(), experience_level, description)
+            junior_too and _is_junior(title.lower(), experience_level, description)
         ):
             return False
     if want_tech:
-        if not TECH_RE.search(title):
+        # "HU / DE / NL / FR / IT / ES": languages, not IT.
+        tech_title = _CODE_LIST_RE.sub(" ", title)
+        # SAP / Salesforce-type platforms are IT for a training position
+        # ("Trainee SAP Consultant"); "Salesforce Specialist" is sales.
+        if not (
+            TECH_RE.search(tech_title)
+            or (INTERN_RE.search(tech_title) and _IT_PLATFORM_RE.search(tech_title))
+        ):
             return False
+        if _is_non_software_qa(tech_title, description):
+            return False
+        title = tech_title
         # Generic words ("engineer", "technology", "AI") also appear in
         # industrial/marketing roles — reject those unless the title
         # carries an unambiguous CS signal.
@@ -743,17 +834,116 @@ def title_is_relevant(
     return True
 
 
-def relevance_predicate(keywords: list[str]):
-    """title, experience_level[, description] -> bool: relevant for any of `keywords`."""
+_IT_PLATFORM_RE = re.compile(r"(?i)\b(?:sap|abap|erp|crm|salesforce|servicenow|dynamics)\b")
+# A slash list of language or country codes ("DE/NL/PL/IT"), not "AI/ML".
+_LANGUAGE_CODE = (
+    r"(?:DE|NL|PL|IT|FR|ES|HU|EN|RO|UK|US|GB|PT|SE|DK|FI|NO|CZ|SK|BG|GR|TR|RU|AT|CH|BE)"
+)
+_CODE_LIST_RE = re.compile(
+    r"\b" + _LANGUAGE_CODE + r"(?:\s*/\s*" + _LANGUAGE_CODE + r")+\b"
+)
+_QA_TITLE_RE = re.compile(r"(?i)\b(?:qa|qc|quality)\b")
+_SOFTWARE_TITLE_RE = re.compile(
+    r"(?i)\b(?:software|test(?:er|ing)?|automation|developer|web|app|game|it)\b"
+)
+# A QA role in pharma or chemistry production ("eliberarea seriilor", GMP).
+_LAB_QA_RE = re.compile(
+    r"\b(?:gmp|farmac\w*|pharma\w*|chimi\w*|chemi\w*|laborator\w*|qc|medicament\w*|"
+    r"biolog\w*|clinic\w*|seriilor|batch release)\b"
+)
+_SOFTWARE_TEXT_RE = re.compile(
+    r"\b(?:software|selenium|cypress|playwright|api|web|aplicati\w*|apps?|automation|"
+    r"test automation|testare software|frontend|backend|jira)\b"
+)
+
+
+def _is_non_software_qa(title: str, description: str | None) -> bool:
+    """"QA Specialist" at a pharma plant: the description is about GMP and
+    batch release, not software (a production DM judged wrong)."""
+    if not description or not _QA_TITLE_RE.search(title) or _SOFTWARE_TITLE_RE.search(title):
+        return False
+    text = fold(description)
+    return bool(_LAB_QA_RE.search(text)) and not _SOFTWARE_TEXT_RE.search(text)
+
+
+# Career-hub and aggregator listings: an ad for many jobs, not a job.
+_AD_TITLE_RE = re.compile(
+    r"(?i)\b(?:programe\s+de|joburi|locuri\s+de\s+munca|oportunit[aă][tț]i|opportunities)\b"
+)
+_AD_COMPANY_RE = re.compile(r"(?i)\b(?:career\s+hub|hub\s+de\s+cariera|job\s*board)\b")
+_ROLE_RE = re.compile(r"(?i)\b(?:engineer\w*|developer|analyst|specialist|scientist|designer)\b")
+
+
+def looks_like_an_ad(title: str | None, company: str | None) -> bool:
+    """"Programe de internship, trainee sau joburi entry-level in IT" from a
+    career hub: no role in the title, and the title or the company says
+    it is a listing. (A recruiter named "Career Hub" posting a "Reporting
+    Analyst" is a job.)"""
+    title = str(title or "")
+    if _ROLE_RE.search(title) or STRONG_CS_RE.search(title):
+        return False
+    return bool(
+        _AD_TITLE_RE.search(fold(title)) or (company and _AD_COMPANY_RE.search(fold(company)))
+    )
+
+
+def _training_only(keyword: str, levels: list[str] | None) -> bool:
+    """An internship-type keyword, and levels known and without junior."""
+    return (
+        bool(_INTERN_KEYWORD_RE.search(keyword)) and levels is not None
+        and not _wants_junior(levels)
+    )
+
+
+def _wants_junior(levels: list[str] | None) -> bool:
+    """The search's levels take junior roles (junior, mid or any)."""
+    wanted = {canonical_level(level) for level in levels or []}
+    return bool(wanted & {"junior", "mid", "any"})
+
+
+def relevance_predicate(keywords: list[str], levels: list[str] | None = None):
+    """title, experience_level[, description] -> bool: relevant for any of
+    `keywords`, for a search wanting `levels`."""
 
     def relevant(
         title: str, experience_level: str | None = None, description: str | None = None,
     ) -> bool:
         return any(
-            title_is_relevant(title, kw, experience_level, description) for kw in keywords
+            title_is_relevant(title, kw, experience_level, description, levels)
+            for kw in keywords
         )
 
     return relevant
+
+
+def matches_excluded(title: str | None, description: str | None, excluded: list[str]) -> bool:
+    """A posting has an excluded word: a level word ("senior", "lead",
+    "manager") in its title, any other in its title or description.
+
+    Excluding "senior" read "mentored by senior engineers" in a junior
+    posting's description, and removed 4 of the eval set's 26 intern and
+    junior postings.
+    """
+    if not excluded:
+        return False
+    level_words = [kw for kw in excluded if kw and is_level_word(kw)]
+    other_words = [kw for kw in excluded if kw and not is_level_word(kw)]
+    return matches_excluded_keywords(title or "", level_words) or matches_excluded_keywords(
+        f"{title or ''} {description or ''}", other_words,
+    )
+
+
+def is_level_word(keyword: str) -> bool:
+    """A seniority word or phrase: "senior", "Sr", "lead", "entry level"."""
+    text = keyword.strip()
+    return bool(
+        canonical_level(text)
+        or any(
+            pattern.fullmatch(text)
+            for pattern in (SENIOR_RE, JUNIOR_RE, INTERN_RE, MID_TITLE_RE, ENTRY_LEVEL_RE)
+        )
+        or re.fullmatch(r"(?i)(?:senior|junior|mid|entry|lead)[\s-]*level", text)
+    )
 
 
 def matches_excluded_keywords(text: str, excluded: list[str]) -> bool:
@@ -816,6 +1006,7 @@ def matches_company_blacklist(company: str, blacklist: list[str]) -> bool:
 INTERN_RE = re.compile(
     r"(?i)\b(?:intern(?:ship)?s?|trainees?|traineeship|apprentice(?:ship)?s?|"
     r"placements?|co.?op|summer|academy|(?:working\s+)?students?|"
+    r"(?:graduate|student|trainee)\s+(?:program(?:me)?s?|scheme)|"
     r"stagiar\w*|stagi[ui]|practicant\w*|practic[aă])(?!\w)"
 )
 
@@ -1067,10 +1258,16 @@ def _is_junior(title: str, experience_level: str | None, description: str | None
     # most junior of the levels the employer ticked.
     if says_senior(title) or INTERN_RE.search(title) or MID_TITLE_RE.search(title):
         return False
-    if experience_level == "entry":
-        return True
     if experience_level in ("intern", "mid", "senior"):
         return False
+    # An "entry" label still needs the years to agree: eJobs and BestJobs
+    # keep the most junior of the levels the employer ticked, and 28 of 52
+    # wrong production DMs came through the label alone.
+    return _asks_junior_years(title, description)
+
+
+def _asks_junior_years(title: str, description: str | None) -> bool:
+    """No more than JUNIOR_MAX_YEARS asked for, or none stated."""
     # In a title the years are the requirement ("Java Developer (3+ years)").
     in_title = [
         int(m.group(1)) for m in _YEARS_RE.finditer(fold(title)) if m.group(1).isdigit()
@@ -1105,8 +1302,10 @@ def matches_experience_level(
     title_lower = str(title).lower() if title else ""
 
     if "intern" in wanted:
-        if INTERN_RE.search(title_lower) or (
-            experience_level == "intern" and not says_senior(title_lower)
+        # Training positions only: a training title or the board's own
+        # "intern" label, never a senior title.
+        if (INTERN_RE.search(title_lower) or experience_level == "intern") and not says_senior(
+            title_lower
         ):
             return True
     if "junior" in wanted and _is_junior(title_lower, experience_level, description):
@@ -1128,7 +1327,9 @@ def city_only(location: str) -> str:
     return location.split(",")[0].strip()
 
 
-def filter_dataframe(df: pd.DataFrame, keyword: str | list[str]) -> pd.DataFrame:
+def filter_dataframe(
+    df: pd.DataFrame, keyword: str | list[str], levels: list[str] | None = None,
+) -> pd.DataFrame:
     """Apply title-relevance filtering to a scraped DataFrame.
 
     Accepts a single keyword or a list. A job passes if it's relevant
@@ -1140,7 +1341,7 @@ def filter_dataframe(df: pd.DataFrame, keyword: str | list[str]) -> pd.DataFrame
         return df
 
     keywords = [keyword] if isinstance(keyword, str) else keyword
-    relevant = relevance_predicate(keywords)
+    relevant = relevance_predicate(keywords, levels)
 
     def level(value: object) -> str | None:
         return value if isinstance(value, str) else None

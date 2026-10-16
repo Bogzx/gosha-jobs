@@ -215,3 +215,114 @@ def test_semantic_model_env_reaches_stored_embeddings():
         check=True,
     ).stdout.split()
     assert out == ["paraphrase-multilingual-mpnet-base-v2"] * 2
+
+
+class TestDmPanel:
+    """The hub-correction panel: fixed data, never the users' or personas' searches."""
+
+    def test_panel_is_fixed_distinct_and_broad(self):
+        from gosha.matching import DM_PANEL
+
+        assert len(DM_PANEL) == 40
+        assert len({k.lower() for k in DM_PANEL}) == len(DM_PANEL)
+        # IT and non-IT work alike: a panel of tech searches would subtract
+        # exactly what a computer-science search is looking for.
+        assert {"accountant", "nurse", "driver", "software developer"} <= set(DM_PANEL)
+
+    def test_panel_is_not_derived_from_the_eval_personas(self):
+        import json
+        from pathlib import Path
+
+        from gosha.matching import DM_PANEL
+        from gosha.evaluation import GENERIC_DM_KEYWORDS
+
+        root = Path(__file__).resolve().parent.parent
+        keywords = {k.lower() for k in GENERIC_DM_KEYWORDS}
+        for path in (root / "eval" / "personas.jsonl", root / "eval" / "heldout" / "personas.jsonl"):
+            keywords |= {json.loads(line)["keyword"].lower() for line in path.read_text().splitlines() if line.strip()}
+        assert not keywords & {k.lower() for k in DM_PANEL}
+
+    def test_panel_queries_take_the_searchs_place_and_levels(self):
+        from gosha.matching import DM_PANEL, dm_panel_queries
+
+        queries = dm_panel_queries(["Cluj"], ["intern"])
+        assert len(queries) == len(DM_PANEL)
+        assert queries[0] == build_subscription_query([DM_PANEL[0]], ["Cluj"], ["intern"])
+
+    def test_dm_query_vector_is_cosine_minus_alpha_panel_mean(self):
+        from gosha.matching import dm_query_vector
+
+        rng = np.random.default_rng(0)
+        q, panel, jobs = rng.normal(size=8), rng.normal(size=(5, 8)), rng.normal(size=(3, 8))
+        got = jobs @ dm_query_vector(q, panel, alpha=0.75)
+        want = jobs @ q - 0.75 * (jobs @ panel.T).mean(axis=1)
+        assert np.allclose(got, want, atol=1e-5)
+        with pytest.raises(ValueError):
+            dm_query_vector(q, panel[:, :4])
+
+    def test_panel_is_read_from_its_data_file(self, tmp_path):
+        from gosha.matching import DM_PANEL, DM_PANEL_FILE, load_dm_panel
+
+        assert DM_PANEL == load_dm_panel(DM_PANEL_FILE)
+        f = tmp_path / "panel.txt"
+        f.write_text("# header\nnurse\n\n  driver  # inline\n", encoding="utf-8")
+        assert load_dm_panel(f) == ("nurse", "driver")
+
+
+class TestDmScore:
+    """The Discord DM score: search cosine minus DM_ALPHA x panel mean."""
+
+    def test_constants_are_on_the_dm_scale(self):
+        from gosha.matching import DM_ALPHA, DM_STRONG_MATCH_AT, DM_THRESHOLD
+
+        assert DM_ALPHA == 0.25 and DM_THRESHOLD == 0.34
+        assert DM_THRESHOLD < DM_STRONG_MATCH_AT
+
+    def test_dm_score_is_cosine_minus_alpha_panel_mean(self):
+        from gosha.matching import DM_ALPHA, dm_score
+
+        rng = np.random.default_rng(1)
+        q, panel, jobs = rng.normal(size=8), rng.normal(size=(5, 8)), rng.normal(size=(3, 8))
+        want = jobs @ q - DM_ALPHA * (jobs @ panel.T).mean(axis=1)
+        assert np.allclose(dm_score(q, panel, jobs), want, atol=1e-5)
+
+    def test_matcher_dm_query_encodes_the_panel_once_per_scope(self, monkeypatch):
+        import gosha.matching as m
+
+        calls = []
+
+        def fake_encode(texts, model_name=None):
+            calls.append(list(texts))
+            return np.stack([np.full(4, len(t), dtype=np.float32) for t in texts])
+
+        monkeypatch.setattr(m, "encode_texts", fake_encode)
+        matcher = m.SemanticMatcher()
+        q = np.ones(4, dtype=np.float32)
+        first = matcher.dm_query(q, ["Cluj"], ["intern"])
+        again = matcher.dm_query(q, ["Cluj"], ["intern"])
+        assert len(calls) == 1 and calls[0] == m.dm_panel_queries(["Cluj"], ["intern"])
+        panel = np.stack([np.full(4, len(t), dtype=np.float32) for t in calls[0]])
+        assert np.allclose(first, m.dm_query_vector(q, panel)) and np.allclose(first, again)
+        matcher.dm_query(q, ["Cluj"], ["junior"])
+        assert len(calls) == 2  # another scope, another encoding
+
+    def test_matcher_dm_query_is_none_without_a_model(self, monkeypatch):
+        import gosha.matching as m
+
+        monkeypatch.setattr(m, "encode_texts", lambda texts, model_name=None: None)
+        assert m.SemanticMatcher().dm_query(np.ones(4), ["Cluj"], ["intern"]) is None
+
+    def test_dm_match_uses_its_own_threshold(self):
+        from gosha.matching import DEFAULT_THRESHOLD, DM_THRESHOLD, SemanticMatcher
+
+        matcher = SemanticMatcher()
+        assert matcher.is_dm_match(DM_THRESHOLD) and not matcher.is_dm_match(DM_THRESHOLD - 0.01)
+        assert matcher.is_dm_match(DEFAULT_THRESHOLD - 0.05) != matcher.is_match(DEFAULT_THRESHOLD - 0.05)
+        assert SemanticMatcher(dm_threshold=0.5).dm_threshold == 0.5
+
+    def test_dm_match_label(self):
+        from gosha.matching import DM_STRONG_MATCH_AT, dm_match_label
+
+        assert dm_match_label(None) is None
+        assert dm_match_label(DM_STRONG_MATCH_AT) == "Strong match"
+        assert dm_match_label(DM_STRONG_MATCH_AT - 0.01) == "Good match"

@@ -44,6 +44,12 @@ UNCHECKABLE_SOURCES = frozenset({"linkedin", "indeed", "glassdoor"})
 # return recent postings, so for the boards above this is in effect a
 # lifetime of about this long after the posting drops out of the results.
 UNSEEN_EXPIRY_DAYS = 30
+# Boards whose IT catalog every cycle crawls whole (eJobs' IT browse,
+# Hipo's city catalog): a posting missing from it this long is gone. Prod,
+# 2026-10-16: hipo 9 of 20 and ejobs 6 of 64 active rows had been unseen
+# for 14+ days.
+CATALOG_SOURCES = frozenset({"ejobs", "hipo"})
+CATALOG_EXPIRY_DAYS = 14
 
 
 # Boards that keep serving a removed posting with 200 and a notice in the
@@ -76,27 +82,40 @@ async def _check_url_status(client: httpx.AsyncClient, url: str) -> int | None:
         return None
 
 
-async def expire_unseen_jobs(max_unseen_days: int = UNSEEN_EXPIRY_DAYS) -> int:
-    """Deactivate active jobs no scrape has returned for `max_unseen_days`.
+async def expire_unseen_jobs(
+    max_unseen_days: int = UNSEEN_EXPIRY_DAYS,
+    catalog_days: int = CATALOG_EXPIRY_DAYS,
+) -> int:
+    """Deactivate active jobs no scrape has returned for `max_unseen_days`,
+    or `catalog_days` for the boards crawled whole (CATALOG_SOURCES).
 
     Bulk, and without a job.expired event per row: the first run on an old
     database can expire thousands of rows at once.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=max_unseen_days)
+    now = datetime.now(timezone.utc)
+    expired = 0
     async with get_session() as session:
-        result = await session.execute(
-            update(Job)
-            .where(
-                Job.is_active.is_(True),
-                Job.last_seen_at < cutoff,
+        for unseen_for, source_filter in (
+            (catalog_days, Job.source.in_(CATALOG_SOURCES)),
+            (max_unseen_days, Job.source.not_in(CATALOG_SOURCES)),
+        ):
+            result = await session.execute(
+                update(Job)
+                .where(
+                    Job.is_active.is_(True),
+                    source_filter,
+                    Job.last_seen_at < now - timedelta(days=unseen_for),
+                )
+                .values(is_active=False)
+                .execution_options(synchronize_session=False)
             )
-            .values(is_active=False)
-            .execution_options(synchronize_session=False)
-        )
+            expired += result.rowcount or 0
         await session.commit()
-    expired = result.rowcount or 0
     if expired:
-        log.info("Expired %d jobs not seen by any scrape for %d days", expired, max_unseen_days)
+        log.info(
+            "Expired %d jobs not seen by any scrape for %d days (%d for %s)",
+            expired, max_unseen_days, catalog_days, ", ".join(sorted(CATALOG_SOURCES)),
+        )
     return expired
 
 

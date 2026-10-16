@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -38,6 +39,41 @@ DEFAULT_MODEL = os.getenv("SEMANTIC_MODEL", LEGACY_MODEL)
 DEFAULT_THRESHOLD = 0.42
 DEFAULT_CV_THRESHOLD = 0.43
 STRONG_MATCH_AT = 0.60
+
+# The Discord DM score (docs/EVAL.md, "Discord DMs"): a search's cosine to
+# a posting minus DM_ALPHA times the mean cosine of a fixed panel of
+# everyday searches (gosha/dm_panel.txt) to the same posting. Generic tech
+# ads sit close to every short query; how close a posting is to searches in
+# general is taken off. Used for searches without a CV (all of them in
+# production, 2026-10-16); a search blended with a CV keeps the cosine and
+# DEFAULT_CV_THRESHOLD.
+#
+# Chosen on the main eval set by the rule fixed before the run (gosha-lead):
+# the best batch P@10 of the generic searches, with no more starved
+# searches than plain cosine at 0.42 (eval and judged real DMs) and at most
+# 0.10 of held-out recall lost. Pools are the product's own filters
+# (pipeline.prefilter). Measured against cosine @ 0.42, no CV:
+# - main, generic searches: P@10 0.825 -> 0.855, recall 0.29 -> 0.20
+#   (the gain comes from sending fewer: 9.4 -> 6.7 per search);
+# - held-out: generic recall 0.64 -> 0.57, persona-keyword P@5 0.21 -> 0.27;
+# - judged real DMs (one AI judge): tech share of the top 5 0.80 -> 0.83,
+#   no subscription starved.
+# On the DM score's scale, not SEMANTIC_THRESHOLD's (a plain cosine).
+# Re-pick all three after a SEMANTIC_MODEL or panel change.
+DM_PANEL_FILE = Path(__file__).with_name("dm_panel.txt")
+
+
+def load_dm_panel(path: Path = DM_PANEL_FILE) -> tuple[str, ...]:
+    lines = (line.split("#", 1)[0].strip() for line in path.read_text(encoding="utf-8").splitlines())
+    return tuple(line for line in lines if line)
+
+
+DM_PANEL: tuple[str, ...] = load_dm_panel()
+DM_ALPHA = 0.25
+DM_THRESHOLD = 0.34
+# Same rule as STRONG_MATCH_AT, on main: from here 91% of the pairs sent
+# (65 of 616) are relevant or adjacent.
+DM_STRONG_MATCH_AT = 0.47
 
 # Lazy-loaded model singleton
 _model: Any = None
@@ -177,12 +213,18 @@ class SemanticMatcher:
         model_name: str = DEFAULT_MODEL,
         threshold: float = DEFAULT_THRESHOLD,
         cv_threshold: float | None = None,
+        dm_threshold: float = DM_THRESHOLD,
     ) -> None:
         self.model_name = model_name
         self.threshold = threshold
         # For queries blended with the user's CV (gosha/pipeline.py).
         self.cv_threshold = DEFAULT_CV_THRESHOLD if cv_threshold is None else cv_threshold
+        # For the DM score (dm_query), on its own scale.
+        self.dm_threshold = dm_threshold
         self._available: bool | None = None
+        # Panel means per (places, levels): encoded once per process.
+        self._panel_means: dict[tuple, np.ndarray] = {}
+        self._panel_lock = threading.Lock()
 
     @property
     def available(self) -> bool:
@@ -234,6 +276,71 @@ class SemanticMatcher:
         """Check a score against the threshold for its query type."""
         return score >= (self.cv_threshold if with_cv else self.threshold)
 
+    def panel_mean(
+        self, locations: list[str], experience_levels: list[str] | None = None,
+    ) -> np.ndarray | None:
+        """Mean embedding of the panel searches with these places and
+        levels (dm_panel_queries). Cached: 40 encodings, about a second."""
+        key = (tuple(locations or ()), tuple(experience_levels or ()))
+        with self._panel_lock:
+            mean = self._panel_means.get(key)
+            if mean is None:
+                panel = encode_texts(dm_panel_queries(list(key[0]), list(key[1])), self.model_name)
+                if panel is None:
+                    return None
+                mean = self._panel_means[key] = np.asarray(panel, dtype=np.float32).mean(axis=0)
+            return mean
+
+    def dm_query(
+        self,
+        query_embedding: np.ndarray,
+        locations: list[str],
+        experience_levels: list[str] | None = None,
+    ) -> np.ndarray | None:
+        """The search's query vector for the DM score: scored against the
+        stored job vectors like any query, it gives dm_score. None when
+        the panel cannot be encoded."""
+        mean = self.panel_mean(locations, experience_levels)
+        if mean is None:
+            return None
+        return dm_query_vector(query_embedding, mean[None, :])
+
+    def is_dm_match(self, score: float) -> bool:
+        return score >= self.dm_threshold
+
+
+def dm_panel_queries(
+    locations: list[str], experience_levels: list[str] | None = None,
+) -> list[str]:
+    """DM_PANEL as queries shaped like a user's search (same places and
+    levels), so subtracting them leaves only the difference in role."""
+    return [build_subscription_query([k], locations, experience_levels) for k in DM_PANEL]
+
+
+def dm_query_vector(
+    query_emb: np.ndarray, panel_embs: np.ndarray, alpha: float = DM_ALPHA,
+) -> np.ndarray:
+    """query - alpha * mean(panel).
+
+    For a job vector j, (q - alpha * mean(p)) . j = q . j - alpha * mean(p_k . j):
+    the search's cosine minus `alpha` times the panel's mean cosine, in one
+    dot product, so postings are scored exactly as they are today.
+    """
+    query = np.asarray(query_emb, dtype=np.float32)
+    panel = np.asarray(panel_embs, dtype=np.float32)
+    if panel.ndim != 2 or panel.shape[1:] != query.shape:
+        raise ValueError(f"panel {panel.shape} does not match query {query.shape}")
+    return (query - alpha * panel.mean(axis=0)).astype(np.float32)
+
+
+def dm_score(
+    query_emb: np.ndarray, panel_embs: np.ndarray, job_embs: np.ndarray,
+    alpha: float = DM_ALPHA,
+) -> np.ndarray:
+    """DM scores of postings `job_embs` (N, D) for one search: its cosine
+    to each minus `alpha` times the panel's mean cosine to it."""
+    return np.asarray(job_embs, dtype=np.float32) @ dm_query_vector(query_emb, panel_embs, alpha)
+
 
 def match_label(score: float | None) -> str | None:
     """Words for a Discord delivery score.
@@ -246,3 +353,10 @@ def match_label(score: float | None) -> str | None:
     if score is None:
         return None
     return "Strong match" if score >= STRONG_MATCH_AT else "Good match"
+
+
+def dm_match_label(score: float | None) -> str | None:
+    """match_label for a DM score (its own scale and Strong cut)."""
+    if score is None:
+        return None
+    return "Strong match" if score >= DM_STRONG_MATCH_AT else "Good match"

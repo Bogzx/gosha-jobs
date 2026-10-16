@@ -10,6 +10,7 @@ Each stage can run independently. The DB is the glue between them.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import time
@@ -24,10 +25,13 @@ from sqlalchemy import select, update
 from gosha.database import get_session
 from gosha.dedup import normalize_key
 from gosha.filters import (
+    canonical_keyword,
+    fold,
     clean_location,
     filter_dataframe,
+    looks_like_an_ad,
     matches_company_blacklist,
-    matches_excluded_keywords,
+    matches_excluded,
     matches_experience_level,
     normalize_location,
     search_location_ok,
@@ -224,6 +228,8 @@ async def upsert_jobs(df: pd.DataFrame) -> list[Job]:
 async def run_scrape_stage(
     tunnel_manager: SSHTunnelManager,
     health: ScrapeHealth | None = None,
+    *,
+    scraped_for: dict[tuple, set[int]] | None = None,
 ) -> list[Job]:
     """Stage 1: scrape all active subscriptions and upsert results.
 
@@ -237,6 +243,11 @@ async def run_scrape_stage(
     """
     from gosha.scrape_health import get_scrape_health
     from gosha.scraper import baseline_combos, jobspy_boards_for, scrape_jobs_raw
+
+    global last_scraped_for
+    if scraped_for is None:
+        scraped_for = {}
+    last_scraped_for = scraped_for
 
     health = health or get_scrape_health()
     attempted: set[str] = set()
@@ -261,6 +272,9 @@ async def run_scrape_stage(
         return []
 
     scrape_combos = _with_baseline(_scrape_combos(all_subs), baseline)
+    # What the searches behind each query ask for: the scrape filter keeps
+    # what any of them could take (each search's own levels apply at match).
+    levels_for = _levels_per_group(all_subs)
 
     all_jobs: list[Job] = []
     for combo, keywords in scrape_combos.items():
@@ -284,14 +298,18 @@ async def run_scrape_stage(
         if df.empty:
             continue
         _count_scraped(scraped, df)
-        df = filter_dataframe(df, keywords)
-        all_jobs.extend(await _upsert_safely(df, f"JobSpy {keyword!r} in {location!r}"))
+        df = filter_dataframe(df, keywords, levels_for.get(_group_of(combo)))
+        upserted = await _upsert_safely(df, f"JobSpy {keyword!r} in {location!r}")
+        _note_scraped(scraped_for, combo, upserted)
+        all_jobs.extend(upserted)
 
     # Extra sources (Romanian boards + remote feeds): direct APIs, no
     # proxies. Additive for every subscription regardless of its boards
     # list, wherever the source can serve the location.
     all_jobs.extend(
-        await _scrape_extra_sources(scrape_combos, attempted, scraped, searches_by_source)
+        await _scrape_extra_sources(
+            scrape_combos, attempted, scraped, searches_by_source, scraped_for, levels_for,
+        )
     )
 
     # Deduplicate by ID
@@ -344,7 +362,7 @@ def _scrape_combos(subs: list[Subscription]) -> dict[tuple, list[str]]:
                     )
                 continue
             place = normalize_location(location)[0].lower()
-            for keyword in sub.keywords:
+            for keyword in map(canonical_keyword, sub.keywords):
                 key = (keyword.lower().strip(), place, sub.max_age_days)
                 group = groups.setdefault(key, {
                     "location": location.lower(), "boards": set(), "keywords": [],
@@ -355,6 +373,57 @@ def _scrape_combos(subs: list[Subscription]) -> dict[tuple, list[str]]:
         (keyword, g["location"], tuple(sorted(g["boards"])), max_age): g["keywords"]
         for (keyword, _place, max_age), g in groups.items()
     }
+
+
+# The scrape stage's record of which jobs each search group's queries
+# returned in the latest cycle (search_group -> job ids).
+last_scraped_for: dict[tuple, set[int]] | None = None
+
+
+def search_group(keyword: str, location: str, max_age_days: int | None) -> tuple:
+    """What one scrape query stands for: keyword, canonical place, window
+    (the grouping of _scrape_combos). Keys `scraped_for`."""
+    place = clean_location(location) or location
+    return (
+        canonical_keyword(keyword).lower(), normalize_location(place)[0].lower(), max_age_days,
+    )
+
+
+def _group_of(combo: tuple) -> tuple:
+    keyword, location, _boards, max_age_days = combo
+    return search_group(keyword, location, max_age_days)
+
+
+def _levels_per_group(subs: list[Subscription]) -> dict[tuple, list[str]]:
+    """search_group -> the union of the experience levels its searches want."""
+    out: dict[tuple, list[str]] = {}
+    for sub in subs:
+        for keyword in sub.keywords:
+            for location in sub.locations:
+                levels = out.setdefault(search_group(keyword, location, sub.max_age_days), [])
+                levels.extend(lv for lv in (sub.experience_levels or ["any"]) if lv not in levels)
+    return out
+
+
+def _note_scraped(
+    scraped_for: dict[tuple, set[int]] | None, combo: tuple, jobs: list[Job],
+) -> None:
+    """Record which jobs a query returned (after the relevance filter)."""
+    if scraped_for is None:
+        return
+    keyword, location, _boards, max_age_days = combo
+    scraped_for.setdefault(search_group(keyword, location, max_age_days), set()).update(
+        job.id for job in jobs
+    )
+
+
+def _scraped_by_own_searches(
+    sub: Subscription, scraped_for: dict[tuple, set[int]],
+) -> set[int]:
+    return set().union(*(
+        scraped_for.get(search_group(keyword, location, sub.max_age_days), set())
+        for keyword in sub.keywords for location in sub.locations
+    ))
 
 
 # Scrape cycles are four hours apart: the cycle number baseline_combos
@@ -430,6 +499,8 @@ async def _scrape_extra_sources(
     attempted: set[str] | None = None,
     scraped: dict[str, set[str]] | None = None,
     searches_by_source: dict[str, set[tuple]] | None = None,
+    scraped_for: dict[tuple, set[int]] | None = None,
+    levels_for: dict[tuple, list[str]] | None = None,
 ) -> list[Job]:
     """Run the plugin scrapers for every (keyword, location) combo.
 
@@ -453,7 +524,8 @@ async def _scrape_extra_sources(
     for combo, keywords in scrape_combos.items():
         keyword, location, _boards, max_age_days = combo
         terms = expand_keyword(keyword)[:MAX_EXTRA_TERMS]
-        relevant = relevance_predicate(keywords)
+        levels = (levels_for or {}).get(_group_of(combo))
+        relevant = relevance_predicate(keywords, levels)
         for scraper in scrapers:
             probe = SearchQuery(keyword=keyword, location=location, max_age_days=max_age_days)
             if not _applies(scraper, probe):
@@ -482,8 +554,9 @@ async def _scrape_extra_sources(
             df = df.drop_duplicates(subset=["job_url"], keep="first")
             if scraped is not None:
                 _count_scraped(scraped, df)
-            df = filter_dataframe(df, keywords)
+            df = filter_dataframe(df, keywords, levels)
             jobs = await _upsert_safely(df, f"{scraper.name} {keyword!r} in {location!r}")
+            _note_scraped(scraped_for, combo, jobs)
             if jobs:
                 collected.extend(jobs)
                 log.info(
@@ -529,8 +602,9 @@ def job_matches_subscription(job: Job, sub: Subscription) -> bool:
         return False
     if not search_location_ok(job.location, sub.locations, sub.remote_ok):
         return False
-    combined_text = f"{job.title} {job.description or ''}"
-    if matches_excluded_keywords(combined_text, sub.excluded_keywords):
+    if looks_like_an_ad(job.title, job.company):
+        return False
+    if matches_excluded(job.title, job.description, sub.excluded_keywords):
         return False
     return matches_experience_level(
         job.title, sub.experience_levels, job.experience_level, job.description,
@@ -569,14 +643,16 @@ def _title_relevant_for_any_keyword(
     keywords: list[str],
     experience_level: str | None = None,
     description: str | None = None,
+    levels: list[str] | None = None,
 ) -> bool:
     """Check if title is relevant for at least one subscription keyword.
 
-    `experience_level` (the board's label) and `description` as the scrape
-    stage's filter uses them, so a posting kept there is not dropped here.
+    `experience_level` (the board's label), `description` and the search's
+    `levels` as the scrape stage's filter uses them, so a posting kept
+    there is not dropped here.
     """
     for kw in keywords:
-        if title_is_relevant(title, kw, experience_level, description):
+        if title_is_relevant(title, kw, experience_level, description, levels):
             return True
     return False
 
@@ -616,11 +692,37 @@ def blend_with_user_vector(
     return ((query + user) / 2).astype(np.float32)
 
 
+def prefilter(sub: Subscription, jobs: list[Job]) -> list[Job]:
+    """The jobs a search can be matched with, before any scoring: the hard
+    filters (job_matches_subscription) and what the keyword itself implies
+    for the search's levels. Public: gosha.evaluation builds its DM pool
+    with it, so the eval and the match stage cannot drift apart.
+
+    What the keyword implies: "software engineer intern" wants entry-level
+    titles in tech. The scrape stage applied this to the search's own
+    results; the jobs here also come from everyone else's searches, and the
+    embeddings cannot see seniority (docs/EVAL.md), so without it an intern
+    search was sent the senior roles another user's "java developer" search
+    had found.
+    """
+    candidates = [job for job in jobs if job_matches_subscription(job, sub)]
+    if not sub.keywords:
+        return candidates
+    return [
+        job for job in candidates
+        if _title_relevant_for_any_keyword(
+            job.title, sub.keywords, job.experience_level, job.description,
+            sub.experience_levels,
+        )
+    ]
+
+
 async def match_jobs_for_subscription(
     sub: Subscription,
     jobs: list[Job],
     semantic_matcher: SemanticMatcher | None = None,
     user_vector: np.ndarray | None = None,
+    scraped_for: dict[tuple, set[int]] | None = None,
 ) -> list[tuple[Job, float | None]]:
     """Return (job, score) pairs for jobs matching a subscription.
 
@@ -629,32 +731,10 @@ async def match_jobs_for_subscription(
     user's CV, refined by feedback) when there is one. Otherwise falls back
     to regex with score None (no similarity was measured).
     """
-    # Pre-filter: hard filters that must pass regardless of matching mode
-    candidates: list[Job] = []
-    for job in jobs:
-        if not job_matches_subscription(job, sub):
-            continue
-        candidates.append(job)
-
+    candidates = prefilter(sub, jobs)
     if not candidates:
         return []
-
     keywords = sub.keywords
-    # What the keyword itself implies: "software engineer intern" wants
-    # entry-level titles in tech. The scrape stage applied this to the
-    # search's own results; the jobs here also come from everyone else's
-    # searches, and the embeddings cannot see seniority (docs/EVAL.md), so
-    # without it an intern search was sent the senior roles another
-    # user's "java developer" search had found.
-    if keywords:
-        candidates = [
-            job for job in candidates
-            if _title_relevant_for_any_keyword(
-                job.title, keywords, job.experience_level, job.description,
-            )
-        ]
-        if not candidates:
-            return []
 
     # Semantic matching path — reuses embeddings stored at scrape time
     # instead of re-encoding the same postings for every subscription.
@@ -671,19 +751,43 @@ async def match_jobs_for_subscription(
             # Blended only when the vectors share a space (same shape).
             with_cv = user_vector is not None and np.shape(user_vector) == np.shape(query_emb)
             query_emb = blend_with_user_vector(query_emb, user_vector)
+            is_match = functools.partial(semantic_matcher.is_match, with_cv=with_cv)
+            if not with_cv:
+                # The DM score (gosha.matching, gosha-rank): the query minus
+                # DM_ALPHA times the mean of a panel of other searches for
+                # the same places and levels, filtered on its own threshold.
+                # The panel is encoded once per (places, levels): ~1 s.
+                dm_query = getattr(semantic_matcher, "dm_query", None)
+                dm_q = None
+                if dm_query is not None:
+                    dm_q = await asyncio.to_thread(
+                        dm_query, query_emb, sub.locations, sub.experience_levels,
+                    )
+                if dm_q is not None:
+                    query_emb, is_match = dm_q, semantic_matcher.is_dm_match
+                elif dm_query is not None:
+                    log.warning("DM query unavailable for search #%s: plain cosine", sub.id)
+            # The score stored and sorted on is this one (the DM score
+            # without a CV, the blended cosine with one).
             scores = await score_jobs_against_query_async(query_emb, candidates)
             matches = [
                 (job, score)
                 for job, score in zip(candidates, scores)
-                if semantic_matcher.is_match(score, with_cv=with_cv)
+                if is_match(score)
             ]
             # Sort by score descending
             matches.sort(key=lambda x: x[1], reverse=True)
             return matches
 
-    # Regex fallback path: title relevance (applied above) decides. No
-    # score: a stored 1.0 sorted above every cosine at delivery (and read
-    # as a "Strong match").
+    # Regex fallback path: title relevance (applied above) decides, and
+    # only among the jobs this search's own queries returned. A generic
+    # keyword ("accountant") passes every title, so without the model its
+    # search was sent every job in its city that any other search scraped.
+    # No score: a stored 1.0 sorted above every cosine at delivery (and
+    # read as a "Strong match").
+    if scraped_for is not None:
+        own = _scraped_by_own_searches(sub, scraped_for)
+        candidates = [job for job in candidates if job.id in own]
     return [(job, None) for job in candidates]
 
 
@@ -709,6 +813,8 @@ async def _cv_vector_for(user: User) -> np.ndarray | None:
 async def run_match_stage(
     jobs: list[Job],
     semantic_matcher: SemanticMatcher | None = None,
+    *,
+    scraped_for: dict[tuple, set[int]] | None = None,
 ) -> int:
     """Stage 2: match jobs against all active subscriptions and enqueue deliveries.
 
@@ -746,17 +852,19 @@ async def run_match_stage(
     delivery_items: list[dict] = []
     group_of: dict[int, int] = {}
     key_of: dict[int, str | None] = {}
+    posting_of: dict[int, tuple[str | None, str | None, str | None]] = {}
 
     for sub, user in sub_user_pairs:
         if semantic_matcher is not None and user.id not in user_vectors:
             user_vectors[user.id] = await _cv_vector_for(user)
 
         matches = await match_jobs_for_subscription(
-            sub, jobs, semantic_matcher, user_vectors.get(user.id),
+            sub, jobs, semantic_matcher, user_vectors.get(user.id), scraped_for,
         )
         for job, score in matches:
             group_of[job.id] = job.dedup_group_id or job.id
             key_of[job.id] = normalize_key(job.title or "", job.company or "")
+            posting_of[job.id] = (job.title, job.company, job.description)
             delivery_items.append({
                 "user_id": user.id,
                 "job_id": job.id,
@@ -764,7 +872,9 @@ async def run_match_stage(
                 "score": score,
             })
 
-    delivery_items = await _one_per_duplicate_group(delivery_items, group_of, key_of)
+    delivery_items = await _one_per_duplicate_group(
+        delivery_items, group_of, key_of, posting_of,
+    )
     if not delivery_items:
         log.info("Match stage: no new matches found.")
         return 0
@@ -778,6 +888,7 @@ async def _one_per_duplicate_group(
     items: list[dict],
     group_of: dict[int, int],
     key_of: dict[int, str | None] | None = None,
+    posting_of: dict[int, tuple[str | None, str | None, str | None]] | None = None,
 ) -> list[dict]:
     """Drop items whose duplicate group the user already has a delivery in.
 
@@ -790,12 +901,19 @@ async def _one_per_duplicate_group(
     group covers them), and leaving them out keeps a second, distinct
     "Software Engineer" opening at a large employer from being dropped.
 
+    `posting_of` (job id -> title, company, description) adds the grouping's
+    own rule, gosha.dedup.same_posting: a repost by an aggregator whose
+    text names the employer ("Undelucram" for Continental Anvelope) is the
+    posting the user already had, though title + employer differ.
+
     Within the batch the first item per (user, group) wins, which is the
     one from the first (Discord-notifying) search that matched.
     """
-    from gosha.dedup import WINDOW_DAYS, normalize_key
+    from gosha.dedup import WINDOW_DAYS, normalize_key, same_posting
 
     key_of = key_of or {}
+    posting_of = posting_of or {}
+    expired: dict[int, list[tuple[str | None, str | None, str | None]]] = {}
     groups = set(group_of.values())
     users = {item["user_id"] for item in items}
     taken: set[tuple[int, int]] = set()
@@ -813,9 +931,9 @@ async def _one_per_duplicate_group(
             )
             for user_id, group_id, job_id in rows.all():
                 taken.add((user_id, group_id or job_id))
-            if any(key_of.values()):
+            if any(key_of.values()) or posting_of:
                 recent = await session.execute(
-                    select(UserJob.user_id, Job.title, Job.company)
+                    select(UserJob.user_id, Job.title, Job.company, Job.description)
                     .join(Job, UserJob.job_id == Job.id)
                     .where(
                         UserJob.user_id.in_(users),
@@ -823,16 +941,23 @@ async def _one_per_duplicate_group(
                         Job.is_active.is_(False),
                     )
                 )
-                for user_id, title, company in recent.all():
+                for user_id, title, company, description in recent.all():
                     key = normalize_key(title or "", company or "")
                     if key:
                         taken_keys.add((user_id, key))
+                    expired.setdefault(user_id, []).append((title, company, description))
 
     kept: list[dict] = []
     for item in items:
         group = (item["user_id"], group_of.get(item["job_id"], item["job_id"]))
         key = key_of.get(item["job_id"])
         if group in taken or (key and (item["user_id"], key) in taken_keys):
+            continue
+        posting = posting_of.get(item["job_id"])
+        if posting and any(
+            same_posting(posting[0], posting[1], title, company, posting[2], text)
+            for title, company, text in expired.get(item["user_id"], ())
+        ):
             continue
         # Within the batch the group decides: active twins were grouped
         # just before matching (assign_dedup_groups).
@@ -851,9 +976,44 @@ async def _one_per_duplicate_group(
 # ═══════════════════════════════════════════════════════════════════════
 
 # DMs per user per cycle. A new subscriber's first cycle can match dozens
-# of postings; the best ones go out, the rest stay on the website and the
-# user is told how many more there are.
+# of postings; the best ones go out, the rest wait for the next cycles
+# (and are on the website) and the user is told how many more there are.
 MAX_DMS_PER_USER = 10
+# ... per search per cycle. Production, 30 days, 178 search-cycles: p50 1,
+# p90 4, max 25 (a search matching "kra"/"mun" as substrings); 5 defers
+# rows in 11 of them, none a search's first cycle.
+MAX_DMS_PER_SEARCH = 5
+# ... per company per user per cycle: one employer's ten openings are not
+# ten different chances.
+MAX_DMS_PER_COMPANY = 3
+
+
+def _best_first(row: tuple) -> tuple:
+    uj = row[0]
+    score = uj.relevance_score
+    return (score is None, -(score or 0.0), uj.id)
+
+
+def _within_caps(sendable: list[tuple]) -> list[tuple]:
+    """The best-first rows that fit the per-user, per-search and
+    per-company caps; the others wait."""
+    batch: list[tuple] = []
+    per_search: dict[int, int] = {}
+    per_company: dict[str, int] = {}
+    for row in sendable:
+        _uj, job, _user, sub = row
+        company = fold(job.company or "").strip()
+        if len(batch) >= MAX_DMS_PER_USER:
+            break
+        if per_search.get(sub.id, 0) >= MAX_DMS_PER_SEARCH:
+            continue
+        if company and per_company.get(company, 0) >= MAX_DMS_PER_COMPANY:
+            continue
+        per_search[sub.id] = per_search.get(sub.id, 0) + 1
+        if company:
+            per_company[company] = per_company.get(company, 0) + 1
+        batch.append(row)
+    return batch
 # A match whose DM keeps failing for transient reasons (Discord 5xx, rate
 # limits, a deploy mid-loop) is retried each cycle for this long.
 DM_RETRY_WINDOW = timedelta(days=2)
@@ -905,12 +1065,18 @@ async def deliver_pending(bot: JobBot) -> int:
         seen_titles: set[tuple[str, str]] = set()
         # Best first, before the duplicate check below: in id order the
         # copy kept was the older one, whatever its score, and the DMs
-        # went out in the order the rows were written.
-        items = sorted(items, key=lambda row: row[0].relevance_score or 0.0, reverse=True)
+        # went out in the order the rows were written. Unscored (regex
+        # fallback) matches after every scored one.
+        items = sorted(items, key=_best_first)
         for uj, job, user, sub in items:
             # Web-managed searches can opt out of Discord notifications;
             # matches still show up on the website.
             if not sub.notify_discord:
+                statuses[uj.id] = UserJob.DM_SKIPPED
+                continue
+            # A match deferred by the caps below waited a cycle or more:
+            # still within its search's window?
+            if not is_fresh_enough(job, sub.max_age_days):
                 statuses[uj.id] = UserJob.DM_SKIPPED
                 continue
             # Same title + company from two boards in one batch: one DM.
@@ -921,16 +1087,20 @@ async def deliver_pending(bot: JobBot) -> int:
             seen_titles.add(key)
             sendable.append((uj, job, user, sub))
 
-        for uj, *_rest in sendable[MAX_DMS_PER_USER:]:
-            statuses[uj.id] = UserJob.DM_SKIPPED
-        overflow = len(sendable) - MAX_DMS_PER_USER
+        # The caps defer: what does not fit stays pending for the next
+        # cycle (best first again, among whatever is new by then) until
+        # DM_RETRY_WINDOW. Marking it skipped lost it for good: production
+        # dropped 8 good Cluj matches of one user's first batch.
+        batch = _within_caps(sendable)
+        overflow = len(sendable) - len(batch)
 
         sent_at: dict[int, datetime] = {}
-        for uj, job, user, sub in sendable[:MAX_DMS_PER_USER]:
-            kw_str = ", ".join(sub.keywords[:3])[:80]
+        for uj, job, user, sub in batch:
+            kw_str = ", ".join(map(canonical_keyword, sub.keywords[:3]))[:80]
             loc_str = ", ".join(sub.locations[:2])[:60]
             embed, view = build_job_embed_with_buttons(
                 job, uj.id, uj.relevance_score, f"{kw_str} in {loc_str}",
+                scored_with_cv=user.cv_embedding is not None,
             )
             outcome = await _dm_user(bot, user.discord_user_id, embed, view)
             if outcome == DM_SENT:
@@ -961,7 +1131,8 @@ async def deliver_pending(bot: JobBot) -> int:
             where = f"<{site}/feed>" if site else "the website"
             await _send_text(
                 bot, items[0][2].discord_user_id,
-                f"…and **{overflow}** more matches. See them all on {where}.",
+                f"…and **{overflow}** more matches: the best of them come in the "
+                f"next few hours, and all of them are on {where}.",
             )
 
         # The rest (skipped, failed) once per user; sent ones are already
@@ -1054,7 +1225,14 @@ async def _run_scrape_cycle(
     health = get_scrape_health()
 
     # Stage 1: Scrape
+    # Which jobs each search's own queries returned: the regex fallback
+    # matches a search against those only (see match_jobs_for_subscription).
+    # Left by the stage in last_scraped_for, so a stand-in stage taking
+    # (tunnels, health) still works.
+    global last_scraped_for
+    last_scraped_for = None
     jobs = await run_scrape_stage(tunnel_manager, health)
+    scraped_for = last_scraped_for
 
     # Health alerting happens BEFORE anything can return early: a cycle
     # that found nothing is exactly the cycle worth shouting about.
@@ -1098,7 +1276,7 @@ async def _run_scrape_cycle(
                 log.warning("Semantic matching requested but not available — falling back to regex")
                 matcher = None
 
-        await run_match_stage(jobs, matcher)
+        await run_match_stage(jobs, matcher, scraped_for=scraped_for)
     else:
         log.warning("No jobs found this cycle.")
 

@@ -14,7 +14,7 @@ from gosha.database import get_session
 from gosha.domain.errors import NotFoundError
 from gosha.filters import (
     matches_company_blacklist,
-    matches_excluded_keywords,
+    matches_excluded,
     matches_experience_level,
     search_location_ok,
 )
@@ -58,9 +58,7 @@ def passes_user_exclusions(
 ) -> bool:
     if blacklist and matches_company_blacklist(job.company, blacklist):
         return False
-    if excluded and matches_excluded_keywords(
-        f"{job.title} {job.description or ''}", excluded
-    ):
+    if excluded and matches_excluded(job.title, job.description, excluded):
         return False
     return True
 
@@ -106,7 +104,7 @@ async def _without_excluded_keywords(ids: list[int], excluded: list[str]) -> lis
             )
             hits.update(
                 row.id for row in rows
-                if matches_excluded_keywords(f"{row.title} {row.description or ''}", excluded)
+                if matches_excluded(row.title, row.description, excluded)
             )
     return [job_id for job_id in ids if job_id not in hits]
 
