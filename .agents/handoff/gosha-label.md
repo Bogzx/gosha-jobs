@@ -181,21 +181,51 @@ Optional, not owned by me: mention the held-out set in `docs/EVAL.md`.
 ## For the owner's human label pass (added by the lead, 2026-10-16)
 - ~~"Exactly 2 years required" is labelled inconsistently~~ **RESOLVED by the owner's decision, applied by gosha-label on 2026-10-16. See "Two-year rule applied" below.**
 
-## Two-year rule applied (owner's decision, 2026-10-16), uncommitted
+## Two-year rule applied (owner's decision, 2026-10-16), committed in 6808693
 Rule: when the headline requirement is exactly 2 years, or "2+ years", the level is `junior` (the product's line, `filters.JUNIOR_MAX_YEARS`). A range such as 2–4 or 2–3, or a posting that is mid or senior for another reason, is unchanged. Applied to both sets in one pass, by reading the text. No ranker output was looked at.
 
 - **Changed (9 postings)**, each with the note `level: 2-year rule (owner 2026-10-16)`, appended to any existing note:
   - main `eval/postings.jsonl`: `ejobs-027` (any → junior; "minim 2 ani" in pharma promotion);
   - held-out, mid → junior: `heldout-ejobs-002`, `heldout-ejobs-005`, `heldout-ejobs-006`, `heldout-ejobs-034`, `heldout-ejobs-045`, `heldout-ejobs-052`, `heldout-ejobs-059`, `heldout-jobicy-014`.
 - **Considered and left (the level does not rest on the 2 years):**
-  - main: `bestjobs-032` (2–4 years, mid), `bestjobs-023` (2–5, junior) and `bestjobs-035` (2–3, junior). The two ranges labelled junior are a separate inconsistency, outside this decision, for the owner. Also `ejobs-057` (3+ years, QA lead).
+  - main: `bestjobs-032` (2–4 years, mid; later changed by the range rule below), `bestjobs-023` (2–5, junior) and `bestjobs-035` (2–3, junior). Both are already correct under the range rule. Also `ejobs-057` (3+ years, QA lead).
   - main, already junior: `bestjobs-050`, `bestjobs-052`, `ejobs-026`, `ejobs-031` and `ejobs-039`.
   - main, "2 years" not about work experience: `ejobs-015` and `bestjobs-042`.
-  - held-out: `heldout-ejobs-032` (also 4+ years of SQL), `heldout-ejobs-086` ("Mid Level" title), `heldout-ejobs-074` (Team Leader) and `heldout-bestjobs-045` (2–3 years).
+  - held-out: `heldout-ejobs-032` (also 4+ years of SQL), `heldout-ejobs-086` ("Mid Level" title), `heldout-ejobs-074` (Team Leader) and `heldout-bestjobs-045` (2–3 years; later changed by the range rule below).
 - **Grades:** the full grade matrix (24 personas × both sets) is identical before and after, because `junior`, `any` and `mid` are all in `APPLICABLE_LEVELS`. Nothing to recompute.
 - **Docs:**
   - `eval/heldout/README.md`: the rule, level counts (junior 36 → 44, mid 71 → 63), the lang × level table, the note count (205) and a "Two-year rule applied" section.
   - `docs/EVAL.md` (at the lead's request): the rule in Data → Labels, held-out 258 → 261, the limitation bullet marked resolved, and "What to try next" trimmed.
 - **Test:** `tests/test_heldout.py::test_two_year_rule_relabels_are_junior[main|heldout]`. The held-out total is unchanged at 261.
-- **CI eval gate:** `eval/results/*.json` and `eval/results/heldout/*.json` now fail `--check` with "regenerate the baseline", because `postings_sha256` changed. These files are gosha-rank's. Checked offline: TF-IDF main gives nDCG@10 0.6257, identical to the stored baseline, so only the fingerprint moved.
+- **CI eval gate:** the change of `postings_sha256` required new baselines. gosha-rank regenerated them, and they are in 6808693 too.
 - Full suite: **1327 passed, 9 skipped** (2026-10-16).
+
+## Range rule applied (owner's decision, 2026-10-16), committed in 6808693
+Rule: a range of years is labelled by its lower bound, as `filters.required_years` reads it. Up to 2 years is `junior` (`JUNIOR_MAX_YEARS`), 3–4 is `mid`, and 5 or more is `senior` (`seniority.SENIOR_MIN_YEARS`). A title, a lead role or a "preferred only" requirement still takes precedence. It was applied to both sets in one pass, by reading the text; no ranker output was looked at. Candidates came from a scan of every year range in both sets, compared with the current label.
+
+- **Changed (6 postings)**, each with the note `level: range lower-bound rule (owner 2026-10-16)`, appended to any existing note:
+  - main `bestjobs-032`: 2–4 years, mid → junior;
+  - main `bestjobs-109`: 1–2 years, any → junior;
+  - main `bestjobs-101`: 3–5 years, any → mid;
+  - main `ejobs-032`: 3–5 years, senior → mid;
+  - main `bestjobs-087`: 5–6 years, any → senior;
+  - held-out `heldout-bestjobs-045`: 2–3 years, mid → junior.
+- The three main postings labelled `any` had their range as the headline requirement. The main set's original method (title and opening lines) most likely missed it.
+- **Grade changes, all in the main set:**
+  - `bestjobs-087`: fe and fe-ro go 2 → 1, and mob goes 1 → 0 (h-fe and h-mob the same, when run on the main postings);
+  - `ejobs-032`: acc-ro goes 1 → 2.
+
+  The held-out grades are unchanged. gosha-rank was told before regenerating; the baselines in 6808693 include this.
+- **Considered and left:**
+  - main `bestjobs-020`: "2–3 years" is the project's length, and the title says Senior;
+  - held-out `heldout-ejobs-016`: "Middle" title;
+  - held-out `heldout-bestjobs-080`: 1–3 years under "Preferred" only, so it stays `any`;
+  - every other range in both sets already matched its lower bound.
+- **Docs:**
+  - `eval/heldout/README.md`: the years rule in the level rules, a "Range rule applied" section, level counts (junior 45, mid 62) and the ro row of the lang × level table;
+  - `docs/EVAL.md`: a range-rule paragraph in Data → Labels, with the ids and the grade changes, and the limitation bullet.
+- **Test:** `tests/test_heldout.py::test_range_rule_relabels_use_the_lower_bound[main|heldout]`. `tests/test_heldout.py` plus `tests/test_evaluation.py` give 37 passed.
+- **Full suite (about 13:50 UTC):** 1428 passed, 9 skipped, **9 failed**. The failures are not from this work: `tests/test_alert_scenarios.py` (7) and `tests/test_scrape_health.py` (2) hit `TypeError: empty_stage() takes from 1 to 2 positional arguments but 3 were given` (`gosha/pipeline.py:1105`). That comes from another agent's uncommitted `gosha/pipeline.py` change. The lead was told.
+
+### Status: DONE again
+Both owner decisions are applied and committed. Resume only if the owner's human label review comes back.
