@@ -94,6 +94,10 @@ class Posting:
     company: str
     description: str
     url: str = ""
+    # The board's place, when the set records it ("location" key present;
+    # None there is a posting without one, which a place filter rejects).
+    location: str | None = None
+    location_known: bool = False
 
 
 @dataclass(frozen=True)
@@ -116,6 +120,7 @@ def load_postings(path: Path) -> list[Posting]:
             families=tuple(row["families"]), level=row["level"],
             title=row["title"], company=row["company"],
             description=row["description"], url=row.get("url", ""),
+            location=row.get("location"), location_known="location" in row,
         )
         unknown = set(posting.families) - FAMILIES.keys()
         if unknown or posting.level not in LEVELS:
@@ -341,12 +346,14 @@ def feed_scores(
 
 
 def feed_metrics(scores: np.ndarray, gains: np.ndarray) -> dict[str, float]:
+    """P@10 is over the first page: ten postings, or all of them when a
+    filtered feed has fewer."""
     ranked = [int(gains[i]) for i in ranking(scores.tolist())]
     return {
         "ndcg@10": ndcg_at(ranked, 10),
         "r_precision": r_precision(ranked),
         "mrr": reciprocal_rank(ranked),
-        "p@10": sum(1 for g in ranked[:10] if g == 2) / 10,
+        "p@10": sum(1 for g in ranked[:10] if g == 2) / min(10, len(ranked)) if ranked else 0.0,
     }
 
 
@@ -508,6 +515,253 @@ def production_thresholds() -> tuple[float, float]:
     return DEFAULT_THRESHOLD, DEFAULT_CV_THRESHOLD
 
 
+# ── Discord DMs as users search ─────────────────────────────────────────
+#
+# dm_scores above scores every persona's own specific search against every
+# posting, before any filter. Real Discord searches look different: the
+# words are generic ("computer science internship"), every one names a
+# level (intern and/or junior), almost no user has a CV, and the match
+# stage drops postings at the wrong level or with a non-tech title before
+# a score is ever computed. What a user reads is the first few postings
+# of a cycle that clear the threshold, best first (MAX_DMS_PER_USER, and a
+# per-search cap). This part measures that.
+
+# What a "computer science" search is after: every software, data, ops,
+# security and IT-support family. Business analysis, sales, accounting,
+# customer service and "other" are not.
+CS_FAMILIES = frozenset({
+    "py", "java", "dotnet", "be", "fe", "fs", "mob", "ml", "data", "emb", "ops", "qa",
+    "sec", "support",
+})
+# Searches as production users type them (Discord subscriptions,
+# 2026-10-16), and the level sets they choose.
+GENERIC_DM_KEYWORDS = ("computer science internship", "cs entry level", "computer science intern")
+DM_LEVEL_SETS: tuple[tuple[str, ...], ...] = (("intern",), ("intern", "junior"), ("junior",))
+# Gold posting levels each requested level stands for. "any" (the posting
+# names no level) is what a junior search is for, not an intern search.
+_WANTED_GOLD = {"intern": {"intern"}, "junior": {"junior", "any"}}
+DM_LOCATION = "Cluj"
+# Owner, 2026-10-16: filter, don't regrade. The eval scores only what the
+# product would show (its own filters first); a search or persona left
+# with fewer postings than a page, or fewer relevant ones than this, is
+# flagged as low-n and kept in the means.
+LOW_N_POSTINGS = 10
+LOW_N_RELEVANT = 3
+
+
+def is_low_n(remaining: int, relevant: int) -> bool:
+    return remaining < LOW_N_POSTINGS or relevant < LOW_N_RELEVANT
+
+
+def locations_applied(postings: Sequence[Posting]) -> bool:
+    """Whether the place filter can run: every posting records a place.
+    Until the set does, searches look anywhere (and the output says so)."""
+    return bool(postings) and all(p.location_known for p in postings)
+
+
+def _search_locations(postings: Sequence[Posting]) -> list[str]:
+    return [DM_LOCATION] if locations_applied(postings) else []
+
+
+def as_job(posting: Posting):
+    """A transient gosha.models.Job, so the product's filters read the
+    posting exactly as they read a stored one."""
+    from gosha.models import Job
+
+    return Job(
+        title=posting.title, company=posting.company, description=posting.description,
+        location=posting.location, experience_level=None, url=posting.url or None,
+    )
+
+
+@dataclass(frozen=True)
+class DmSearch:
+    keyword: str
+    levels: tuple[str, ...]
+    family: str | None = None  # None: a generic computer-science search
+    persona: str | None = None  # the persona whose keyword this is
+
+    @property
+    def query(self) -> str:
+        from gosha.matching import build_subscription_query
+
+        return build_subscription_query([self.keyword], [DM_LOCATION], list(self.levels))
+
+
+def dm_searches(personas: Sequence[Persona] = ()) -> list[DmSearch]:
+    """The generic searches at every level set, then each persona's own
+    keyword (a specific search, no CV) at every level set."""
+    out = [DmSearch(k, levels) for k in GENERIC_DM_KEYWORDS for levels in DM_LEVEL_SETS]
+    out += [DmSearch(u.keyword, levels, u.family, u.id) for u in personas for levels in DM_LEVEL_SETS]
+    return out
+
+
+def as_subscription(search: DmSearch, locations: Sequence[str]):
+    """A transient gosha.models.Subscription for this search: no age,
+    salary, company or word exclusions (production searches set none)."""
+    from gosha.models import Subscription
+
+    return Subscription(
+        keywords=[search.keyword], locations=list(locations), remote_ok=False,
+        experience_levels=list(search.levels), excluded_keywords=[], company_blacklist=[],
+        salary_min=None, max_age_days=None,
+    )
+
+
+def dm_pool(
+    postings: Sequence[Posting], search: DmSearch, jobs: Sequence | None = None,
+) -> np.ndarray:
+    """Postings the match stage would score for this search:
+    gosha.pipeline.prefilter, what match_jobs_for_subscription runs before
+    scoring. The place filter runs when the set records places
+    (locations_applied)."""
+    from gosha.pipeline import prefilter
+
+    jobs = [as_job(p) for p in postings] if jobs is None else jobs
+    kept = {id(job) for job in prefilter(as_subscription(search, _search_locations(postings)), jobs)}
+    return np.array([id(job) in kept for job in jobs], dtype=bool)
+
+
+def dm_relevant(postings: Sequence[Posting], search: DmSearch) -> np.ndarray:
+    """Postings this search is for: the right field at a level it asked for."""
+    wanted = set().union(*(_WANTED_GOLD.get(level, set()) for level in search.levels))
+    return np.array([
+        p.level in wanted
+        and (bool(CS_FAMILIES & set(p.families)) if search.family is None
+             else search.family in p.families)
+        for p in postings
+    ], dtype=bool)
+
+
+def dm_search_metrics(
+    scores: np.ndarray, pool: np.ndarray, relevant: np.ndarray, threshold: float,
+) -> dict[str, float]:
+    """One search: what it is sent, best first, and how much of it fits.
+
+    precision@k is over the first k postings sent (fewer if fewer pass);
+    a search with relevant postings in its pool that is sent none of them
+    is starved.
+    """
+    sent = pool & (scores >= threshold)
+    order = np.argsort(-np.where(sent, scores, -np.inf), kind="stable")[: int(sent.sum())]
+    hits = relevant[order]
+    in_pool = int((pool & relevant).sum())
+    return {
+        "pool": int(pool.sum()),
+        "relevant_in_pool": in_pool,
+        "sent": int(sent.sum()),
+        "p@5": float(hits[:5].mean()) if len(hits) else math.nan,
+        "p@10": float(hits[:10].mean()) if len(hits) else math.nan,
+        "recall": float(hits.sum() / in_pool) if in_pool else math.nan,
+        "starved": bool(in_pool and not hits.any()),
+    }
+
+
+def dm_query_vectors(
+    searches: Sequence[DmSearch], encode: Encode, hub_alpha: float = 0.0,
+) -> np.ndarray:
+    """(S, D) query vectors; with hub_alpha, minus that share of the mean
+    of the matching panel queries (gosha.matching.dm_panel_queries)."""
+    from gosha.matching import dm_panel_queries, dm_query_vector
+
+    queries = np.asarray(encode([s.query for s in searches]), dtype=np.float32)
+    if not hub_alpha:
+        return queries
+    panels = {
+        levels: np.asarray(encode(dm_panel_queries([DM_LOCATION], list(levels))), dtype=np.float32)
+        for levels in {s.levels for s in searches}
+    }
+    return np.stack([
+        dm_query_vector(q, panels[s.levels], hub_alpha) for q, s in zip(queries, searches)
+    ])
+
+
+def evaluate_dm_searches(
+    postings: Sequence[Posting],
+    searches: Sequence[DmSearch],
+    jobs: np.ndarray,
+    queries: np.ndarray,
+    threshold: float,
+) -> dict:
+    """Mean over searches (generic and specific separately) of
+    dm_search_metrics, with bootstrap intervals on P@5 / P@10."""
+    rows = []
+    models = [as_job(p) for p in postings]
+    for search, query in zip(searches, queries):
+        m = dm_search_metrics(
+            jobs @ query, dm_pool(postings, search, models), dm_relevant(postings, search),
+            threshold,
+        )
+        rows.append({"keyword": search.keyword, "levels": list(search.levels),
+                     "persona": search.persona, "generic": search.family is None, **m,
+                     "low_n": is_low_n(m["pool"], m["relevant_in_pool"])})
+    out: dict = {"threshold": threshold, "locations_applied": locations_applied(postings),
+                 "searches": rows}
+    for group, keep in (("generic", True), ("specific", False)):
+        part = [r for r in rows if r["generic"] is keep]
+        if not part:
+            continue
+        summary: dict = {"searches": len(part), "starved": sum(r["starved"] for r in part),
+                         "low_n": sum(r["low_n"] for r in part),
+                         "no_relevant": sum(r["relevant_in_pool"] == 0 for r in part)}
+        for key in ("pool", "relevant_in_pool", "sent", "p@5", "p@10", "recall"):
+            values = [r[key] for r in part if not math.isnan(r[key])]
+            summary[key] = float(np.mean(values)) if values else math.nan
+        for key in ("p@5", "p@10"):
+            values = [r[key] for r in part if not math.isnan(r[key])]
+            summary[f"{key}_ci95"] = bootstrap_ci(values) if values else (math.nan, math.nan)
+        out[group] = summary
+    return out
+
+
+def scoped_feed_pool(postings: Sequence[Posting], levels: Sequence[str]) -> list[int]:
+    """Indices of the postings a feed scoped to one active search (Cluj,
+    these levels) keeps: gosha.recommend.in_search_scope, as the feed
+    applies it. No title gate: the feed has none."""
+    from gosha.recommend import SearchScope, in_search_scope
+
+    scope = SearchScope(tuple(_search_locations(postings)), False, tuple(sorted(levels)))
+    return [i for i, p in enumerate(postings) if in_search_scope(as_job(p), [scope])]
+
+
+def evaluate_feed_scoped(
+    vectors: Vectors, postings: Sequence[Posting], personas: Sequence[Persona],
+    ranking: str = "production",
+) -> dict:
+    """The web feed for a persona with one active search, at each level
+    set users choose: the scope filter first, then the ranking over what
+    is left (z-scores over those candidates, as production takes them).
+    Gold grades unchanged. A persona with no grade-2 posting left has no
+    ranking to measure: counted in "no_relevant" and left out of the
+    means; low-n personas are flagged and kept in."""
+    out: dict = {"locations_applied": locations_applied(postings)}
+    for levels in DM_LEVEL_SETS:
+        idx = scoped_feed_pool(postings, levels)
+        per_persona = {}
+        for u, persona in enumerate(personas):
+            gains = vectors.gains[u, idx]
+            relevant = int((gains == 2).sum())
+            row: dict = {"remaining": len(idx), "relevant": relevant,
+                         "low_n": is_low_n(len(idx), relevant)}
+            if relevant:
+                row.update(feed_metrics(feed_scores(vectors, u, idx=idx, ranking=ranking), gains))
+            per_persona[persona.id] = row
+        measured = [r for r in per_persona.values() if r["relevant"]]
+        summary: dict = {
+            "remaining": len(idx),
+            "personas": len(personas),
+            "measured": len(measured),
+            "no_relevant": len(personas) - len(measured),
+            "low_n": sum(r["low_n"] for r in per_persona.values()),
+        }
+        if measured:
+            keys = ("ndcg@10", "r_precision", "mrr", "p@10")
+            summary["mean"] = {k: float(np.mean([r[k] for r in measured])) for k in keys}
+            summary["ndcg@10_ci95"] = bootstrap_ci([r["ndcg@10"] for r in measured])
+        out["+".join(levels)] = {**summary, "per_persona": per_persona}
+    return out
+
+
 def run(
     postings: Sequence[Posting],
     personas: Sequence[Persona],
@@ -533,6 +787,10 @@ def run(
         "feed_ranking": feed_ranking,
         "feed": evaluate_feed(vectors, postings, personas, feed_ranking),
         "feed_cosine": evaluate_feed(vectors, postings, personas, "cosine"),
+        "feed_scoped": {
+            name: evaluate_feed_scoped(vectors, postings, personas, name)
+            for name in dict.fromkeys((feed_ranking, "cosine"))
+        },
         "dm_with_cv": {
             "sweep": threshold_sweep(dm_cv, vectors.gains, thresholds),
             "bands": score_bands(dm_cv, vectors.gains),
@@ -545,6 +803,21 @@ def run(
             "feed_grade2_mean": float((vectors.jobs @ vectors.cvs.T).T[vectors.gains == 2].mean()),
             "feed_grade0_mean": float((vectors.jobs @ vectors.cvs.T).T[vectors.gains == 0].mean()),
         },
+    }
+    from gosha.matching import DM_ALPHA, DM_THRESHOLD
+
+    searches = dm_searches(personas)
+    search_threshold, _ = production_thresholds()
+    # "dm_score" is what production sends a search without a CV;
+    # "cosine" the plain cosine at SEMANTIC_THRESHOLD it replaced.
+    result["dm_searches"] = {
+        "dm_score": evaluate_dm_searches(
+            postings, searches, vectors.jobs, dm_query_vectors(searches, encode, DM_ALPHA),
+            DM_THRESHOLD,
+        ),
+        "cosine": evaluate_dm_searches(
+            postings, searches, vectors.jobs, dm_query_vectors(searches, encode), search_threshold,
+        ),
     }
     if with_feedback:
         result["feedback"] = simulate_feedback(vectors, ranking=feed_ranking)

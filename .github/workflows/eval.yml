@@ -3,8 +3,9 @@ name: Ranking eval
 # The unit tests check that ranking code runs; this checks that it still
 # ranks well. On any change to the ranking path it re-runs the offline eval
 # (docs/EVAL.md) with the production model and fails if feed nDCG@10, or
-# Discord recall / off-target rate at the delivery threshold, moved more
-# than the tolerance against the committed baseline, on the main set and
+# Discord recall / off-target rate at the delivery threshold, or the DM
+# score's P@10, P@5 and recall (product filters first) moved more than the
+# tolerance against the committed baseline, or it starves more searches, on the main set and
 # on the independent held-out set (eval/heldout/, never tuned on). A
 # baseline only counts for the exact eval files it was computed on
 # (scripts/eval_ranking.py check): a change to eval/ ships with regenerated
@@ -14,6 +15,7 @@ on:
   pull_request:
     paths:
       - gosha/matching.py
+      - gosha/dm_panel.txt
       - gosha/embeddings.py
       - gosha/recommend.py
       - gosha/lexical.py

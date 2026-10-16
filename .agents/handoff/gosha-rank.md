@@ -420,3 +420,251 @@ Then: TODO 7 docs/EVAL.md full results rewrite with the final numbers; TODO 6 (D
     👍/👎 feedback helps modestly. CI re-runs the eval on both sets for every ranking change."
   - L206: "recommend.py   # feed ranking: embedding + keyword + seniority, search scope"
 Next (not started): TODO 6 (soft seniority penalty in Discord scores, measured), human label pass is the owner's.
+
+## Session 5 (2026-10-16, after lead commit 5580533)
+- README.md ranking text replaced (L37 feature row, L91 matching engine, L93 "How well it ranks", tree comment for
+  recommend.py), lead-authorised for this change. L93 quotes main 0.750/0.546 and held-out 0.604/0.535: UPDATE these
+  after the relabel regeneration below.
+- WAITING for gosha-label: applying the owner's rule "2 years = junior" to both label sets. When it says done:
+  1. check eval inputs are committed (`git status --short eval/`), note the posting counts;
+  2. regenerate: `.venv/bin/python scripts/eval_ranking.py --models all-mpnet-base-v2 tfidf --write-results eval/results`
+     and the same with `--postings eval/heldout/postings.jsonl --personas eval/heldout/personas.jsonl
+     --write-results eval/results/heldout` (LD_PRELOAD as usual);
+  3. both `--check` commands (main, held-out) must exit 0;
+  4. docs/EVAL.md: numbers in the 2026-10-16 table, step table (add a "labels: 2 years = junior" row), feedback and
+     Discord held-out lines; replace the "two sets label exactly 2 years differently" Limitation with the rule;
+     README L93 numbers;
+  5. tell gosha-lead.
+
+## NEW MISSION (owner priority, 2026-10-16): Discord DM relevance — PLAN (written before implementing)
+Order: finish the relabel regeneration (Session 5) first when gosha-label reports; then this.
+Production DM decision today (read-only reading of gosha/pipeline.py): job_matches_subscription (fresh, blacklist,
+salary, search_location_ok, excluded words, matches_experience_level) → _title_relevant_for_any_keyword
+(filters.title_is_relevant per keyword) → cosine(job, blend_with_user_vector(query, CV vector)) ≥
+DEFAULT_CV_THRESHOLD 0.43 (CV) / DEFAULT_THRESHOLD 0.42 (search only) → delivery sorts a user's batch by stored
+relevance_score (pipeline.py:909, already best-first) and caps at MAX_DMS_PER_USER = 10.
+The eval's DM path today models only the cosine threshold (no title gate, no level filter), so it is not the
+production decision.
+1. **Measure the real decision** (gosha/evaluation.py): new `dm_decision()` = title gate (filters.title_is_relevant
+   with the persona's keyword, posting label/description) + level filter for two search configs (levels "any", and
+   the student config ["intern","junior"]) + score ≥ threshold. Per persona-search: sent, precision (grade 2 and ≥1),
+   recall of grade-2, off-target passed, and P@10 / nDCG@10 of the first MAX_DMS_PER_USER sent in score order
+   (the batch the user reads). Bootstrap CIs over personas. Location is NOT modelled (labels ignore place). Both sets.
+2. **Candidates for the DM score** (absolute scale, since the threshold is absolute and batches are small):
+   a) production blended cosine; b) cosine − λ·seniority penalty (λ ∈ {0.02, 0.04} per penalty unit, CV holders
+   only); c) cosine + β·TF-IDF(search keyword + CV text vs job text), β ∈ {0.1, 0.2}, IDF on the eval postings
+   (in prod: a window-wide index, see cost below); d) b+c. Threshold re-picked per variant on MAIN only (max
+   precision at recall ≥ production recall − 0.02, rounded to 0.01), reported on held-out. Ship a variant only if it
+   beats production on main and is not worse on held-out beyond noise; otherwise report "no change" with numbers.
+3. **Ordering**: delivery already orders by relevance_score; the deliverable makes relevance_score = the new DM
+   score, so the batch is best-first by the same number that decided it. Measured as P@10 of the sent batch.
+4. **Deliverable**: pure helper in gosha/matching.py (my file), e.g. `dm_score(cosine, keyword_similarity=None,
+   reader_level=None, posting_level=None) -> float` + `DM_THRESHOLD` / `DM_CV_THRESHOLD`, with tests; then the
+   exact hook for gosha-pipe via herdr (match_jobs_for_subscription: score → dm_score → threshold; store dm_score as
+   relevance_score). I do not edit pipeline.py.
+5. **Cost/risk to report**: TF-IDF in the bot needs an IDF corpus: the cycle's new jobs are too few, so it would
+   be the window (bot process, not the API's cache: one more index build per cycle, ~1 s cold). Seniority needs
+   cv_level(CV text) in the bot (CV decrypt per user per cycle). Only proposed if the measured gain pays for it.
+The read-only reviewer's prod precision numbers (via the lead) get compared against the eval's when they arrive.
+
+### DM mission: lead changes + prod facts (2026-10-16)
+- Lead approved the plan with: (A) DM seniority primarily from the SUBSCRIPTION's experience_levels (penalise
+  postings above the search's highest wanted level); cv_level only when the search has no level / "any"; measure
+  both. (B) never decrypt CVs per cycle: if cv_level is needed, compute once at CV upload/change and store only the
+  level enum; propose where (cv owner / gosha-pipe), with a test; don't edit outside my files.
+- Relabel regeneration DONE: scores identical (main 0.750/0.546/0.626, held-out 0.604/0.535/0.508); 4 result files
+  differ only in postings_sha256; both --check exit 0. gosha-label had edited docs/EVAL.md (two-year rule, limitation)
+  — kept; I added a step-table row + reflow. Report to lead failed once ("agent_blocked"), retried.
+- **Prod (read-only aggregate SELECT, READ ONLY transaction):** active+notify_discord subscriptions = 22, ALL with
+  levels: ["intern"] 15, ["intern","junior"] 5, ["junior"] 2; none "any". Users with an active Discord search: 12,
+  **with a CV: 0**. ⇒ today every DM is the SEARCH-ONLY path (threshold 0.42) behind an intern/junior level filter;
+  the CV blend / DM_CV threshold / cv_level matter to nobody yet. Priority: the search-only path with student level
+  configs ["intern"], ["intern","junior"], ["junior"].
+
+### DM study results (prototype: scratchpad dm_study.py / dm_pick.py, machine-local; numbers copied here)
+Setup: search-only path (prod has 0 CV users), production query text incl. "Experience level: …. Location: Cluj",
+gate = filters.title_is_relevant(keyword) + matches_experience_level(levels); configs [intern], [intern,junior],
+[junior]; target = grade 2 AND gold level the search wants (intern→intern; junior→junior/any; both→all three);
+metrics per persona-search (mean): sent, precision, precision≥1, recall, off-target share of sent, batchP = precision
+of the first 10 sent by score (MAX_DMS_PER_USER). [intern] has 4 (main) / 10 (held-out) targets: too few to read.
+- Seniority penalty on the DM score: **zero effect** (level filter already removes above-level postings).
+- TF-IDF added to the score (+0.2·tfidf): ~+0.04 precision on main, noise.
+- Cause of off-target: **hub postings** (generic tech ads: "Application Support DevOps Engineer", "Software Engineer
+  (AI Focus)", "Full-Stack Software Engineer – Remote", "DevOps Engineer") score ≥0.42 for every search.
+- Hub correction = cosine − mean cosine to a FIXED 40-search panel (IT + non-IT, written independently of the eval
+  personas; panel queries in the user's location+levels format). Leave-one-out "other users" panel works in the eval
+  but would cancel itself in prod (all 22 prod searches are similar intern/junior tech searches).
+- Picked on MAIN by the pre-stated rule (max precision at recall ≥ prod − 0.02): cos − 1.0·panelhub + keyword-overlap
+  gate (any keyword term in the job text; = TF-IDF>0, corpus-free), threshold 0.07.
+| set / config | prod 0.42: sent, prec, p≥1, recall, off, batchP | picked @0.07 | hub only @0.07 (no gate) |
+|---|---|---|---|
+| main intern+junior | 22.1, .188, .462, .694, .538, .314 | 10.5, .485, .704, .733, .296, .541 | 16.4, .383, .614, .766, .386, .451 |
+| main junior | 20.9*, .182, .481, .697, .519, .307 (*0.43 row; 0.42: 22.6/.174/.470/.711/.530/.307) | 11.0, .437, .683, .734, .317, .510 | 17.4, .328, .576, .768, .424, .412 |
+| held-out intern+junior | 42.6, .125, .361, .728, .639, .200 | 14.2, .366, .632, **.454**, .368, .447 | 24.6, .343, .625, .596, .375, .447 |
+| held-out junior | 37.3, .113, .359, .648, .641, .200 | 13.6, .308, .551, **.459**, .449, .368 | 22.7, .274, .533, .568, .467, .363 |
+- Held-out: precision ~×3, batchP ×2, but recall −0.27 / −0.19 → the picked variant FAILS the pre-stated
+  "not worse on held-out" bar. Decomposition: the keyword-overlap gate is the fragile part (RO keywords vs EN text,
+  keyword words absent from text); the hub correction carries most of the gain on both sets.
+- **Not tuned on held-out**: "hub only" was not picked on main; preferring it now would be informed by held-out.
+  Needs a decision + an independent check (the prod reviewer's numbers). Threshold 0.10 is the stricter option
+  (main intern+junior prec .584, recall .647, off .199).
+- Ordering: delivery sorts by relevance_score; with the hub score stored there, batchP above is what users get.
+
+## Session 6 (2026-10-16, after lead commit 6808693): DM selection redone cleanly; then the lead re-ordered work
+Range-rule relabel baselines committed by the lead (main 0.759/0.549/0.638, held-out 0.604/0.535/0.508).
+### DM hub correction — what it is and what was chosen where
+- Hub correction = for a search s and posting j: cos(q_s, j) − α · mean_k cos(p_k, j), p_k = 40 FIXED panel queries
+  (matching DM_PANEL draft: IT + non-IT everyday searches, written independently of the eval personas), built in the
+  search's own location + levels format. NOT the users' subscriptions, NOT the personas. Since mean_k(p_k·j) =
+  mean(p)·j, it is one vector per search shape: dm_query = q − α·mean(p); per-job cost = the same single dot product
+  as today. Panel cost: encode 40 short queries once per distinct (locations, levels) per process (~1–2 s CPU; prod
+  has ~8 shapes), cached.
+- Clean selection on the FINAL main labels (scratchpad dm_select.py; rule stated in its docstring before running):
+  hub-only (no gate), α ∈ {0.5, 0.75, 1.0}, threshold grid 0.01, best mean precision at recall ≥ prod − 0.02 over
+  configs [intern,junior] and [junior] → **α 0.75 @ 0.19**; "Strong match" by the old 89%-grade≥1 rule → ≥ 0.26.
+  main: precision .181 → .485, recall .706 → .695, batch .311 → .510, sent 22.4 → 10.4 per search.
+  held-out (reported once): [intern,junior] prec .125 → .415, recall .728 → .468, batch .200 → .460, sent 42.6 → 16.6;
+  [junior] prec .113 → .408, recall .648 → .503, batch .200 → .467, sent 37.3 → 15.1.
+  real DMs (third check, lead's labels, not tuned on): AUC tech Y vs N within user .693 → .939, relevant .623 → .842,
+  top-10 tech share .78 → .91; at 0.19: tech sent .96 → .66, adjacent .98 → .15, non-tech 1.00 → .11, precision
+  .63 → .90, 0/11 users without a tech DM; strong ≥0.26: 14 pairs, all tech.
+- Process honesty: my earlier 0.07 was picked on main (pre-stated rule) BEFORE seeing the real-DM labels; but
+  dropping the keyword gate (main preferred it) and the earlier 0.12 strong band WERE informed by held-out / real-DM
+  data. Superseded by the clean selection above.
+- CV path (0 prod users): panel correction gives no convincing gain on main (A: blend − panel ≈ wash; B wrong scale)
+  → recommend leaving the CV path as is.
+- Draft helper (DM_PANEL, DM_THRESHOLD, dm_query_vector, SemanticMatcher.dm_query/is_dm_match, dm_match_label)
+  PARKED in scratchpad matching_dm_draft.py; gosha/matching.py restored to HEAD. Not sent to gosha-pipe.
+### NEW ORDER from the lead (FEED/EVAL REVIEW, files in lead scratchpad review-feed/)
+1. Rebuild the DM eval around real usage: generic prod-style keywords ("computer science internship"), real hard
+   filters (location/level/title gates) BEFORE scoring, no-CV users, prod query text, metric = DM precision@10 per cycle
+   per search + starved searches. 2. Decide dm_score on that eval (main → held-out → real DMs); drop TF-IDF/seniority
+   unless it says otherwise. 3. Honest claims in README/EVAL (in-sample main gain; held-out +0.07 not significant;
+   mostly seniority); real-data feed check; plain cosine inside the filtered pool for no-CV users if confirmed.
+4. Feed dedup by title+company (gosha-scrape normalize_key). 5. Propose grade rule mid = 1 for students to gosha-label.
+
+### Session 6b: realistic DM eval + decision proposal (lead order steps 1–2), uncommitted
+- gosha/evaluation.py: CS_FAMILIES, GENERIC_DM_KEYWORDS (prod: "computer science internship", "cs entry level",
+  "computer science intern"), DM_LEVEL_SETS, DmSearch(keyword, levels, family) + .query (prod build_subscription_query
+  with "Cluj" and the levels), dm_searches(personas), dm_pool (title_is_relevant + matches_experience_level; location
+  NOT modelled: eval postings have none), dm_relevant (CS family for generic / persona family for specific, AND gold
+  level wanted: intern→intern, junior→junior/any), dm_search_metrics (sent, p@5, p@10 of the sent in score order,
+  recall in pool, starved = relevant in pool but none sent), dm_query_vectors(searches, encode, hub_alpha),
+  evaluate_dm_searches(...). Not yet wired into run()/CLI.
+- gosha/matching.py: DM_PANEL (40 fixed searches, data), dm_panel_queries(locations, levels),
+  dm_query_vector(query, panel, alpha) = q − α·mean(panel). No threshold/alpha constants yet (await decision).
+- Decision driver: scratchpad dm_decide.py (rule in docstring). Lead's rule (max main generic P@10 s.t. no more starved
+  + held-out recall loss ≤ 0.10) is saturated → proposed tie-break on main specific P@5 → α 0.75 @ +0.05. Sent to the
+  lead? FAILED (agent_blocked) — resend.
+- Production today on this eval: main generic pool 12.9/search (10.7 relevant), sent 4.0, recall .28, starved 1/9,
+  empty 4/9, P@10 .96; main specific P@10 .315 P@5 .428; held-out generic recall .77 sent 18.0; held-out specific P@10
+  .169 P@5 .211; real DMs tech P@10 .746 P@5 .804 starved 0/17.
+Full curve (alpha thr | main generic sent recall starved empty | main specific P@10 P@5 | held-out generic recall sent,
+held-out specific P@10 P@5 | real DMs tech P@10 P@5 starved):
+     0.0 +0.30 |  12.1 0.98 0 3 | 0.302 0.420 | 0.96  27.7 0.157 0.207 | 0.755 0.804 0
+     0.0 +0.35 |  10.8 0.89 0 3 | 0.302 0.420 | 0.91  25.1 0.160 0.207 | 0.755 0.804 0
+     0.0 +0.40 |   6.7 0.40 0 3 | 0.311 0.425 | 0.81  20.4 0.167 0.211 | 0.748 0.804 0
+     0.0 +0.42 |   4.0 0.28 1 4 | 0.315 0.428 | 0.77  18.0 0.169 0.211 | 0.746 0.804 0
+     0.0 +0.45 |   2.0 0.12 3 6 | 0.331 0.443 | 0.58  14.6 0.169 0.218 | 0.732 0.782 1
+    0.25 -0.10 |  12.9 1.00 0 3 | 0.316 0.427 | 1.00  29.1 0.185 0.267 | 0.790 0.827 0
+    0.25 -0.05 |  12.9 1.00 0 3 | 0.316 0.427 | 1.00  29.1 0.185 0.267 | 0.790 0.827 0
+    0.25 +0.00 |  12.9 1.00 0 3 | 0.316 0.427 | 1.00  29.1 0.185 0.267 | 0.790 0.827 0
+    0.25 +0.05 |  12.9 1.00 0 3 | 0.316 0.427 | 1.00  29.1 0.185 0.267 | 0.790 0.827 0
+    0.25 +0.10 |  12.9 1.00 0 3 | 0.316 0.427 | 1.00  29.1 0.185 0.267 | 0.790 0.827 0
+    0.25 +0.15 |  12.9 1.00 0 3 | 0.316 0.427 | 1.00  29.1 0.185 0.267 | 0.790 0.827 0
+    0.25 +0.20 |  12.7 1.00 0 3 | 0.316 0.427 | 1.00  28.9 0.186 0.267 | 0.790 0.827 0
+    0.25 +0.25 |  11.4 0.90 0 3 | 0.316 0.427 | 0.95  27.2 0.189 0.267 | 0.790 0.827 0
+    0.25 +0.30 |   8.2 0.56 1 4 | 0.328 0.432 | 0.87  22.6 0.196 0.271 | 0.783 0.827 0
+     0.5 -0.10 |  12.9 1.00 0 3 | 0.349 0.473 | 1.00  29.1 0.189 0.293 | 0.819 0.886 0
+     0.5 -0.05 |  12.9 1.00 0 3 | 0.349 0.473 | 1.00  29.1 0.189 0.293 | 0.819 0.886 0
+     0.5 +0.00 |  12.9 1.00 0 3 | 0.349 0.473 | 1.00  29.1 0.189 0.293 | 0.819 0.886 0
+     0.5 +0.05 |  12.9 1.00 0 3 | 0.349 0.473 | 1.00  29.1 0.189 0.293 | 0.819 0.886 0
+     0.5 +0.10 |  12.9 1.00 0 3 | 0.349 0.473 | 1.00  29.1 0.189 0.293 | 0.819 0.886 0
+     0.5 +0.15 |  12.6 1.00 0 3 | 0.349 0.473 | 0.97  28.4 0.194 0.295 | 0.819 0.886 0
+     0.5 +0.20 |  10.7 0.77 0 3 | 0.351 0.473 | 0.91  25.0 0.199 0.298 | 0.812 0.886 0
+     0.5 +0.25 |   2.2 0.12 3 6 | 0.396 0.487 | 0.64  15.8 0.243 0.316 | 0.814 0.875 1
+     0.5 +0.30 |   1.0 0.04 4 7 | 0.540 0.580 | 0.27   5.3 0.422 0.474 | 0.882 0.888 2
+    0.75 -0.10 |  12.9 1.00 0 3 | 0.342 0.487 | 1.00  29.1 0.202 0.307 | 0.867 0.910 0
+    0.75 -0.05 |  12.9 1.00 0 3 | 0.342 0.487 | 1.00  29.1 0.202 0.307 | 0.867 0.910 0
+    0.75 +0.00 |  12.9 1.00 0 3 | 0.342 0.487 | 1.00  29.1 0.202 0.307 | 0.867 0.910 0
+    0.75 +0.05 |  12.9 1.00 0 3 | 0.342 0.487 | 1.00  29.1 0.206 0.308 | 0.867 0.910 0
+    0.75 +0.10 |  11.7 0.86 0 3 | 0.342 0.487 | 0.94  26.4 0.211 0.311 | 0.869 0.910 0
+    0.75 +0.15 |   3.9 0.21 2 5 | 0.405 0.506 | 0.69  17.0 0.310 0.366 | 0.875 0.898 1
+    0.75 +0.20 |   0.7 0.02 4 7 | 0.547 0.605 | 0.18   3.7 0.432 0.462 | 0.865 0.882 2
+    0.75 +0.25 |   0.0 0.00 6 9 | 0.674 0.681 | 0.01   0.2 0.578 0.597 | 1.000 1.000 12
+    0.75 +0.30 |   0.0 0.00 6 9 | 0.796 0.796 | 0.00   0.0 0.534 0.578 | 1.000 1.000 14
+- PANEL FIX: 6 panel entries equalled eval persona keywords ("contabil", "customer support", "data analyst", "devops
+  engineer", "frontend developer", "mobile developer"; I wrote the panel after seeing persona keywords). Replaced by
+  "game developer", "IT security specialist", "system administrator", "database administrator", "auditor", "bank teller";
+  tests/test_matching.py TestDmPanel now asserts no overlap with persona keywords (both sets) or GENERIC_DM_KEYWORDS.
+  Decision re-run (scratchpad dm_decide2.txt): unchanged choice α 0.75 @ +0.05 — main specific P@5 .487 (α .5 .467,
+  .25 .420, prod .428), P@10 .339; held-out generic recall 1.00, specific P@10 .210 P@5 .308; real DMs tech P@10 .878
+  P@5 .910, starved 0/17. Tests: tests/test_evaluation.py +6 DM tests, tests/test_matching.py +4 panel tests (pass).
+- Wired (uncommitted): evaluation.run() returns `dm_searches.production` (plain cosine @ DEFAULT_THRESHOLD over
+  dm_searches(personas)); scripts/eval_ranking.py prints "Discord DMs as users search" (P@5 with CI, P@10, recall,
+  starved). Committed baselines lack the new key (check still passes; regenerate with the DM decision).
+  Full suite 1519 passed, 9 skipped.
+- WAITING: lead approval of α 0.75 @ +0.05 (sent twice, "agent_blocked": lead is waiting on the owner). Then: DM_ALPHA,
+  DM_THRESHOLD, DM_STRONG_MATCH_AT (pick on main), SemanticMatcher.dm_query (panel mean cached per (locations, levels)),
+  hub row in run(), regenerate baselines, CI gate on dm_searches, hook to gosha-pipe. Then plan steps 3–4.
+- gosha-label's option 3 (score only what the product shows) = what dm_pool/dm_relevant do for DMs; tell gosha-label.
+
+## Session 7 (2026-10-16 ~15:00 UTC): OWNER RULE "filter, don't regrade" applied to the evals — uncommitted
+Lead relayed two owner decisions: (1) mid postings: filter, don't regrade — eval applies the product's own
+level/location filters before scoring, reports postings left per persona, flags low-n (kept, not hidden);
+(2) intern-only searches get only training positions (gosha-pipe implements it in the shared filters; my
+eval must call those same functions and RE-RUN AFTER gosha-pipe's commit).
+
+Done (gosha/evaluation.py, scripts/eval_ranking.py, tests/test_evaluation.py +9 tests; full suite 1561 passed, 9 skipped):
+- `dm_pool` now calls gosha.pipeline's own `job_matches_subscription` + `_title_relevant_for_any_keyword`
+  (with the search's levels) on transient gosha.models Job/Subscription objects (`as_job`, `as_subscription`).
+  Before it called title_is_relevant WITHOUT levels — that understated intern+junior pools (12.9 → 34.7 on main).
+- Place filter: Posting gained `location` / `location_known`; applied (Cluj, remote_ok False) only when every
+  posting has a "location" key (`locations_applied`). Eval sets have NO places; prod has only 7/202 main and
+  30/261 held-out eval URLs (read-only aggregate), so adding places needs live board fetches = lead's OK.
+- Low-n: `is_low_n(remaining, relevant)` = < LOW_N_POSTINGS (10) or < LOW_N_RELEVANT (3); per-search rows carry
+  `persona` and `low_n`; group summaries `low_n`, `no_relevant`.
+- Scoped feed: `scoped_feed_pool` (gosha.recommend.in_search_scope, SearchScope(Cluj if places, False, levels)),
+  `evaluate_feed_scoped` per level set, production and cosine rankings; z-scores over the remaining candidates;
+  personas with 0 grade-2 left counted `no_relevant`, out of means; `run()["feed_scoped"]`.
+- `feed_metrics` P@10 now over min(10, n) (unchanged for the full feed).
+- eval_ranking.py prints DM table with low-n columns, scoped-feed table, low-n generic searches, and a
+  per-persona "postings/relevant left" table (DM and feed, each level set, ⚑ = low-n).
+- Outputs (PROVISIONAL: tree has gosha-pipe's uncommitted filters.py/pipeline.py): scratchpad filtered_main.md,
+  filtered_heldout.md, dm_decide_filtered.txt.
+
+Key numbers (provisional):
+- Main has 6 intern postings, none CS: every intern-only search (generic and specific) has an empty pool; 28/42
+  specific DM searches and all 14 personas' feed-intern are low-n. Held-out: 17 intern-scoped feed postings.
+- Scoped feed, intern+junior, nDCG@10 production vs cosine: main .721 vs .671; held-out .579 vs .595
+  (junior: .719/.668 main, .633/.605 held-out) — no clear winner on eval data.
+- DM decision re-run on filtered pools (lead's rule, literally): main generic P@10 no longer saturated
+  (prod .825). Rule picks α 0.25 @ +0.34: P@10 .855, recall .29→.20; held-out gen recall .636→.565 (loss .07 ≤ .10);
+  held-out spec P@5 .211→.271; real DM tech P@5 .804→.830, starved 0/17. The gain comes from sending fewer
+  (9.4→6.7). Old proposal α .75 @ +0.05: main gen P@10 .767 (lower than prod), recall 1.0, spec P@5 .487,
+  held-out spec P@5 .308, real P@5 .910. → needs the lead's call; re-run after gosha-pipe commits.
+- Session 7 update: gosha-pipe added PUBLIC `pipeline.prefilter(sub, jobs)` (what match_jobs_for_subscription
+  runs before scoring; their test test_prefilter_is_what_the_match_stage_scores). dm_pool now calls it (mask by
+  object identity); test monkeypatches pipeline.prefilter. Suite 1562 passed, 9 skipped. Re-run on their finished
+  (still uncommitted) intern rule: every number above UNCHANGED. Still to do after the lead's commit: re-run once more,
+  regenerate baselines (fingerprints unchanged, new keys feed_scoped/dm_searches), then EVAL.md text.
+  Lead still owes: DM objective (rule as stated → α .25 @ .34, or P@5 → α .75 @ .05) and OK for live place fetches.
+
+## Session 8 (2026-10-16): DM score IMPLEMENTED for the release (lead decision: rule literally, α 0.25 @ +0.34) — uncommitted, ready
+- gosha/matching.py: DM_PANEL now loaded from NEW gosha/dm_panel.txt (load_dm_panel, DM_PANEL_FILE); DM_ALPHA 0.25,
+  DM_THRESHOLD 0.34, DM_STRONG_MATCH_AT 0.47 (main, 89%-grade>=1 rule generalised: generic = CS family at applicable
+  level, persona = grade>=1; 91% of 65/616 pairs; scratchpad dm_strong.py); dm_query_vector default alpha=DM_ALPHA;
+  dm_score(); SemanticMatcher(dm_threshold=...), panel_mean (cached per (locations, levels), lock), dm_query, is_dm_match;
+  dm_match_label.
+- gosha-pipe applied the hook (match_jobs_for_subscription: no CV → dm_query/is_dm_match, None → plain cosine + warning;
+  CV unchanged; views: dm_match_label unless user.cv_embedding). filters.py/prefilter FINAL per gosha-pipe.
+- evaluation.run: dm_searches = {"dm_score" (α .25 @ .34), "cosine" (@ .42)}; eval_ranking.check gates dm_score generic
+  P@10/recall, specific P@5 (tolerance) and starved (no increase); eval.yml paths + gosha/dm_panel.txt.
+- Tests: TestDmScore (6) + panel file test (test_matching), CLI DM gate test (test_evaluation), test_match_cv footer on DM scale.
+- Baselines regenerated on the final tree (md5 of filters.py/pipeline.py unchanged before/after): mpnet + tfidf, main + held-out.
+  Feed numbers unchanged (0.759 / 0.604). Both --check exit 0. Suite 1576 passed, 9 skipped.
+- EVAL.md: CI paragraph, "What is measured" (DM eval, scoped feed), new "Results (2026-10-16): Discord DMs, the DM score"
+  (rule, table, real DMs, honest reading: gain small and mostly sending fewer; P@5 main generic 1.0→0.9; recall down;
+  low-n), scoped-feed table with paired CIs, full-feed held-out CI (−0.015..+0.153), limitations (place, few interns,
+  modelled searches), next steps. README L91/L93 rewritten.
+- Post-release: places in the eval sets (board fetches, lead OK), step 4 feed dedup (normalize_key), gosha-label note.

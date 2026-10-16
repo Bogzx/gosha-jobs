@@ -145,6 +145,1766 @@
    }
   ]
  },
+ "dm_searches": {
+  "cosine": {
+   "generic": {
+    "low_n": 3,
+    "no_relevant": 3,
+    "p@10": 0.8250000000000001,
+    "p@10_ci95": [
+     0.7833333333333333,
+     0.8666666666666668
+    ],
+    "p@5": 1.0,
+    "p@5_ci95": [
+     1.0,
+     1.0
+    ],
+    "pool": 34.666666666666664,
+    "recall": 0.2896825396825397,
+    "relevant_in_pool": 28.0,
+    "searches": 9,
+    "sent": 9.444444444444445,
+    "starved": 0
+   },
+   "locations_applied": false,
+   "searches": [
+    {
+     "generic": true,
+     "keyword": "computer science internship",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": null,
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "computer science internship",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.8,
+     "p@5": 1.0,
+     "persona": null,
+     "pool": 52,
+     "recall": 0.2619047619047619,
+     "relevant_in_pool": 42,
+     "sent": 13,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "computer science internship",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.75,
+     "p@5": 1.0,
+     "persona": null,
+     "pool": 52,
+     "recall": 0.14285714285714285,
+     "relevant_in_pool": 42,
+     "sent": 8,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "cs entry level",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": null,
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "cs entry level",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.9,
+     "p@5": 1.0,
+     "persona": null,
+     "pool": 52,
+     "recall": 0.3333333333333333,
+     "relevant_in_pool": 42,
+     "sent": 16,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "cs entry level",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.9,
+     "p@5": 1.0,
+     "persona": null,
+     "pool": 52,
+     "recall": 0.35714285714285715,
+     "relevant_in_pool": 42,
+     "sent": 17,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "computer science intern",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": null,
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "computer science intern",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.8,
+     "p@5": 1.0,
+     "persona": null,
+     "pool": 52,
+     "recall": 0.38095238095238093,
+     "relevant_in_pool": 42,
+     "sent": 18,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "computer science intern",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.8,
+     "p@5": 1.0,
+     "persona": null,
+     "pool": 52,
+     "recall": 0.2619047619047619,
+     "relevant_in_pool": 42,
+     "sent": 13,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "python developer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "py",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "python developer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.5,
+     "p@5": 0.5,
+     "persona": "py",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 4,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "python developer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.4,
+     "p@5": 0.4,
+     "persona": "py",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 5,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "programator python",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "py-ro",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "programator python",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.2,
+     "p@5": 0.2,
+     "persona": "py-ro",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 14,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "programator python",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.2,
+     "p@5": 0.2,
+     "persona": "py-ro",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 15,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "java developer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "java",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "java developer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.0,
+     "p@5": 0.0,
+     "persona": "java",
+     "pool": 52,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 6,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "java developer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.0,
+     "p@5": 0.0,
+     "persona": "java",
+     "pool": 52,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 7,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": ".net developer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "dotnet",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": ".net developer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.2,
+     "p@5": 0.4,
+     "persona": "dotnet",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 12,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": ".net developer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.2,
+     "p@5": 0.4,
+     "persona": "dotnet",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 15,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "frontend developer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "fe",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "frontend developer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.2,
+     "p@5": 0.2,
+     "persona": "fe",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 17,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "frontend developer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.2,
+     "p@5": 0.2,
+     "persona": "fe",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 18,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "programator front-end",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "fe-ro",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "programator front-end",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.1,
+     "p@5": 0.0,
+     "persona": "fe-ro",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 37,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "programator front-end",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.1,
+     "p@5": 0.0,
+     "persona": "fe-ro",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 36,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "mobile developer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "mob",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "mobile developer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.2,
+     "p@5": 0.4,
+     "persona": "mob",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 3,
+     "sent": 12,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "mobile developer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.2,
+     "p@5": 0.4,
+     "persona": "mob",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 3,
+     "sent": 14,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "machine learning engineer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "ml",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "machine learning engineer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.3,
+     "p@5": 0.4,
+     "persona": "ml",
+     "pool": 52,
+     "recall": 0.8,
+     "relevant_in_pool": 5,
+     "sent": 29,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "machine learning engineer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.3,
+     "p@5": 0.4,
+     "persona": "ml",
+     "pool": 52,
+     "recall": 0.8,
+     "relevant_in_pool": 5,
+     "sent": 29,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "data analyst",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "data",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "data analyst",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.4,
+     "p@5": 0.8,
+     "persona": "data",
+     "pool": 52,
+     "recall": 0.7142857142857143,
+     "relevant_in_pool": 7,
+     "sent": 17,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "data analyst",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.4,
+     "p@5": 0.8,
+     "persona": "data",
+     "pool": 52,
+     "recall": 0.8571428571428571,
+     "relevant_in_pool": 7,
+     "sent": 18,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "embedded software engineer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "emb",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "embedded software engineer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.1,
+     "p@5": 0.2,
+     "persona": "emb",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 1,
+     "sent": 31,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "embedded software engineer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.1,
+     "p@5": 0.2,
+     "persona": "emb",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 1,
+     "sent": 30,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "devops engineer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "ops",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "devops engineer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.5,
+     "p@5": 1.0,
+     "persona": "ops",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 5,
+     "sent": 26,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "devops engineer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.5,
+     "p@5": 0.8,
+     "persona": "ops",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 5,
+     "sent": 25,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "qa engineer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "qa",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "qa engineer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.6,
+     "p@5": 0.8,
+     "persona": "qa",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 7,
+     "sent": 24,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "qa engineer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.6,
+     "p@5": 0.8,
+     "persona": "qa",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 7,
+     "sent": 25,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "contabil",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": 0.0,
+     "p@5": 0.0,
+     "persona": "acc-ro",
+     "pool": 6,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 3,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "contabil",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.2,
+     "p@5": 0.2,
+     "persona": "acc-ro",
+     "pool": 115,
+     "recall": 0.4,
+     "relevant_in_pool": 15,
+     "sent": 42,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "contabil",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.2,
+     "p@5": 0.4,
+     "persona": "acc-ro",
+     "pool": 109,
+     "recall": 0.5,
+     "relevant_in_pool": 14,
+     "sent": 44,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "customer support",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": 0.75,
+     "p@5": 0.75,
+     "persona": "cs",
+     "pool": 6,
+     "recall": 1.0,
+     "relevant_in_pool": 3,
+     "sent": 4,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "customer support",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.9,
+     "p@5": 1.0,
+     "persona": "cs",
+     "pool": 115,
+     "recall": 1.0,
+     "relevant_in_pool": 12,
+     "sent": 38,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "customer support",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.9,
+     "p@5": 1.0,
+     "persona": "cs",
+     "pool": 109,
+     "recall": 1.0,
+     "relevant_in_pool": 9,
+     "sent": 36,
+     "starved": false
+    }
+   ],
+   "specific": {
+    "low_n": 28,
+    "no_relevant": 12,
+    "p@10": 0.31500000000000006,
+    "p@10_ci95": [
+     0.2283333333333334,
+     0.40499999999999997
+    ],
+    "p@5": 0.42833333333333334,
+    "p@5_ci95": [
+     0.3066666666666667,
+     0.5416666666666666
+    ],
+    "pool": 40.666666666666664,
+    "recall": 0.8357142857142856,
+    "relevant_in_pool": 3.142857142857143,
+    "searches": 42,
+    "sent": 15.071428571428571,
+    "starved": 3
+   },
+   "threshold": 0.42
+  },
+  "dm_score": {
+   "generic": {
+    "low_n": 3,
+    "no_relevant": 3,
+    "p@10": 0.8546296296296295,
+    "p@10_ci95": [
+     0.7888888888888889,
+     0.9249999999999999
+    ],
+    "p@5": 0.8999999999999999,
+    "p@5_ci95": [
+     0.8333333333333334,
+     0.9666666666666667
+    ],
+    "pool": 34.666666666666664,
+    "recall": 0.20238095238095236,
+    "relevant_in_pool": 28.0,
+    "searches": 9,
+    "sent": 6.666666666666667,
+    "starved": 0
+   },
+   "locations_applied": false,
+   "searches": [
+    {
+     "generic": true,
+     "keyword": "computer science internship",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": null,
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "computer science internship",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.7777777777777778,
+     "p@5": 0.8,
+     "persona": null,
+     "pool": 52,
+     "recall": 0.16666666666666666,
+     "relevant_in_pool": 42,
+     "sent": 9,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "computer science internship",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 1.0,
+     "p@5": 1.0,
+     "persona": null,
+     "pool": 52,
+     "recall": 0.11904761904761904,
+     "relevant_in_pool": 42,
+     "sent": 5,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "cs entry level",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": null,
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "cs entry level",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.9,
+     "p@5": 1.0,
+     "persona": null,
+     "pool": 52,
+     "recall": 0.21428571428571427,
+     "relevant_in_pool": 42,
+     "sent": 11,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "cs entry level",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.9,
+     "p@5": 1.0,
+     "persona": null,
+     "pool": 52,
+     "recall": 0.2619047619047619,
+     "relevant_in_pool": 42,
+     "sent": 12,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "computer science intern",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": null,
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "computer science intern",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.8,
+     "p@5": 0.8,
+     "persona": null,
+     "pool": 52,
+     "recall": 0.30952380952380953,
+     "relevant_in_pool": 42,
+     "sent": 15,
+     "starved": false
+    },
+    {
+     "generic": true,
+     "keyword": "computer science intern",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.75,
+     "p@5": 0.8,
+     "persona": null,
+     "pool": 52,
+     "recall": 0.14285714285714285,
+     "relevant_in_pool": 42,
+     "sent": 8,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "python developer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "py",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "python developer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 1.0,
+     "p@5": 1.0,
+     "persona": "py",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 2,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "python developer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.5,
+     "p@5": 0.5,
+     "persona": "py",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 4,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "programator python",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "py-ro",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "programator python",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.2,
+     "p@5": 0.2,
+     "persona": "py-ro",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 11,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "programator python",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.2,
+     "p@5": 0.2,
+     "persona": "py-ro",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 12,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "java developer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "java",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "java developer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.0,
+     "p@5": 0.0,
+     "persona": "java",
+     "pool": 52,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 2,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "java developer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.0,
+     "p@5": 0.0,
+     "persona": "java",
+     "pool": 52,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 4,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": ".net developer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "dotnet",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": ".net developer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.2222222222222222,
+     "p@5": 0.4,
+     "persona": "dotnet",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 9,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": ".net developer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.2,
+     "p@5": 0.4,
+     "persona": "dotnet",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 13,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "frontend developer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "fe",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "frontend developer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.2,
+     "p@5": 0.2,
+     "persona": "fe",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 17,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "frontend developer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.2,
+     "p@5": 0.2,
+     "persona": "fe",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 17,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "programator front-end",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "fe-ro",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "programator front-end",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.1,
+     "p@5": 0.0,
+     "persona": "fe-ro",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 37,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "programator front-end",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.0,
+     "p@5": 0.0,
+     "persona": "fe-ro",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 2,
+     "sent": 36,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "mobile developer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "mob",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "mobile developer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.2857142857142857,
+     "p@5": 0.4,
+     "persona": "mob",
+     "pool": 52,
+     "recall": 0.6666666666666666,
+     "relevant_in_pool": 3,
+     "sent": 7,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "mobile developer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.2222222222222222,
+     "p@5": 0.4,
+     "persona": "mob",
+     "pool": 52,
+     "recall": 0.6666666666666666,
+     "relevant_in_pool": 3,
+     "sent": 9,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "machine learning engineer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "ml",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "machine learning engineer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.3,
+     "p@5": 0.6,
+     "persona": "ml",
+     "pool": 52,
+     "recall": 0.8,
+     "relevant_in_pool": 5,
+     "sent": 29,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "machine learning engineer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.3,
+     "p@5": 0.6,
+     "persona": "ml",
+     "pool": 52,
+     "recall": 0.8,
+     "relevant_in_pool": 5,
+     "sent": 28,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "data analyst",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "data",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "data analyst",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.4,
+     "p@5": 0.8,
+     "persona": "data",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 7,
+     "sent": 15,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "data analyst",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.4,
+     "p@5": 0.8,
+     "persona": "data",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 7,
+     "sent": 19,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "embedded software engineer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "emb",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "embedded software engineer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.1,
+     "p@5": 0.2,
+     "persona": "emb",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 1,
+     "sent": 29,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "embedded software engineer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.1,
+     "p@5": 0.2,
+     "persona": "emb",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 1,
+     "sent": 27,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "devops engineer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "ops",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "devops engineer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.5,
+     "p@5": 0.8,
+     "persona": "ops",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 5,
+     "sent": 24,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "devops engineer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.5,
+     "p@5": 0.8,
+     "persona": "ops",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 5,
+     "sent": 23,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "qa engineer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "qa",
+     "pool": 0,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "qa engineer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.7,
+     "p@5": 0.8,
+     "persona": "qa",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 7,
+     "sent": 19,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "qa engineer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.7,
+     "p@5": 0.8,
+     "persona": "qa",
+     "pool": 52,
+     "recall": 1.0,
+     "relevant_in_pool": 7,
+     "sent": 20,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "contabil",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": 0.0,
+     "p@5": 0.0,
+     "persona": "acc-ro",
+     "pool": 6,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 3,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "contabil",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.2,
+     "p@5": 0.2,
+     "persona": "acc-ro",
+     "pool": 115,
+     "recall": 0.3333333333333333,
+     "relevant_in_pool": 15,
+     "sent": 35,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "contabil",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.3,
+     "p@5": 0.2,
+     "persona": "acc-ro",
+     "pool": 109,
+     "recall": 0.5,
+     "relevant_in_pool": 14,
+     "sent": 38,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "customer support",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": 0.75,
+     "p@5": 0.75,
+     "persona": "cs",
+     "pool": 6,
+     "recall": 1.0,
+     "relevant_in_pool": 3,
+     "sent": 4,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "customer support",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.9,
+     "p@5": 1.0,
+     "persona": "cs",
+     "pool": 115,
+     "recall": 1.0,
+     "relevant_in_pool": 12,
+     "sent": 32,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "customer support",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": 0.9,
+     "p@5": 1.0,
+     "persona": "cs",
+     "pool": 109,
+     "recall": 1.0,
+     "relevant_in_pool": 9,
+     "sent": 31,
+     "starved": false
+    }
+   ],
+   "specific": {
+    "low_n": 28,
+    "no_relevant": 12,
+    "p@10": 0.34600529100529104,
+    "p@10_ci95": [
+     0.24931216931216932,
+     0.4472334656084655
+    ],
+    "p@5": 0.4483333333333333,
+    "p@5_ci95": [
+     0.32329166666666664,
+     0.5666666666666665
+    ],
+    "pool": 40.666666666666664,
+    "recall": 0.8255555555555555,
+    "relevant_in_pool": 3.142857142857143,
+    "searches": 42,
+    "sent": 13.238095238095237,
+    "starved": 3
+   },
+   "threshold": 0.34
+  }
+ },
  "dm_with_cv": {
   "bands": [
    {
@@ -544,6 +2304,788 @@
   }
  },
  "feed_ranking": "production",
+ "feed_scoped": {
+  "cosine": {
+   "intern": {
+    "low_n": 14,
+    "mean": {
+     "mrr": 1.0,
+     "ndcg@10": 1.0,
+     "p@10": 0.3333333333333333,
+     "r_precision": 1.0
+    },
+    "measured": 2,
+    "ndcg@10_ci95": [
+     1.0,
+     1.0
+    ],
+    "no_relevant": 12,
+    "per_persona": {
+     "acc-ro": {
+      "low_n": true,
+      "mrr": 1.0,
+      "ndcg@10": 1.0,
+      "p@10": 0.16666666666666666,
+      "r_precision": 1.0,
+      "relevant": 1,
+      "remaining": 6
+     },
+     "cs": {
+      "low_n": true,
+      "mrr": 1.0,
+      "ndcg@10": 1.0,
+      "p@10": 0.5,
+      "r_precision": 1.0,
+      "relevant": 3,
+      "remaining": 6
+     },
+     "data": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "dotnet": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "emb": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "fe": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "fe-ro": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "java": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "ml": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "mob": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "ops": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "py": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "py-ro": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "qa": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     }
+    },
+    "personas": 14,
+    "remaining": 6
+   },
+   "intern+junior": {
+    "low_n": 4,
+    "mean": {
+     "mrr": 0.6377976190476191,
+     "ndcg@10": 0.6713266537378885,
+     "p@10": 0.35000000000000003,
+     "r_precision": 0.42797619047619045
+    },
+    "measured": 14,
+    "ndcg@10_ci95": [
+     0.5433903851377591,
+     0.7944563927935111
+    ],
+    "no_relevant": 0,
+    "per_persona": {
+     "acc-ro": {
+      "low_n": false,
+      "mrr": 0.3333333333333333,
+      "ndcg@10": 0.2735872697693364,
+      "p@10": 0.3,
+      "r_precision": 0.2,
+      "relevant": 15,
+      "remaining": 115
+     },
+     "cs": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.955830517697074,
+      "p@10": 0.9,
+      "r_precision": 0.75,
+      "relevant": 12,
+      "remaining": 115
+     },
+     "data": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.8990592616715064,
+      "p@10": 0.7,
+      "r_precision": 0.875,
+      "relevant": 8,
+      "remaining": 115
+     },
+     "dotnet": {
+      "low_n": true,
+      "mrr": 0.2,
+      "ndcg@10": 0.5767161935048146,
+      "p@10": 0.2,
+      "r_precision": 0.0,
+      "relevant": 2,
+      "remaining": 115
+     },
+     "emb": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.7653606369886218,
+      "p@10": 0.2,
+      "r_precision": 0.6666666666666666,
+      "relevant": 3,
+      "remaining": 115
+     },
+     "fe": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.8551347744988949,
+      "p@10": 0.3,
+      "r_precision": 0.3333333333333333,
+      "relevant": 3,
+      "remaining": 115
+     },
+     "fe-ro": {
+      "low_n": false,
+      "mrr": 0.5,
+      "ndcg@10": 0.5758829345812628,
+      "p@10": 0.2,
+      "r_precision": 0.3333333333333333,
+      "relevant": 3,
+      "remaining": 115
+     },
+     "java": {
+      "low_n": true,
+      "mrr": 0.0625,
+      "ndcg@10": 0.34564779946450047,
+      "p@10": 0.0,
+      "r_precision": 0.0,
+      "relevant": 1,
+      "remaining": 115
+     },
+     "ml": {
+      "low_n": false,
+      "mrr": 0.25,
+      "ndcg@10": 0.36748075039300054,
+      "p@10": 0.3,
+      "r_precision": 0.4,
+      "relevant": 5,
+      "remaining": 115
+     },
+     "mob": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.8259752883731906,
+      "p@10": 0.3,
+      "r_precision": 0.3333333333333333,
+      "relevant": 3,
+      "remaining": 115
+     },
+     "ops": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.8652064423610616,
+      "p@10": 0.5,
+      "r_precision": 0.6,
+      "relevant": 5,
+      "remaining": 115
+     },
+     "py": {
+      "low_n": true,
+      "mrr": 0.5,
+      "ndcg@10": 0.6745299952880529,
+      "p@10": 0.2,
+      "r_precision": 0.5,
+      "relevant": 2,
+      "remaining": 115
+     },
+     "py-ro": {
+      "low_n": true,
+      "mrr": 0.08333333333333333,
+      "ndcg@10": 0.4181612877391229,
+      "p@10": 0.0,
+      "r_precision": 0.0,
+      "relevant": 2,
+      "remaining": 115
+     },
+     "qa": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 1.0,
+      "p@10": 0.8,
+      "r_precision": 1.0,
+      "relevant": 8,
+      "remaining": 115
+     }
+    },
+    "personas": 14,
+    "remaining": 115
+   },
+   "junior": {
+    "low_n": 4,
+    "mean": {
+     "mrr": 0.6437499999999999,
+     "ndcg@10": 0.6683465435480599,
+     "p@10": 0.33571428571428574,
+     "r_precision": 0.43732993197278913
+    },
+    "measured": 14,
+    "ndcg@10_ci95": [
+     0.5485550342571913,
+     0.786992621089906
+    ],
+    "no_relevant": 0,
+    "per_persona": {
+     "acc-ro": {
+      "low_n": false,
+      "mrr": 0.3333333333333333,
+      "ndcg@10": 0.2735872697693364,
+      "p@10": 0.3,
+      "r_precision": 0.21428571428571427,
+      "relevant": 14,
+      "remaining": 109
+     },
+     "cs": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.8710796316057187,
+      "p@10": 0.7,
+      "r_precision": 0.6666666666666666,
+      "relevant": 9,
+      "remaining": 109
+     },
+     "data": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.8990592616715064,
+      "p@10": 0.7,
+      "r_precision": 0.875,
+      "relevant": 8,
+      "remaining": 109
+     },
+     "dotnet": {
+      "low_n": true,
+      "mrr": 0.2,
+      "ndcg@10": 0.5767161935048146,
+      "p@10": 0.2,
+      "r_precision": 0.0,
+      "relevant": 2,
+      "remaining": 109
+     },
+     "emb": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.7653606369886218,
+      "p@10": 0.2,
+      "r_precision": 0.6666666666666666,
+      "relevant": 3,
+      "remaining": 109
+     },
+     "fe": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.8551347744988949,
+      "p@10": 0.3,
+      "r_precision": 0.3333333333333333,
+      "relevant": 3,
+      "remaining": 109
+     },
+     "fe-ro": {
+      "low_n": false,
+      "mrr": 0.5,
+      "ndcg@10": 0.5758829345812628,
+      "p@10": 0.2,
+      "r_precision": 0.3333333333333333,
+      "relevant": 3,
+      "remaining": 109
+     },
+     "java": {
+      "low_n": true,
+      "mrr": 0.0625,
+      "ndcg@10": 0.34564779946450047,
+      "p@10": 0.0,
+      "r_precision": 0.0,
+      "relevant": 1,
+      "remaining": 109
+     },
+     "ml": {
+      "low_n": false,
+      "mrr": 0.3333333333333333,
+      "ndcg@10": 0.4105100938267549,
+      "p@10": 0.3,
+      "r_precision": 0.6,
+      "relevant": 5,
+      "remaining": 109
+     },
+     "mob": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.8259752883731906,
+      "p@10": 0.3,
+      "r_precision": 0.3333333333333333,
+      "relevant": 3,
+      "remaining": 109
+     },
+     "ops": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.8652064423610616,
+      "p@10": 0.5,
+      "r_precision": 0.6,
+      "relevant": 5,
+      "remaining": 109
+     },
+     "py": {
+      "low_n": true,
+      "mrr": 0.5,
+      "ndcg@10": 0.6745299952880529,
+      "p@10": 0.2,
+      "r_precision": 0.5,
+      "relevant": 2,
+      "remaining": 109
+     },
+     "py-ro": {
+      "low_n": true,
+      "mrr": 0.08333333333333333,
+      "ndcg@10": 0.4181612877391229,
+      "p@10": 0.0,
+      "r_precision": 0.0,
+      "relevant": 2,
+      "remaining": 109
+     },
+     "qa": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 1.0,
+      "p@10": 0.8,
+      "r_precision": 1.0,
+      "relevant": 8,
+      "remaining": 109
+     }
+    },
+    "personas": 14,
+    "remaining": 109
+   },
+   "locations_applied": false
+  },
+  "production": {
+   "intern": {
+    "low_n": 14,
+    "mean": {
+     "mrr": 0.625,
+     "ndcg@10": 0.7153382790366966,
+     "p@10": 0.3333333333333333,
+     "r_precision": 0.5
+    },
+    "measured": 2,
+    "ndcg@10_ci95": [
+     0.4306765580733931,
+     1.0
+    ],
+    "no_relevant": 12,
+    "per_persona": {
+     "acc-ro": {
+      "low_n": true,
+      "mrr": 0.25,
+      "ndcg@10": 0.4306765580733931,
+      "p@10": 0.16666666666666666,
+      "r_precision": 0.0,
+      "relevant": 1,
+      "remaining": 6
+     },
+     "cs": {
+      "low_n": true,
+      "mrr": 1.0,
+      "ndcg@10": 1.0,
+      "p@10": 0.5,
+      "r_precision": 1.0,
+      "relevant": 3,
+      "remaining": 6
+     },
+     "data": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "dotnet": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "emb": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "fe": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "fe-ro": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "java": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "ml": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "mob": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "ops": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "py": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "py-ro": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     },
+     "qa": {
+      "low_n": true,
+      "relevant": 0,
+      "remaining": 6
+     }
+    },
+    "personas": 14,
+    "remaining": 6
+   },
+   "intern+junior": {
+    "low_n": 4,
+    "mean": {
+     "mrr": 0.7991452991452991,
+     "ndcg@10": 0.72094143860512,
+     "p@10": 0.35000000000000003,
+     "r_precision": 0.5440476190476191
+    },
+    "measured": 14,
+    "ndcg@10_ci95": [
+     0.6101193857243369,
+     0.8239538990820758
+    ],
+    "no_relevant": 0,
+    "per_persona": {
+     "acc-ro": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.6421867266689009,
+      "p@10": 0.5,
+      "r_precision": 0.4,
+      "relevant": 15,
+      "remaining": 115
+     },
+     "cs": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.9368077570869661,
+      "p@10": 0.9,
+      "r_precision": 0.8333333333333334,
+      "relevant": 12,
+      "remaining": 115
+     },
+     "data": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.9526046846973931,
+      "p@10": 0.8,
+      "r_precision": 1.0,
+      "relevant": 8,
+      "remaining": 115
+     },
+     "dotnet": {
+      "low_n": true,
+      "mrr": 1.0,
+      "ndcg@10": 0.8989080737416201,
+      "p@10": 0.2,
+      "r_precision": 1.0,
+      "relevant": 2,
+      "remaining": 115
+     },
+     "emb": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.9674679834891694,
+      "p@10": 0.3,
+      "r_precision": 0.6666666666666666,
+      "relevant": 3,
+      "remaining": 115
+     },
+     "fe": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.763412263686808,
+      "p@10": 0.3,
+      "r_precision": 0.6666666666666666,
+      "relevant": 3,
+      "remaining": 115
+     },
+     "fe-ro": {
+      "low_n": false,
+      "mrr": 0.5,
+      "ndcg@10": 0.46969364294315,
+      "p@10": 0.1,
+      "r_precision": 0.3333333333333333,
+      "relevant": 3,
+      "remaining": 115
+     },
+     "java": {
+      "low_n": true,
+      "mrr": 0.07692307692307693,
+      "ndcg@10": 0.38061403395677607,
+      "p@10": 0.0,
+      "r_precision": 0.0,
+      "relevant": 1,
+      "remaining": 115
+     },
+     "ml": {
+      "low_n": false,
+      "mrr": 0.5,
+      "ndcg@10": 0.43226052701549317,
+      "p@10": 0.2,
+      "r_precision": 0.4,
+      "relevant": 5,
+      "remaining": 115
+     },
+     "mob": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.8973268036280536,
+      "p@10": 0.3,
+      "r_precision": 0.6666666666666666,
+      "relevant": 3,
+      "remaining": 115
+     },
+     "ops": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.6058069926878644,
+      "p@10": 0.3,
+      "r_precision": 0.4,
+      "relevant": 5,
+      "remaining": 115
+     },
+     "py": {
+      "low_n": true,
+      "mrr": 1.0,
+      "ndcg@10": 0.6979051701002783,
+      "p@10": 0.2,
+      "r_precision": 0.5,
+      "relevant": 2,
+      "remaining": 115
+     },
+     "py-ro": {
+      "low_n": true,
+      "mrr": 0.1111111111111111,
+      "ndcg@10": 0.5361509128701574,
+      "p@10": 0.1,
+      "r_precision": 0.0,
+      "relevant": 2,
+      "remaining": 115
+     },
+     "qa": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.9120345678990496,
+      "p@10": 0.7,
+      "r_precision": 0.75,
+      "relevant": 8,
+      "remaining": 115
+     }
+    },
+    "personas": 14,
+    "remaining": 115
+   },
+   "junior": {
+    "low_n": 4,
+    "mean": {
+     "mrr": 0.7991452991452991,
+     "ndcg@10": 0.7189362417355761,
+     "p@10": 0.34285714285714286,
+     "r_precision": 0.5510487528344672
+    },
+    "measured": 14,
+    "ndcg@10_ci95": [
+     0.608329999135637,
+     0.8199905271030578
+    ],
+    "no_relevant": 0,
+    "per_persona": {
+     "acc-ro": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.6421867266689009,
+      "p@10": 0.5,
+      "r_precision": 0.42857142857142855,
+      "relevant": 14,
+      "remaining": 109
+     },
+     "cs": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.9205232051373359,
+      "p@10": 0.8,
+      "r_precision": 0.7777777777777778,
+      "relevant": 9,
+      "remaining": 109
+     },
+     "data": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.9526046846973931,
+      "p@10": 0.8,
+      "r_precision": 1.0,
+      "relevant": 8,
+      "remaining": 109
+     },
+     "dotnet": {
+      "low_n": true,
+      "mrr": 1.0,
+      "ndcg@10": 0.8989080737416201,
+      "p@10": 0.2,
+      "r_precision": 1.0,
+      "relevant": 2,
+      "remaining": 109
+     },
+     "emb": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.9469024295259745,
+      "p@10": 0.3,
+      "r_precision": 0.6666666666666666,
+      "relevant": 3,
+      "remaining": 109
+     },
+     "fe": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.763412263686808,
+      "p@10": 0.3,
+      "r_precision": 0.6666666666666666,
+      "relevant": 3,
+      "remaining": 109
+     },
+     "fe-ro": {
+      "low_n": false,
+      "mrr": 0.5,
+      "ndcg@10": 0.46969364294315,
+      "p@10": 0.1,
+      "r_precision": 0.3333333333333333,
+      "relevant": 3,
+      "remaining": 109
+     },
+     "java": {
+      "low_n": true,
+      "mrr": 0.07692307692307693,
+      "ndcg@10": 0.38061403395677607,
+      "p@10": 0.0,
+      "r_precision": 0.0,
+      "relevant": 1,
+      "remaining": 109
+     },
+     "ml": {
+      "low_n": false,
+      "mrr": 0.5,
+      "ndcg@10": 0.4373866789096383,
+      "p@10": 0.2,
+      "r_precision": 0.4,
+      "relevant": 5,
+      "remaining": 109
+     },
+     "mob": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.8973268036280536,
+      "p@10": 0.3,
+      "r_precision": 0.6666666666666666,
+      "relevant": 3,
+      "remaining": 109
+     },
+     "ops": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.6058069926878644,
+      "p@10": 0.3,
+      "r_precision": 0.4,
+      "relevant": 5,
+      "remaining": 109
+     },
+     "py": {
+      "low_n": true,
+      "mrr": 1.0,
+      "ndcg@10": 0.6979051701002783,
+      "p@10": 0.2,
+      "r_precision": 0.5,
+      "relevant": 2,
+      "remaining": 109
+     },
+     "py-ro": {
+      "low_n": true,
+      "mrr": 0.1111111111111111,
+      "ndcg@10": 0.5361509128701574,
+      "p@10": 0.1,
+      "r_precision": 0.0,
+      "relevant": 2,
+      "remaining": 109
+     },
+     "qa": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.9156857657441143,
+      "p@10": 0.7,
+      "r_precision": 0.875,
+      "relevant": 8,
+      "remaining": 109
+     }
+    },
+    "personas": 14,
+    "remaining": 109
+   },
+   "locations_applied": false
+  }
+ },
  "feedback": [
   {
    "delta_ci95": [

@@ -12,6 +12,7 @@ import json
 import math
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -261,6 +262,18 @@ def test_cli_check_fails_on_regression(tmp_path):
     assert "REGRESSION: feed nDCG@10" in out.stderr
 
 
+def test_cli_check_gates_the_dm_score(tmp_path):
+    run_cli("--models", "tfidf", "--no-feedback", "--write-results", str(tmp_path))
+    baseline = tmp_path / "tfidf.json"
+    data = json.loads(baseline.read_text())
+    data["dm_searches"]["dm_score"]["generic"]["starved"] = -1  # pretend nothing ever starved
+    baseline.write_text(json.dumps(data))
+
+    out = run_cli("--models", "tfidf", "--no-feedback", "--check", str(baseline))
+    assert out.returncode == 1
+    assert "REGRESSION: DM score generic searches starved" in out.stderr
+
+
 def test_cli_check_refuses_a_baseline_from_another_eval_set(tmp_path):
     """The held-out set grew from 253 to 258 postings; a baseline from the
     old file compares two different measurements."""
@@ -276,3 +289,160 @@ def test_cli_check_refuses_a_baseline_from_another_eval_set(tmp_path):
     assert out.returncode == 1
     assert "regenerate the baseline" in out.stderr
 
+
+
+# ── Discord DMs as users search (generic searches, filters first) ──────
+
+
+def test_dm_search_query_is_the_production_query():
+    search = ev.DmSearch("computer science internship", ("intern", "junior"))
+    assert search.query == (
+        "Job role: computer science internship. Experience level: intern, junior. Location: Cluj"
+    )
+
+
+def test_dm_searches_cover_generic_and_persona_keywords_at_every_level_set():
+    persona = ev.Persona("u", "en", "py", "python developer", "cv")
+    searches = ev.dm_searches([persona])
+    generic = [s for s in searches if s.family is None]
+    assert len(generic) == len(ev.GENERIC_DM_KEYWORDS) * len(ev.DM_LEVEL_SETS)
+    assert {s.levels for s in searches if s.family == "py"} == set(ev.DM_LEVEL_SETS)
+
+
+def test_dm_pool_applies_the_title_gate_and_the_level_filter_before_scoring():
+    postings = [
+        posting(("py",), "intern", pid="a", text="Software Engineering Intern"),
+        posting(("py",), "senior", pid="b", text="Senior Software Engineer"),
+        posting(("acc",), "intern", pid="c", text="Accounting Intern"),
+    ]
+    pool = ev.dm_pool(postings, ev.DmSearch("computer science internship", ("intern",)))
+    # The senior role fails the level filter, the accounting one the tech title gate.
+    assert pool.tolist() == [True, False, False]
+
+
+def test_dm_relevant_is_the_right_field_at_a_wanted_level():
+    postings = [
+        posting(("java",), "intern", pid="a"),
+        posting(("java",), "any", pid="b"),
+        posting(("acc",), "intern", pid="c"),
+        posting(("py",), "mid", pid="d"),
+    ]
+    assert ev.dm_relevant(postings, ev.DmSearch("cs", ("intern",))).tolist() == [True, False, False, False]
+    # "any" (no level named) is what a junior search is for.
+    assert ev.dm_relevant(postings, ev.DmSearch("cs", ("junior",))).tolist() == [False, True, False, False]
+    specific = ev.DmSearch("python developer", ("intern", "junior"), family="py")
+    assert not ev.dm_relevant(postings, specific).any()
+
+
+def test_dm_search_metrics_reads_the_batch_best_first():
+    scores = np.array([0.9, 0.8, 0.7, 0.2, 0.6])
+    pool = np.array([True, True, True, True, False])
+    relevant = np.array([False, True, True, True, True])
+    m = ev.dm_search_metrics(scores, pool, relevant, threshold=0.5)
+    assert m["sent"] == 3  # 0.2 is under the threshold, 0.6 is not in the pool
+    assert m["p@5"] == pytest.approx(2 / 3)
+    assert m["recall"] == pytest.approx(2 / 3)  # 2 of the 3 relevant in the pool
+    assert not m["starved"]
+    starved = ev.dm_search_metrics(scores, pool, relevant, threshold=0.95)
+    assert starved["starved"] and starved["sent"] == 0 and math.isnan(starved["p@10"])
+
+
+def test_dm_query_vectors_hub_alpha_subtracts_the_panel_mean():
+    from gosha.matching import dm_panel_queries
+
+    encode = hashing_encoder()
+    search = ev.DmSearch("computer science internship", ("intern",))
+    plain = ev.dm_query_vectors([search], encode)
+    hub = ev.dm_query_vectors([search], encode, hub_alpha=0.5)
+    panel = encode(dm_panel_queries([ev.DM_LOCATION], ["intern"]))
+    assert np.allclose(hub[0], plain[0] - 0.5 * panel.mean(axis=0), atol=1e-6)
+    result = ev.evaluate_dm_searches(
+        [posting(("py",), "intern", pid="a", text="Software Engineering Intern")],
+        [search], encode(["Software Engineering Intern"]), hub, threshold=-1.0,
+    )
+    assert result["generic"]["searches"] == 1 and result["generic"]["p@5"] == 1.0
+
+
+# ── owner rule: filter, don't regrade (only what the product would show) ──
+
+
+def test_dm_pool_runs_the_pipelines_own_filters(monkeypatch):
+    import gosha.pipeline as pipeline
+
+    postings = [posting(("py",), "intern", pid="a", text="Software Engineering Intern")]
+    search = ev.DmSearch("computer science internship", ("intern",))
+    assert ev.dm_pool(postings, search).tolist() == [True]
+    monkeypatch.setattr(pipeline, "prefilter", lambda sub, jobs: [])
+    assert ev.dm_pool(postings, search).tolist() == [False]
+
+
+def test_place_filter_runs_only_when_the_set_records_places():
+    def placed(pid, location):
+        return replace(posting(("py",), "intern", pid=pid, text="Software Engineering Intern"),
+                       location=location, location_known=True)
+
+    search = ev.DmSearch("computer science internship", ("intern",))
+    postings = [placed("a", "Cluj-Napoca"), placed("b", "Bucuresti"), placed("c", None)]
+    assert ev.locations_applied(postings)
+    # As production: another city and a posting without a place are out.
+    assert ev.dm_pool(postings, search).tolist() == [True, False, False]
+    unplaced = [posting(("py",), "intern", pid="a", text="Software Engineering Intern")]
+    assert not ev.locations_applied(unplaced)
+    assert ev.dm_pool(unplaced, search).tolist() == [True]
+
+
+def test_load_postings_reads_the_place_when_the_set_has_one(tmp_path):
+    row = {"id": "a", "source": "s", "lang": "en", "families": ["py"], "level": "junior",
+           "title": "t", "company": "c", "description": "d"}
+    path = tmp_path / "postings.jsonl"
+    path.write_text(json.dumps(row) + "\n" + json.dumps({**row, "id": "b", "location": None}) + "\n")
+    a, b = ev.load_postings(path)
+    assert not a.location_known and b.location_known and b.location is None
+
+
+def test_low_n_is_a_short_page_or_few_relevant():
+    assert ev.is_low_n(ev.LOW_N_POSTINGS - 1, 50)
+    assert ev.is_low_n(100, ev.LOW_N_RELEVANT - 1)
+    assert not ev.is_low_n(ev.LOW_N_POSTINGS, ev.LOW_N_RELEVANT)
+
+
+def test_dm_rows_flag_low_n_searches_and_keep_them():
+    encode = hashing_encoder()
+    postings = [posting(("py",), "intern", pid="a", text="Software Engineering Intern")]
+    search = ev.DmSearch("python developer", ("intern",), family="py", persona="u1")
+    result = ev.evaluate_dm_searches(
+        postings, [search], encode([p.title for p in postings]), encode([search.query]), -1.0,
+    )
+    (row,) = result["searches"]
+    assert row["persona"] == "u1" and row["low_n"]
+    assert result["specific"]["low_n"] == 1 and result["specific"]["searches"] == 1
+
+
+def test_scoped_feed_pool_is_the_feeds_scope_filter(monkeypatch):
+    import gosha.recommend as recommend
+
+    postings = [
+        posting(("py",), "intern", pid="a", text="Software Engineering Intern"),
+        posting(("py",), "senior", pid="b", text="Senior Software Engineer"),
+    ]
+    assert ev.scoped_feed_pool(postings, ("intern", "junior")) == [0]
+    monkeypatch.setattr(recommend, "in_search_scope", lambda job, scopes, memo=None: True)
+    assert ev.scoped_feed_pool(postings, ("intern", "junior")) == [0, 1]
+
+
+def test_feed_p_at_10_is_over_the_page_shown():
+    assert ev.feed_metrics(np.array([0.9, 0.5]), np.array([2, 0]))["p@10"] == 0.5
+
+
+def test_scoped_feed_counts_what_is_left_and_who_has_nothing(small_world):
+    postings, personas = small_world
+    result = ev.run(postings, personas, hashing_encoder(), with_feedback=False)
+    scoped = result["feed_scoped"]
+    assert set(scoped) == {"production", "cosine"}
+    junior = scoped["production"]["junior"]
+    assert junior["remaining"] == len(ev.scoped_feed_pool(postings, ("junior",)))
+    assert junior["personas"] == 2 and junior["low_n"] == 2  # a 7-posting world is low-n
+    for persona, row in junior["per_persona"].items():
+        assert ("ndcg@10" in row) == (row["relevant"] > 0), persona
+    assert junior["measured"] + junior["no_relevant"] == 2
+    json.dumps(result)

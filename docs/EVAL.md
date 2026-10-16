@@ -18,8 +18,10 @@ python scripts/eval_ranking.py --job-text title      # embed titles only
 `gosha/evaluation.py` holds the metrics and the harness; `scripts/eval_ranking.py`
 is the CLI (embeddings are cached on disk, so re-runs take seconds). The
 `Ranking eval` workflow re-runs it with the production model on every PR
-that touches ranking code, and fails if feed nDCG@10, or Discord recall /
-off-target rate at the default thresholds, moved by more than 0.02 against
+that touches ranking code, and fails if feed nDCG@10, Discord recall /
+off-target rate at the default thresholds, or the DM score's P@10, P@5 and
+recall (below) moved by more than 0.02, or the DM score starves more
+searches, against
 [`eval/results/all-mpnet-base-v2.json`](../eval/results/all-mpnet-base-v2.json)
 (main set) or
 [`eval/results/heldout/all-mpnet-base-v2.json`](../eval/results/heldout/all-mpnet-base-v2.json)
@@ -50,6 +52,28 @@ with the CV by `blend_with_user_vector`, feedback by
   posting. For each threshold: recall of grade-2 postings, the share of
   grade-0 pairs that get through ("off-target"), and how many postings a
   persona would be sent.
+- **Discord DMs as users search** (what production sends; owner rule
+  2026-10-16: filter, don't regrade). The searches are the three that
+  production users type ("computer science internship", "cs entry level",
+  "computer science intern") plus each persona's own keyword, each at the
+  level sets users choose (intern; intern + junior; junior), in Cluj, with
+  no CV (no production user with a search has one). Each search's pool is
+  `pipeline.prefilter`, the function the match stage runs before scoring
+  (hard filters, then what the keyword implies for the levels). The pool
+  is then scored by the DM score (`matching.dm_score`) or by plain cosine.
+  Relevant: a computer-science family (a persona's own family for its
+  keyword) at a gold level the search asked for (intern → intern; junior
+  → junior or unstated). Reported per search, then averaged: P@5 (the
+  per-search cap is 5 a cycle), P@10, recall, and "starved" (relevant
+  postings in the pool, none sent). A search left with under 10 postings,
+  or under 3 relevant ones, is flagged low-n and kept in the means. The
+  place filter runs only when the postings record a place; they do not
+  yet, so place is not filtered.
+- **Web feed with one active search:** the feed's own scope filter
+  (`recommend.in_search_scope`: the search's place and levels) first, at
+  each level set, then the production ranking or the cosine over what is
+  left. Gold grades unchanged. A persona with no grade-2 posting left is
+  counted, not averaged.
 - **Feedback:** a residual-collection simulation of the Rocchio update,
   through the feed ranking (the update moves the embedding vector; the
   keyword and seniority terms stay).
@@ -147,6 +171,80 @@ with the CV by `blend_with_user_vector`, feedback by
     ranking) are therefore slightly optimistic. The cosine-only and TF-IDF
     rows do not read seniority and are unaffected.
 
+## Results (2026-10-16): Discord DMs, the DM score
+
+Every production DM today goes through one path: a saved search, no CV,
+behind an intern/junior level filter. On that path, plain cosine at 0.42
+was a recall cliff: the production query format puts computer-science
+postings in a narrow 0.38–0.45 band. The score that ships is the **DM
+score** (`gosha/matching.py`): the search's cosine minus 0.25 × the mean
+cosine of a fixed panel of 40 everyday searches
+([`gosha/dm_panel.txt`](../gosha/dm_panel.txt), IT and non-IT, sharing no
+search with the personas or users) to the same posting, sent from 0.34,
+"Strong match" from 0.47. It is one modified query vector per search, so
+scoring costs what it did.
+
+**How it was chosen.** gosha-lead fixed the rule before the run: the best
+batch P@10 of the generic searches on the main set, with no more starved
+searches than plain cosine at 0.42 (main, held-out and judged real DMs),
+and at most 0.10 of held-out recall lost. The grid was α ∈ {0.25, 0.5,
+0.75} × threshold. The rule picked α 0.25 @ 0.34. Other settings scored
+higher on P@5 and recall: α 0.75 @ 0.05 gave held-out persona-keyword
+P@5 0.31 and recall 1.0. They were not taken, because switching the
+objective after seeing the results would be tuning on them.
+
+| Set | Score | Searches | Pool | Sent | P@5 (95% CI) | P@10 | Recall | Starved | Low-n |
+|---|---|---|---|---|---|---|---|---|---|
+| main, generic | **DM score @ 0.34** | 9 | 34.7 | 6.7 | 0.900 (0.833–0.967) | **0.855** | 0.202 | 0 | 3 |
+| main, generic | cosine @ 0.42 | 9 | 34.7 | 9.4 | 1.000 | 0.825 | 0.290 | 0 | 3 |
+| main, persona keyword | **DM score** | 42 | 40.7 | 13.2 | 0.448 (0.323–0.567) | 0.346 | 0.826 | 3 | 28 |
+| main, persona keyword | cosine | 42 | 40.7 | 15.1 | 0.428 (0.307–0.542) | 0.315 | 0.836 | 3 | 28 |
+| held-out, generic | **DM score** | 9 | 60.3 | 27.1 | 0.956 (0.889–1.000) | 0.891 | 0.565 | 0 | 0 |
+| held-out, generic | cosine | 9 | 60.3 | 31.2 | 0.956 | 0.906 | 0.636 | 0 | 0 |
+| held-out, persona keyword | **DM score** | 30 | 69.1 | 23.6 | 0.271 (0.173–0.371) | 0.200 | 0.758 | 1 | 14 |
+| held-out, persona keyword | cosine | 30 | 69.1 | 29.5 | 0.211 (0.140–0.287) | 0.166 | 0.768 | 1 | 14 |
+
+Judged real DMs (266 sent pairs from 17 production subscriptions, one AI
+judge; a check only, never tuned on): tech share of the top 5 0.804 →
+0.830, of the top 10 0.746 → 0.786, no subscription starved.
+
+What this says:
+
+1. **The gain is small, and most of it is sending less.** A generic
+   search is sent 6.7 postings instead of 9.4. Main P@10 rises by 0.03,
+   main P@5 falls by 0.10 (from a perfect 1.0), and recall falls on both
+   sets (main 0.29 → 0.20, held-out 0.64 → 0.57). Every interval overlaps
+   plain cosine's.
+2. **The filters do most of the work.** After `prefilter`, 81% of a
+   main generic search's pool is relevant (28.0 of 34.7). The score
+   decides the order and the cut within that pool.
+3. **Persona-keyword searches gain on both sets** (held-out P@5 0.21 →
+   0.27), but those intervals overlap too.
+4. **Low-n is common.** The main set has 6 intern postings, none of them
+   computer science. Under the owner's intern rule (an intern-only search
+   gets training positions only), every computer-science intern-only
+   search on main has an empty pool: 3 of 9 generic searches and 12 of 42
+   persona searches have nothing relevant to send. 28 of 42 persona searches are low-n on main
+   and 14 of 30 on held-out. Read the persona rows as indicative.
+
+**Feed with one active search** (scope filter first; nDCG@10 over the
+personas with a grade-2 posting left, paired difference with a 95%
+bootstrap interval):
+
+| Set | Levels | Postings left | Production | Cosine | Production − cosine |
+|---|---|---|---|---|---|
+| main | intern + junior | 115 | 0.721 | 0.671 | +0.050 (−0.038 … +0.129) |
+| main | junior | 109 | 0.719 | 0.668 | +0.051 (−0.033 … +0.134) |
+| main | intern | 6 | 2 of 14 personas measured | | |
+| held-out | intern + junior | 155 | 0.579 | 0.595 | −0.015 (−0.115 … +0.096) |
+| held-out | junior | 140 | 0.633 | 0.605 | +0.028 (−0.067 … +0.138) |
+| held-out | intern | 17 | 6 of 10 personas measured | | |
+
+Once a user's search narrows the feed to their level, the hybrid's lead
+over the plain cosine is within noise on both sets: most of its full-feed
+gain (below) is the seniority penalty, which the level filter already
+applies.
+
 ## Results (2026-10-16): the ranking that ships
 
 Feed nDCG@10 with a 95% bootstrap interval over personas; R-precision,
@@ -166,8 +264,10 @@ MRR and P@10 on grade-2 postings. Results:
 What this says, in order of confidence:
 
 1. **The production ranking beats both of its parts on both sets.** The
-   gain over the old cosine feed is +0.21 on the main set and +0.07 on
-   the held-out set.
+   gain over the old cosine feed is +0.21 on the main set (paired 95%
+   interval +0.13 … +0.29) and +0.07 on the held-out set (−0.02 … +0.15,
+   not significant). Within one active search's scope it shrinks to noise
+   (above).
 2. **Read the held-out gain as the real one.** The hybrid, its weights
    and the seniority rules were designed while looking at the main set;
    the held-out set was only reported. A gain three times larger where
@@ -219,16 +319,13 @@ separate the weights, so they stay at 0.3 / 0.3 (choosing 0.5 from the
 held-out column would be tuning on it). Likes alone (0.3 / 0) show no
 gain on either set.
 
-**Discord delivery** is unchanged by the feed ranking (it scores the
-blended cosine, see below); the main-set numbers below still hold (the
-label passes moved them by at most 0.002). On the
-held-out set, at the production thresholds: with a CV (0.43) recall 0.852,
-off-target passed 0.293; search only (0.42) recall 0.826, off-target
-0.345.
-
-**Feed hard filters** (the user's active searches' locations and
-levels, `recommend.in_search_scope`) are not measured: the personas have
-a CV, not saved searches.
+**Discord delivery with a CV** is unchanged by the feed ranking (it
+scores the blended cosine, see below); the main-set numbers below still
+hold (the label passes moved them by at most 0.002). On the held-out set,
+at 0.43: recall 0.852, off-target passed 0.293. Searches without a CV now
+use the DM score (above). The unfiltered "search only" sweep in the
+results files remains as the old reference: every persona against every
+posting.
 
 ## Results (2026-10-01): before the hybrid ranking
 
@@ -342,11 +439,19 @@ and it double-counted feedback the vector already carried.
 - **Labels by one annotator, an AI agent, from titles and opening
   lines.** The family/level rule is coarse: it cannot tell a Python data
   engineer from a Python web developer unless the families say so.
-- **No hard filters.** Production filters Discord matches by location,
-  experience level, salary and excluded words before scoring, and the
-  feed by the user's active searches' locations and levels. Here every
-  persona sees every posting, so "postings sent per persona" overstates
-  real DM volume. The relative changes still hold.
+- **Place is not filtered.** The DM and scoped-feed sections apply the
+  product's own filters, except place: the eval postings record none, and
+  production's database holds only 7 of the 202 main and 30 of the 261
+  held-out postings. The code applies Cluj once postings carry a
+  `location`. Filling it in needs a fresh fetch from the boards. The
+  unfiltered sections (full feed, threshold sweeps) still show every
+  persona every posting, which overstates real DM volume.
+- **Few intern postings.** The main set has 6 (none computer science) and
+  the held-out set 17, so intern-only results are low-n or empty.
+- **The DM searches are modelled, not sampled.** The three generic
+  keywords and the level sets are what production users chose on
+  2026-10-16; relevance for a generic search is "any computer-science
+  family". The real-DM check rests on one AI judge's labels.
 - **Every persona is a student or a career starter.** The seniority
   penalty for mid and senior readers (and `cv_level`'s reading of them)
   is untested; a CV that states experience only as date ranges
@@ -370,6 +475,9 @@ and it double-counted feedback the vector already carried.
   more personas than the main set has.
 - **CV level from date ranges**, once there are non-student personas to
   check it on.
-- **Seniority in Discord scores.** The match stage hard-filters by the
-  search's level; whether a soft penalty on top improves recall against
-  off-target is measurable with this harness and not yet measured.
+- **Seniority and TF-IDF in Discord scores.** Measured on the DM
+  prototype: a seniority penalty changed nothing (the level filter has
+  already removed above-level postings), and TF-IDF added noise. Neither
+  is in the DM score.
+- **Places in the eval sets**, so the DM and scoped-feed numbers include
+  the place filter (after the release: it needs board fetches).

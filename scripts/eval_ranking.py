@@ -101,6 +101,53 @@ def _sweep_row(sweep: list[dict], threshold: float) -> dict:
     return next(r for r in sweep if abs(r["threshold"] - threshold) < 1e-9)
 
 
+def _flag(remaining: int, relevant: int) -> str:
+    return f"{remaining}/{relevant}{' ⚑' if evaluation.is_low_n(remaining, relevant) else ''}"
+
+
+def _scoped_markdown(name: str, r: dict) -> list[str]:
+    """The feed scoped to one active search, and what each persona has
+    left after the product's filters (DM pool and feed)."""
+    if "feed_scoped" not in r:
+        return []
+    level_sets = ["+".join(levels) for levels in evaluation.DM_LEVEL_SETS]
+    lines = ["", f"Web feed with one active search (scope filter first), `{name}`:", "",
+             "| ranking | levels | postings left | personas measured | none relevant | low-n | "
+             "nDCG@10 (95% CI) | P@10 |",
+             "|---|---|---|---|---|---|---|---|"]
+    for ranking_name, by_levels in r["feed_scoped"].items():
+        for levels in level_sets:
+            s = by_levels[levels]
+            if "mean" in s:
+                lo, hi = s["ndcg@10_ci95"]
+                scores = f"{s['mean']['ndcg@10']:.3f} ({lo:.3f}–{hi:.3f}) | {s['mean']['p@10']:.3f}"
+            else:
+                scores = "– | –"
+            lines.append(f"| {ranking_name} | {levels} | {s['remaining']} | {s['measured']}/"
+                         f"{s['personas']} | {s['no_relevant']} | {s['low_n']} | {scores} |")
+    generic = [row for row in next(iter(r["dm_searches"].values()))["searches"]
+               if row["generic"] and row["low_n"]]
+    if generic:
+        lines += ["", "Low-n generic DM searches (postings/relevant left): " + "; ".join(
+            f"{row['keyword']} ({'+'.join(row['levels'])}) {row['pool']}/{row['relevant_in_pool']}"
+            for row in generic)]
+    feed = next(iter(r["feed_scoped"].values()))
+    dm = {(row["persona"], "+".join(row["levels"])): row
+          for row in next(iter(r["dm_searches"].values()))["searches"] if row["persona"]}
+    lines += ["", f"Left per persona after the filters, postings/relevant (⚑ low-n: under "
+              f"{evaluation.LOW_N_POSTINGS} postings or {evaluation.LOW_N_RELEVANT} relevant), `{name}`:",
+              "", "| persona | " + " | ".join(f"DM {lv}" for lv in level_sets) + " | "
+              + " | ".join(f"feed {lv}" for lv in level_sets) + " |",
+              "|---" * (1 + 2 * len(level_sets)) + "|"]
+    for persona in feed[level_sets[0]]["per_persona"]:
+        cells = [_flag(dm[persona, lv]["pool"], dm[persona, lv]["relevant_in_pool"])
+                 if (persona, lv) in dm else "–" for lv in level_sets]
+        cells += [_flag(feed[lv]["per_persona"][persona]["remaining"],
+                        feed[lv]["per_persona"][persona]["relevant"]) for lv in level_sets]
+        lines.append(f"| {persona} | " + " | ".join(cells) + " |")
+    return lines
+
+
 def summary_markdown(results: dict[str, dict]) -> str:
     lines = ["| Model | feed ranking | window | nDCG@10 (95% CI) | R-prec | MRR | P@10 | "
              "nDCG@10 EN postings | nDCG@10 RO postings | nDCG@10 EN CVs | nDCG@10 RO CVs |",
@@ -120,6 +167,28 @@ def summary_markdown(results: dict[str, dict]) -> str:
             f"{by_post.get('ro', {}).get('ndcg@10', 0):.3f} | "
             f"{by_cv.get('en', {}).get('ndcg@10', 0):.3f} | {by_cv.get('ro', {}).get('ndcg@10', 0):.3f} |"
         )
+    for name, r in results.items():
+        if r["model"] == "tfidf" or "dm_searches" not in r:
+            continue
+        place = ("Cluj" if next(iter(r["dm_searches"].values())).get("locations_applied")
+                 else "place not filtered: the postings record none")
+        lines += ["", f"Discord DMs as users search (the product's filters first, no CV; {place}), "
+                  f"`{name}`:", "",
+                  "| score | searches | pool | relevant in pool | sent | P@5 (95% CI) | P@10 | "
+                  "recall | starved | low-n | none relevant |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|"]
+        for score, d in r["dm_searches"].items():
+            for group in ("generic", "specific"):
+                g = d.get(group)
+                if not g:
+                    continue
+                lo, hi = g["p@5_ci95"]
+                lines.append(
+                    f"| {score} @ {d['threshold']:+.2f}, {group} | {g['searches']} | {g['pool']:.1f} | "
+                    f"{g['relevant_in_pool']:.1f} | {g['sent']:.1f} | {g['p@5']:.3f} ({lo:.3f}–{hi:.3f}) | "
+                    f"{g['p@10']:.3f} | {g['recall']:.3f} | {g['starved']} | {g.get('low_n', '–')} | "
+                    f"{g.get('no_relevant', '–')} |")
+        lines += _scoped_markdown(name, r)
     for name, r in results.items():
         if r["model"] == "tfidf":
             continue  # TF-IDF cosines live on another scale: thresholds are meaningless
@@ -184,6 +253,21 @@ def check(result: dict, baseline_path: Path, tolerance: float) -> list[str]:
         if r_now["off_target_pass_rate"] > r_then["off_target_pass_rate"] + tolerance:
             problems.append(f"{path} off-target {r_now['off_target_pass_rate']:.3f} > "
                             f"{r_then['off_target_pass_rate']:.3f} + {tolerance}")
+    # The DM score as production sends it (filters first, no CV).
+    then_dm = baseline.get("dm_searches", {}).get("dm_score")
+    now_dm = result.get("dm_searches", {}).get("dm_score")
+    if then_dm is None or now_dm is None:
+        print(f"WARNING: no dm_searches.dm_score in {'baseline' if then_dm is None else 'result'}; "
+              "regenerate the baseline", file=sys.stderr)
+        return problems
+    for group, metric in (("generic", "p@10"), ("generic", "recall"), ("specific", "p@5")):
+        a, b = now_dm.get(group, {}).get(metric), then_dm.get(group, {}).get(metric)
+        if a is not None and b is not None and a < b - tolerance:
+            problems.append(f"DM score {group} {metric} {a:.3f} < baseline {b:.3f} - {tolerance}")
+    for group in ("generic", "specific"):
+        a, b = now_dm.get(group, {}).get("starved", 0), then_dm.get(group, {}).get("starved", 0)
+        if a > b:
+            problems.append(f"DM score {group} searches starved {a} > baseline {b}")
     return problems
 
 

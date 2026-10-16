@@ -673,3 +673,18 @@ user_jobs.csv + jobs.csv), prod read-only SELECTs. Uncommitted.
 Full suite: 1442 passed, 9 skipped, 9 failed — all `TypeError: ... unexpected keyword argument 'scraped_for'` in
 tests/test_alert_scenarios.py / tests/test_scrape_health.py from gosha-pipe's in-flight pipeline.py edit (not ours). Ruff on
 gosha/ and tests/ clean (scripts/migrate_sqlite_to_postgres.py has 2 F821 from someone's in-flight edit).
+
+### DM fields: state after a84ba70 and the lead's deactivation of 1,201 US LinkedIn rows (2026-10-16 ~14:20)
+The DM-field audit above (items 16–18) and items 19–22 are committed in a84ba70. Remaining on active rows:
+- Glassdoor **52/57 foreign** (Munich 35, Kraków 7, Freising 2), from the 'mun'/'kra' subscriptions (the 19 bad DMs).
+  The branch stops new ones; the stored ones are still active → candidate for the same deactivation (lead/owner call;
+  those two users may have meant München/Kraków).
+- LinkedIn: 27 with an empty location (US employers in earlier samples; the match filter rejects them, feed only) and
+  61 European (Paris 8, Bordeaux, Brussels, Warsaw, London, Rotterdam, Budapest…, from main's 'remote'/'europe' searches).
+- Heal on next sighting (no action): reposter company names linkedin 4 / hipo 1, coded titles linkedin 1 / ejobs 1.
+- eJobs "Romania" only: 6 (remote postings; needs one detail fetch in the prod image to see whether `workModel` exists).
+- No foreign salary currencies left on active rows (the USD ones were the deactivated US rows).
+- gosha-pipe follow-ups (2026-10-16 ~14:30): `pipeline._one_per_duplicate_group` now also calls `dedup.same_posting(...)`
+  against the user's expired deliveries (test `test_a_reposted_copy_of_an_expired_dm_is_not_sent_again`); DM salary shows
+  its period plus ≈RON/month, and DMs show "Posted …" / "First seen N days ago" (views.py); expiry proposed to the lead
+  (14 d for ejobs/hipo full catalogs, 30 d for keyword-search boards). Full suite then: **1528 passed, 9 skipped**; ruff clean.
