@@ -130,7 +130,10 @@ async def main() -> None:
 
     # Jobs whose failure someone should hear about, not just the log. The
     # rest (outbox poll, heartbeat, backfills) log and retry on their own.
-    alert_jobs = {"scrape_cycle", "deadlink_check", "cv_retention", "data_quality_check"}
+    alert_jobs = {
+        "scrape_cycle", "deadlink_check", "cv_retention", "data_quality_check",
+        "empty_search_nudge", "weekly_click_report",
+    }
     main_loop = asyncio.get_running_loop()
 
     async def _alert(failing: dict[str, str], cleared: dict[str, str]) -> None:
@@ -181,6 +184,42 @@ async def main() -> None:
         name="Scrape data-quality check",
         replace_existing=True,
     )
+
+    # Monthly "your search finds nothing" DM to users (gosha/nudges.py).
+    # Hourly and idempotent (state in search_nudges), so deploys resetting
+    # the interval do not matter. The clocks run even while the DM is off.
+    async def _empty_search_nudge_tick() -> None:
+        from gosha.nudges import run_empty_search_nudges
+
+        await run_empty_search_nudges(bot, enabled=settings.empty_search_nudge_enabled)
+
+    scheduler.add_job(
+        _empty_search_nudge_tick,
+        trigger=IntervalTrigger(hours=1),
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=20),
+        id="empty_search_nudge",
+        name="Empty-search nudge",
+        replace_existing=True,
+    )
+
+    # Weekly Apply-click report to the owner (gosha/clicks.py): checked
+    # hourly, sent once per Monday-08:00-UTC slot (stamp in data/).
+    if settings.weekly_click_report_enabled:
+        async def _weekly_click_report_tick() -> None:
+            from gosha.clicks import weekly_click_report_tick
+
+            await weekly_click_report_tick(bot, state_dir / "click_report.json")
+
+        scheduler.add_job(
+            _weekly_click_report_tick,
+            trigger=IntervalTrigger(hours=1),
+            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=25),
+            id="weekly_click_report",
+            name="Weekly Apply-click report",
+            replace_existing=True,
+        )
+    else:
+        log.info("Weekly Apply-click report off (WEEKLY_CLICK_REPORT_ENABLED=false).")
 
     # Deliver web-enqueued Discord messages (outbox) every 30 seconds
     async def _outbox_tick() -> None:

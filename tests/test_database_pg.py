@@ -35,6 +35,8 @@ _PRE_DEPLOY = [
     "DROP TABLE oauth_consumed_states",
     "DROP TABLE oauth_handoffs",
     "DROP TABLE rate_limit_hits",
+    "DROP TABLE apply_clicks",
+    "DROP TABLE search_nudges",
 ]
 
 
@@ -84,6 +86,8 @@ def test_bot_and_api_booting_together_both_migrate_cleanly():
     assert types["users.cv_embedding_model"] == "character varying"
     assert types["jobs.embedding_model"] == "character varying"
     assert "rate_limit_hits.bucket" in types
+    assert types["apply_clicks.click_minute"] == "bigint"
+    assert types["search_nudges.watched_since"] == "timestamp with time zone"
 
 
 # What production's schema lacked before DM tracking (and the rest of the
@@ -97,6 +101,8 @@ _PRE_DM_TRACKING = [
     "ALTER TABLE user_jobs DROP CONSTRAINT user_jobs_subscription_id_fkey",
     "ALTER TABLE user_jobs ADD CONSTRAINT user_jobs_subscription_id_fkey "
     "FOREIGN KEY (subscription_id) REFERENCES subscriptions (id)",
+    "DROP TABLE apply_clicks",
+    "DROP TABLE search_nudges",
 ]
 
 
@@ -182,3 +188,4 @@ def test_dm_tracking_migration_and_subscription_delete():
     types = asyncio.run(_column_types())
     assert types["user_jobs.dm_sent_at"] == "timestamp with time zone"
     assert types["jobs.experience_level"] == "character varying"
+    assert "apply_clicks.user_job_id" in types and "search_nudges.outcome" in types

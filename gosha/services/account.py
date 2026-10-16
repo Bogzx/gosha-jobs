@@ -24,8 +24,10 @@ from gosha.database import get_session
 from gosha.events import Event
 from gosha.models import (
     Application,
+    ApplyClick,
     CoverLetter,
     Outbox,
+    SearchNudge,
     Subscription,
     User,
     UserJob,
@@ -68,6 +70,19 @@ async def export_account(user_id: int) -> dict:
         letters = (
             await session.execute(
                 select(CoverLetter).where(CoverLetter.user_id == user_id)
+            )
+        ).scalars().all()
+        clicks = (
+            await session.execute(
+                select(ApplyClick).where(ApplyClick.user_id == user_id)
+                .order_by(ApplyClick.clicked_at.asc())
+            )
+        ).scalars().all()
+        nudges = (
+            await session.execute(
+                select(SearchNudge).join(
+                    Subscription, Subscription.id == SearchNudge.subscription_id
+                ).where(Subscription.user_id == user_id)
             )
         ).scalars().all()
         events = (
@@ -133,6 +148,27 @@ async def export_account(user_id: int) -> dict:
                 }
                 for a in applications
             ],
+            # Apply buttons followed in job DMs (gosha/clicks.py).
+            "apply_clicks": [
+                {
+                    "job_id": c.job_id,
+                    "subscription_id": c.subscription_id,
+                    "clicked_at": _iso(c.clicked_at),
+                }
+                for c in clicks
+            ],
+            # Per search: when it was last nudged for finding nothing
+            # (gosha/nudges.py); the fingerprint hashes its criteria.
+            "search_nudges": [
+                {
+                    "subscription_id": n.subscription_id,
+                    "watched_since": _iso(n.watched_since),
+                    "nudged_at": _iso(n.nudged_at),
+                    "outcome": n.outcome,
+                    "fingerprint": n.fingerprint,
+                }
+                for n in nudges
+            ],
             # Rows without a letter (text erased with the CV, or one still
             # being generated) are kept as the monthly quota record; they
             # are still data about the user, so they are listed, textless.
@@ -180,6 +216,14 @@ async def delete_account(user_id: int) -> dict[str, int]:
         for label, statement in (
             ("cover_letters", delete(CoverLetter).where(CoverLetter.user_id == user_id)),
             ("applications", delete(Application).where(Application.user_id == user_id)),
+            # Before delivered_jobs and searches, which they point at; the
+            # FK cascades do not fire on SQLite without PRAGMA foreign_keys.
+            ("apply_clicks", delete(ApplyClick).where(ApplyClick.user_id == user_id)),
+            ("search_nudges", delete(SearchNudge).where(
+                SearchNudge.subscription_id.in_(
+                    select(Subscription.id).where(Subscription.user_id == user_id)
+                )
+            )),
             ("delivered_jobs", delete(UserJob).where(UserJob.user_id == user_id)),
             ("outbox", delete(Outbox).where(Outbox.user_id == user_id)),
             ("searches", delete(Subscription).where(Subscription.user_id == user_id)),

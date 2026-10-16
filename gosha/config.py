@@ -60,6 +60,10 @@ class Settings:
     alerts_enabled: bool = True
     alert_dm_user_ids: set[int] = field(default_factory=set)
     alert_cooldown_minutes: int = 360
+    # User-facing DMs about the product itself (gosha/nudges.py,
+    # gosha/clicks.py). The nudge goes to users, so it is opt-in.
+    empty_search_nudge_enabled: bool = False
+    weekly_click_report_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -315,4 +319,6 @@ def load_settings() -> Settings:
         alert_dm_user_ids=_parse_id_list("ALERT_DM_USER_IDS"),
         alerts_enabled=env_flag("ALERTS_ENABLED", default=True),
         alert_cooldown_minutes=max(1, _int_env("ALERT_COOLDOWN_MINUTES", 360)),
+        empty_search_nudge_enabled=env_flag("EMPTY_SEARCH_NUDGE_ENABLED", default=False),
+        weekly_click_report_enabled=env_flag("WEEKLY_CLICK_REPORT_ENABLED", default=True),
     )

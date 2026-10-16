@@ -23,11 +23,18 @@ Self-hosted instances have their own controller — you.
 | CV text + a numeric embedding of it | The user uploads it | Ranking postings against their skills | Consent, taken at upload |
 | Saved searches | The user creates them | Running the searches | Contract |
 | Delivered jobs, thumbs up/down | Product use | Personalising the feed | Legitimate interest |
+| Apply clicks in job DMs: job, search, time (no IP, no user agent) | The DM's Apply button opens `/api/v1/r/<signed token>`, which records the click and redirects to the posting (`gosha/clicks.py`) | Measuring which searches send useful jobs | Legitimate interest |
+| Per saved search: since when it has found nothing, when its owner was last nudged | The bot's hourly check (`gosha/nudges.py`), only while `EMPTY_SEARCH_NUDGE_ENABLED` is on (off by default) | One DM per month at most suggesting how to widen the search | Legitimate interest |
 | Tracked applications and notes | The user enters them | The application tracker | Contract |
 | Generated cover letters | The user requests them | Retrieval later | Consent |
 | Pageviews (path only) | Product use | Basic usage counts | Legitimate interest |
 | IP address with a request counter: sign-in, the public demo, and page views while signed out | The request | Rate-limiting the endpoints anyone can call (`gosha/ratelimit.py`) | Legitimate interest |
 | Request log lines incl. IP address | The request (uvicorn access log) | Operating and debugging the service | Legitimate interest |
+
+The operator gets a weekly Discord DM (`WEEKLY_CLICK_REPORT_ENABLED`, on
+by default, owner IDs in `ALERT_DM_USER_IDS` only) with totals per saved
+search: its id, keywords and places, jobs sent, Apply clicks and distinct
+jobs clicked. It names no user and no Discord id.
 
 No email address is collected. No advertising identifiers. No cross-site
 tracking, and no third-party JavaScript (`script-src 'self'` in the
@@ -38,7 +45,8 @@ tracking, and no third-party JavaScript (`script-src 'self'` in the
 ## Third parties that receive personal data
 
 **Discord** (Discord Netherlands BV / Discord Inc.) — receives the user's
-Discord id and the content of job alerts DMed to them.
+Discord id and the content of job alerts DMed to them (and, when the
+empty-search nudge is on, the monthly note about a search finding nothing).
 <https://discord.com/privacy>
 
 **The configured LLM provider** — DeepSeek (China), OpenRouter (US) or
@@ -91,7 +99,8 @@ IP addresses. gosha.bogdantruta.com runs behind Cloudflare.
   each).
 - **Container logs** (incl. IP addresses) — rotated by size, 5 × 20 MB
   per service (`docker-compose.prod.yml`).
-- **Everything else** — until the account is deleted.
+- **Nudge state** — until the search or the account is deleted.
+- **Everything else** (Apply clicks included) — until the account is deleted.
 
 There is no automatic retention limit on delivery history or scraped jobs
 (a posting not seen on its board for 30 days is marked inactive, not
@@ -102,7 +111,7 @@ deleted).
 | Right | How |
 |---|---|
 | Access / portability (Art. 15, 20) | `GET /api/v1/account/export` — everything we hold, as JSON. Button on the profile page. |
-| Erasure (Art. 17) | `DELETE /api/v1/account?confirm=DELETE` — account row, CV file, cover letters, saved searches, delivery history, tracked applications and the event log. Irreversible. Button on the profile page. |
+| Erasure (Art. 17) | `DELETE /api/v1/account?confirm=DELETE` — account row, CV file, cover letters, saved searches, delivery history, Apply clicks and nudge state, tracked applications and the event log. Irreversible. Button on the profile page. |
 | Rectification | Discord profile fields refresh on each sign-in; the CV can be re-uploaded. |
 | Withdraw consent | Delete the CV (web or `/delete_cv`), or the account. Deleting the CV also removes its embedding, the text of the cover letters generated from it, and the consent record, so a new upload asks again. |
 | Complain | To a data protection authority; in Romania, ANSPDCP (<https://www.dataprotection.ro>). `/privacy` says so. |

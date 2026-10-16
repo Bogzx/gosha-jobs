@@ -99,3 +99,29 @@ Every path reads the switch the same way: unset or blank = on; `1`,
 **anything else** (`false`, `0`, `off`, `disabled`, a typo) = off. IDs may
 be written as `123…`, `<@123…>` or `<@!123…>` everywhere; anything else
 (a username, `!123…`) is skipped.
+
+## Weekly Apply-click report (owner) and empty-search nudge (users)
+
+- **Weekly report** (`gosha/clicks.py`, on by default,
+  `WEEKLY_CLICK_REPORT_ENABLED=false` turns it off). Every Monday after
+  08:00 UTC the owner gets one DM: job DMs sent, Apply clicks and distinct
+  jobs clicked per search over the last 7 days. Searches are shown by ID and
+  keywords; no user names. Same recipients and off switch as the alerts
+  (`ALERT_DM_USER_IDS`, `ALERTS_ENABLED`). Checked hourly with a stamp in
+  `data/click_report.json`, so deploys neither skip nor repeat a week.
+- **Apply clicks.** DM Apply buttons open `{PUBLIC_BASE_URL}/api/v1/r/<token>`.
+  The token is the delivery's ID signed with `SESSION_SECRET`, so it cannot
+  be guessed, and the destination is looked up on the server, so nothing in
+  the link chooses where the browser goes (no open redirect). The redirect
+  stores user, job, search and time, with no IP or user agent, at most once
+  per delivery per minute (link previews and double clicks), then answers
+  302. Rows are removed with the account.
+- **Empty-search nudge** (`gosha/nudges.py`, off until
+  `EMPTY_SEARCH_NUDGE_ENABLED=true`). A search that has delivered no job DM
+  for 30 days gets one short DM to its owner: what the search is, why it may
+  be empty, two changes picked from its settings (e.g. add the junior level,
+  add Romania/remote) and how to edit it (`/edit id:<n>` or the website).
+  At most once per 30 days per search, 09:00–20:00 Romanian time. The 30
+  days count from the latest of the search's creation, its last edit or
+  pause/resume, its last job DM and its last nudge — and, for searches that
+  existed before this feature, from the first run after the deploy.

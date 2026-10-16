@@ -417,6 +417,76 @@ class UserJob(Base):
 
 
 # ---------------------------------------------------------------------------
+# ApplyClick — a click on a DM's Apply link (gosha/clicks.py)
+# ---------------------------------------------------------------------------
+
+class ApplyClick(Base):
+    """One click on the Apply button of a Discord DM.
+
+    The button points at GOSHA's /api/v1/r/<token> (a signed UserJob id),
+    which records this row and redirects to the posting. Who, which job,
+    which search, when — no IP address or user agent. At most one row per
+    delivery per minute (click_minute), so link prefetchers and double
+    clicks are not counted twice.
+    """
+
+    __tablename__ = "apply_clicks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    job_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    user_job_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("user_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    subscription_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("subscriptions.id", ondelete="SET NULL"), nullable=True
+    )
+    clicked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    # clicked_at in whole minutes since the epoch: the unique key below is
+    # what makes "one per delivery per minute" hold under concurrent hits.
+    click_minute: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_job_id", "click_minute", name="uq_apply_click_minute"),
+        Index("ix_apply_clicks_clicked_at", "clicked_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# SearchNudge — the monthly "this search finds nothing" DM (gosha/nudges.py)
+# ---------------------------------------------------------------------------
+
+class SearchNudge(Base):
+    """Per saved search: since when it has been watched unchanged, and when
+    its owner was last nudged about it finding nothing.
+
+    `fingerprint` hashes the search's criteria (and paused state); when it
+    changes the search counts as edited and its 30-day clock restarts.
+    """
+
+    __tablename__ = "search_nudges"
+
+    subscription_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("subscriptions.id", ondelete="CASCADE"), primary_key=True
+    )
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    watched_since: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    nudged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # "sent" or "closed" (DMs closed: not retried until the next window).
+    outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+# ---------------------------------------------------------------------------
 # Application — tracks where users have applied
 # ---------------------------------------------------------------------------
 

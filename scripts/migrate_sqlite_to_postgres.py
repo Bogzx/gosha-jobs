@@ -30,10 +30,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from gosha.events import Event  # noqa: E402
 from gosha.models import (  # noqa: E402
     Application,
+    ApplyClick,
     Base,
     CoverLetter,
     Job,
     Outbox,
+    SearchNudge,
     Subscription,
     User,
     UserJob,
@@ -51,6 +53,8 @@ TABLES = [
     CoverLetter.__table__,
     Event.__table__,
     Outbox.__table__,
+    ApplyClick.__table__,
+    SearchNudge.__table__,
 ]
 
 BATCH_SIZE = 1000
@@ -114,6 +118,8 @@ async def copy_all(src_url: str, dst_url: str) -> dict[str, int]:
         if dst.dialect.name == "postgresql":
             async with dst.begin() as conn:
                 for table in TABLES:
+                    if "id" not in table.c:  # search_nudges: keyed by subscription
+                        continue
                     await conn.execute(text(
                         f"SELECT setval(pg_get_serial_sequence('{table.name}', 'id'), "
                         f"COALESCE((SELECT MAX(id) FROM {table.name}), 1))"
@@ -136,6 +142,13 @@ _FK_RULES: dict[str, list[tuple[str, str, bool]]] = {
     "applications": [("user_id", "users", False), ("job_id", "jobs", False)],
     "cover_letters": [("user_id", "users", False), ("job_id", "jobs", False)],
     "outbox": [("user_id", "users", False)],
+    "apply_clicks": [
+        ("user_id", "users", False),
+        ("job_id", "jobs", False),
+        ("user_job_id", "user_jobs", True),
+        ("subscription_id", "subscriptions", True),
+    ],
+    "search_nudges": [("subscription_id", "subscriptions", False)],
 }
 _REFERENCED_TABLES = {ref for rules in _FK_RULES.values() for _, ref, _ in rules}
 

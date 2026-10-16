@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import numpy as np
 import pytest
 from sqlalchemy import select
@@ -9,7 +11,16 @@ from sqlalchemy import select
 import gosha.cover_letter as cl_mod
 from gosha import embeddings
 from gosha.events import Event
-from gosha.models import Application, CoverLetter, Job, Subscription, User, UserJob
+from gosha.models import (
+    Application,
+    ApplyClick,
+    CoverLetter,
+    Job,
+    SearchNudge,
+    Subscription,
+    User,
+    UserJob,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -39,8 +50,17 @@ async def _seed_full_account(client, session, user, cookies) -> Job:
     sub.keywords = ["python"]
     sub.locations = ["cluj"]
     session.add(sub)
+    await session.flush()
 
-    session.add(UserJob(user_id=user.id, job_id=job.id, feedback="interested"))
+    uj = UserJob(user_id=user.id, job_id=job.id, feedback="interested")
+    session.add(uj)
+    await session.flush()
+    clicked = datetime(2026, 10, 1, 9, 30, tzinfo=timezone.utc)
+    session.add(ApplyClick(user_id=user.id, job_id=job.id, user_job_id=uj.id,
+                           subscription_id=sub.id, clicked_at=clicked,
+                           click_minute=int(clicked.timestamp() // 60)))
+    session.add(SearchNudge(subscription_id=sub.id, fingerprint="f" * 64,
+                            watched_since=clicked, nudged_at=clicked, outcome="sent"))
     session.add(Application(user_id=user.id, job_id=job.id, status="applied"))
     session.add(CoverLetter(user_id=user.id, job_id=job.id, content="Dear Acme"))
     session.add(Event(event_type="web.signin", actor_id=user.id))
@@ -67,6 +87,10 @@ async def test_export_returns_everything_we_hold(client, web_user, session):
     assert len(body["applications"]) == 1
     assert body["cover_letters"][0]["content"] == "Dear Acme"
     assert [e["type"] for e in body["events"]] == ["web.signin"]
+    [click] = body["apply_clicks"]
+    assert click["job_id"] and click["subscription_id"] and click["clicked_at"].startswith("2026-10-01")
+    [nudge] = body["search_nudges"]
+    assert nudge["outcome"] == "sent" and nudge["nudged_at"].startswith("2026-10-01")
 
 
 @pytest.mark.asyncio
@@ -110,6 +134,7 @@ async def test_delete_account_cascades_through_everything(
     for model, column in (
         (Subscription, Subscription.user_id),
         (UserJob, UserJob.user_id),
+        (ApplyClick, ApplyClick.user_id),
         (Application, Application.user_id),
         (CoverLetter, CoverLetter.user_id),
         (Event, Event.actor_id),
@@ -118,6 +143,7 @@ async def test_delete_account_cascades_through_everything(
             await session.execute(select(model).where(column == user_id))
         ).scalars().all()
         assert rows == [], f"{model.__name__} rows survived account deletion"
+    assert (await session.execute(select(SearchNudge))).scalars().all() == []
 
     # Session cookie cleared, so the caller is logged out.
     assert "gosha_session=" in " ".join(resp.headers.get_list("set-cookie"))
@@ -253,3 +279,67 @@ async def test_privacy_notice_discloses_connection_data_and_rights(client):
         assert use in ip_item
     assert "ANSPDCP" in body["your_rights"]["complaint"]
     assert "timestamp" in body["your_rights"]["consent"]
+
+
+@pytest.mark.asyncio
+async def test_privacy_notice_discloses_dm_clicks_nudges_and_owner_report(client, monkeypatch):
+    monkeypatch.delenv("EMPTY_SEARCH_NUDGE_ENABLED", raising=False)
+    monkeypatch.delenv("WEEKLY_CLICK_REPORT_ENABLED", raising=False)
+    body = (await client.get("/api/v1/legal/privacy")).json()
+    [activity] = [g for g in body["data_we_hold"] if g["category"] == "Activity"]
+    click = next(i for i in activity["items"] if "Apply buttons" in i)
+    assert "no IP address" in click
+    nudge = next(i for i in activity["items"] if "found nothing" in i)
+    assert "once a month" in nudge and "currently off" in nudge
+    # Weekly owner report: on by default, aggregate, no names.
+    assert "Once a week the operator" in activity["why"]
+    assert "no names or Discord ids" in activity["why"]
+    assert "Apply clicks" in body["your_rights"]["note"]
+    assert set(body["retention"]) >= {"apply_clicks", "search_nudges"}
+
+    monkeypatch.setenv("EMPTY_SEARCH_NUDGE_ENABLED", "true")
+    monkeypatch.setenv("WEEKLY_CLICK_REPORT_ENABLED", "false")
+    body = (await client.get("/api/v1/legal/privacy")).json()
+    [activity] = [g for g in body["data_we_hold"] if g["category"] == "Activity"]
+    assert any("currently on" in i for i in activity["items"])
+    assert "operator" not in activity["why"]
+
+
+@pytest.mark.asyncio
+async def test_delete_account_removes_clicks_and_nudges_itself(
+    client, web_user, session,
+):
+    """Explicit deletes, not the FK cascades: SQLite only cascades with
+    PRAGMA foreign_keys on, which the app does not set."""
+    from gosha.services.account import delete_account
+
+    user, cookies = web_user
+    await _seed_full_account(client, session, user, cookies)
+    removed = await delete_account(user.id)
+    assert removed["apply_clicks"] == 1
+    assert removed["search_nudges"] == 1
+
+
+@pytest.mark.asyncio
+async def test_export_lists_only_this_users_clicks_and_nudges(
+    client, web_user, session,
+):
+    user, cookies = web_user
+    await _seed_full_account(client, session, user, cookies)
+    other = User(discord_user_id=999_000)
+    session.add(other)
+    await session.flush()
+    sub = Subscription(user_id=other.id, max_age_days=7)
+    sub.keywords, sub.locations = ["java"], ["iasi"]
+    job = Job(url="https://j.com/2", title="Dev", company="B", source="ejobs")
+    session.add_all([sub, job])
+    await session.flush()
+    now = datetime.now(timezone.utc)
+    session.add(ApplyClick(user_id=other.id, job_id=job.id, subscription_id=sub.id,
+                           clicked_at=now, click_minute=int(now.timestamp() // 60)))
+    session.add(SearchNudge(subscription_id=sub.id, fingerprint="0" * 64))
+    await session.commit()
+
+    body = (await client.get("/api/v1/account/export", cookies=cookies)).json()
+    assert len(body["apply_clicks"]) == 1 and len(body["search_nudges"]) == 1
+    assert body["apply_clicks"][0]["subscription_id"] != sub.id

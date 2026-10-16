@@ -161,6 +161,7 @@ def _mount_routers(app: FastAPI) -> None:
         "account",
         "legal",
         "freshness",
+        "redirect",  # /r/{token}: DM Apply links (gosha/clicks.py)
         "jobs",
         "feed",
         "demo",

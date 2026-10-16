@@ -12,6 +12,7 @@ import os
 
 from fastapi import APIRouter
 
+from gosha.config import env_flag
 from gosha.ratelimit import AUTH, DEMO, PAGEVIEW
 from gosha.services.cv import MAX_CV_BYTES
 from gosha.services.retention import event_retention_months, retention_months
@@ -88,6 +89,23 @@ def _edge_proxy() -> dict | None:
     return _EDGE_PROXIES.get(os.getenv("PRIVACY_EDGE_PROXY", "").strip().lower())
 
 
+def _nudge_status() -> str:
+    # Same flag and default as the bot's hourly job (gosha/nudges.py).
+    return "on" if env_flag("EMPTY_SEARCH_NUDGE_ENABLED", default=False) else "off"
+
+
+def _activity_why() -> str:
+    why = "To personalise the feed and run the product."
+    if env_flag("WEEKLY_CLICK_REPORT_ENABLED", default=True):
+        # gosha/clicks.py build_weekly_report: per search, no user names.
+        why += (
+            " Once a week the operator gets a Discord DM with totals per "
+            "saved search (its number, keywords and places; jobs sent, "
+            "Apply clicks) — no names or Discord ids."
+        )
+    return why
+
+
 def _retention() -> dict[str, str]:
     cv_months = retention_months()
     event_months = event_retention_months()
@@ -107,6 +125,8 @@ def _retention() -> dict[str, str]:
             "with your account."
         ),
         "delivery_history": "Until you delete your account.",
+        "apply_clicks": "Until you delete your account.",
+        "search_nudges": "Until you delete the search or your account.",
         "events": (
             f"{event_months} months, then deleted automatically; sooner if "
             "you delete your account."
@@ -165,11 +185,18 @@ async def privacy() -> dict:
                 "items": [
                     "saved searches",
                     "jobs delivered to you and your thumbs up/down",
+                    "Apply buttons you click in job DMs: which job, which "
+                    "search, when (no IP address or browser details; the "
+                    "button opens the posting through this site)",
+                    "for each saved search, since when it has found "
+                    "nothing and when we last DMed you about that (a short "
+                    "note at most once a month suggesting how to widen it; "
+                    f"set by the operator, currently {_nudge_status()})",
                     "applications you track",
                     "generated cover letters",
                     "page views (path only, no cross-site tracking)",
                 ],
-                "why": "To personalise the feed and run the product.",
+                "why": _activity_why(),
                 "source": "Your use of the site and the Discord bot.",
             },
             {
@@ -193,7 +220,10 @@ async def privacy() -> dict:
             {
                 "name": "Discord",
                 "operator": "Discord Netherlands BV / Discord Inc.",
-                "receives": "your Discord id, and the job alerts we DM you",
+                "receives": (
+                    "your Discord id, the job alerts we DM you, and the "
+                    "monthly note about a search that finds nothing (when on)"
+                ),
                 "url": "https://discord.com/privacy",
             },
             {
@@ -223,8 +253,8 @@ async def privacy() -> dict:
             "erasure": "DELETE /api/v1/account?confirm=DELETE",
             "note": (
                 "Erasure removes the account row, the CV file, cover "
-                "letters, saved searches, delivery history, tracked "
-                "applications and the event log. It cannot be undone."
+                "letters, saved searches, delivery history, Apply clicks, "
+                "tracked applications and the event log. It cannot be undone."
             ),
             "consent": (
                 "Storing a CV needs your explicit consent, recorded with a "
