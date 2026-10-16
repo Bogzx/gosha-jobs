@@ -34,7 +34,9 @@ for name in "${agents[@]}"; do
   herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 -- "${CLAUDE_ARGS[@]}" \
     >/dev/null 2>&1 || true
   # First start in a new folder asks whether to trust it: the repo is ours.
-  if herdr agent read "$name" 2>/dev/null | grep -q "trust this folder"; then
+  # The dialog's cursor starts on "No, exit": move to "Yes" before Enter.
+  if herdr agent read "$name" 2>/dev/null | grep -q -e "trust this folder" -e "No, exit"; then
+    herdr agent send-keys "$name" down >/dev/null
     herdr agent send-keys "$name" enter >/dev/null
   fi
   herdr agent wait "$name" --until idle --timeout 60000 >/dev/null 2>&1 || true
