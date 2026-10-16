@@ -229,3 +229,61 @@ Rule: a range of years is labelled by its lower bound, as `filters.required_year
 
 ### Status: DONE again
 Both owner decisions are applied and committed. Resume only if the owner's human label review comes back.
+
+### Standing instruction (from the lead, 2026-10-16)
+gosha-rank may send a grade-rule proposal (for example, how `mid` postings grade for student personas). If one arrives:
+- reply with its impact: every (persona, posting id) whose grade would change, before and after, on both sets;
+- **do not apply it** until the owner decides.
+
+## Impact of gosha-rank's grade-rule proposal (computed 2026-10-16; owner decided: NOT adopted)
+**Decision (owner, via the lead, 2026-10-16): "filter, don't regrade".** No label or grade changes; the eval applies the product's level filter instead (gosha-rank's side). Nothing to do here; the impact table below is kept for reference only. `tests/test_heldout.py` thresholds stay as they are.
+
+Proposal: for student personas, a `mid` posting in the persona's family is grade 1, not 2 (as for `senior`). Labels are unchanged; the rule lives in `gosha/evaluation.py` (gosha-rank's file).
+
+There are two readings:
+- **A, "like senior":** remove `mid` from `APPLICABLE_LEVELS`. A mid posting in an adjacent family also drops, from 1 to 0.
+- **B:** only the same-family case changes, from 2 to 1; adjacent mid stays 1.
+
+Every persona is a student or career starter, so all of them are affected. Totals:
+- main set: A changes 39 cells (17 from 2 → 1, 22 from 1 → 0); B changes 17.
+- held-out set: A changes 115 cells (39 from 2 → 1, 76 from 1 → 0); B changes 39.
+
+Under both readings, the grade-2 counts drop below the 4 that `tests/test_heldout.py` requires on the held-out postings:
+- held-out personas: h-mob 2, h-dotnet 3, h-java 3;
+- main personas on the held-out postings: java 3, dotnet 3, mob 2.
+
+On the main postings, the main set is already thin today (java 2, dotnet 2, py 3). Under A it becomes java 1, py 2, dotnet 2 and emb 2.
+
+**main postings × main personas**
+
+| persona | grade-2 now → A | 2 → 1 (same family, mid) | 1 → 0 (adjacent family, mid; reading A only) |
+|---|---|---|---|
+| py | 3 → 2 | ejobs-001 | ejobs-007, ejobs-017, ejobs-024 |
+| py-ro | 3 → 2 | ejobs-001 | ejobs-007, ejobs-017, ejobs-024 |
+| java | 2 → 1 | ejobs-007 | ejobs-001 |
+| dotnet | 2 → 2 | – | ejobs-001, ejobs-007 |
+| fe | 5 → 4 | hipo-027 | bestjobs-055, bestjobs-101 |
+| fe-ro | 5 → 4 | hipo-027 | bestjobs-055, bestjobs-101 |
+| mob | 6 → 4 | bestjobs-055, bestjobs-101 | hipo-027 |
+| ml | 5 → 5 | – | ejobs-001, ejobs-024 |
+| data | 9 → 8 | ejobs-024 | ejobs-021, bestjobs-044 |
+| emb | 4 → 2 | bestjobs-044, bestjobs-046 | – |
+| ops | 6 → 5 | ejobs-017 | – |
+| qa | 12 → 10 | bestjobs-049, bestjobs-055 | – |
+| acc-ro | 19 → 15 | ejobs-021, ejobs-032, ejobs-035, bestjobs-065 | – |
+| cs | 12 → 12 | – | ejobs-038, ejobs-040, bestjobs-066, bestjobs-067 |
+
+**held-out postings × held-out personas**
+
+| persona | grade-2 now → A | 2 → 1 (same family, mid) | 1 → 0 (adjacent family, mid; reading A only) |
+|---|---|---|---|
+| h-ml | 15 → 10 | heldout-ejobs-073, heldout-bestjobs-049, heldout-hipo-005, heldout-hipo-019, heldout-hipo-037 | heldout-ejobs-032, heldout-ejobs-037, heldout-bestjobs-007, heldout-bestjobs-039, heldout-bestjobs-041, heldout-bestjobs-042, heldout-hipo-023, heldout-jobicy-003, heldout-jobicy-004 |
+| h-data-ro | 23 → 13 | heldout-ejobs-032, heldout-ejobs-037, heldout-bestjobs-007, heldout-bestjobs-039, heldout-bestjobs-041, heldout-bestjobs-042, heldout-bestjobs-049, heldout-hipo-023, heldout-jobicy-003, heldout-jobicy-004 | heldout-ejobs-031, heldout-ejobs-073, heldout-bestjobs-033, heldout-bestjobs-034, heldout-bestjobs-084, heldout-hipo-005, heldout-hipo-019, heldout-hipo-037 |
+| h-ops | 17 → 11 | heldout-ejobs-014, heldout-ejobs-037, heldout-ejobs-040, heldout-hipo-026, heldout-jobicy-008, heldout-jobicy-011 | heldout-ejobs-016, heldout-ejobs-039, heldout-ejobs-042, heldout-ejobs-046, heldout-bestjobs-001, heldout-bestjobs-010, heldout-bestjobs-012, heldout-bestjobs-021, heldout-bestjobs-074, heldout-hipo-022, heldout-hipo-028, heldout-hipo-038, heldout-hipo-043 |
+| h-qa-ro | 8 → 7 | heldout-ejobs-086 | – |
+| h-fe | 9 → 4 | heldout-ejobs-015, heldout-bestjobs-012, heldout-bestjobs-027, heldout-hipo-017, heldout-remoteok-002 | heldout-ejobs-016, heldout-ejobs-025, heldout-ejobs-042, heldout-ejobs-047, heldout-bestjobs-010, heldout-bestjobs-021, heldout-bestjobs-023, heldout-bestjobs-029, heldout-bestjobs-031 |
+| h-mob | 5 → 2 | heldout-ejobs-025, heldout-bestjobs-029, heldout-bestjobs-031 | heldout-ejobs-015, heldout-ejobs-016, heldout-ejobs-042, heldout-ejobs-047, heldout-bestjobs-010, heldout-bestjobs-012, heldout-bestjobs-021, heldout-bestjobs-023, heldout-bestjobs-027, heldout-hipo-017, heldout-remoteok-002 |
+| h-emb | 6 → 4 | heldout-ejobs-073, heldout-bestjobs-053 | – |
+| h-dotnet | 5 → 3 | heldout-ejobs-047, heldout-bestjobs-023 | heldout-ejobs-015, heldout-ejobs-016, heldout-ejobs-023, heldout-ejobs-039, heldout-ejobs-042, heldout-ejobs-046, heldout-bestjobs-001, heldout-bestjobs-010, heldout-bestjobs-012, heldout-bestjobs-021, heldout-hipo-017, heldout-jobicy-006 |
+| h-java | 7 → 3 | heldout-ejobs-015, heldout-ejobs-023, heldout-hipo-017, heldout-jobicy-006 | heldout-ejobs-016, heldout-ejobs-039, heldout-ejobs-042, heldout-ejobs-046, heldout-ejobs-047, heldout-bestjobs-001, heldout-bestjobs-010, heldout-bestjobs-012, heldout-bestjobs-021, heldout-bestjobs-023 |
+| h-cs-ro | 20 → 19 | heldout-ejobs-028 | heldout-ejobs-010, heldout-ejobs-044, heldout-bestjobs-085, heldout-bestjobs-090 |
