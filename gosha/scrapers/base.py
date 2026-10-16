@@ -191,6 +191,10 @@ class RawJob:
     # indistinguishable numbers. See gosha/salary.py.
     salary_period: str | None = None
     posted_at: datetime | None = None
+    # True when the board's date is when the ad was last refreshed, not when
+    # it was first posted (Hipo's JSON-LD datePosted: most cards say today,
+    # even old ids). The pipeline should then keep the earliest date it has.
+    posted_at_is_refresh: bool = False
     source: str = "unknown"
     # One of EXPERIENCE_LEVELS when the board says so; None otherwise.
     experience_level: str | None = None
@@ -216,6 +220,7 @@ class RawJob:
             "currency": self.salary_currency,
             "interval": self.salary_period,
             "date_posted": self.posted_at,
+            "date_posted_is_refresh": self.posted_at_is_refresh,
             "experience_level": self.experience_level,
         }
 

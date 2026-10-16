@@ -248,7 +248,9 @@ class HipoScraper:
                 if detail.get("description"):
                     job.description = detail["description"]
                 if detail.get("posted_at"):
+                    # datePosted is the last refresh (see RawJob.posted_at_is_refresh).
                     job.posted_at = detail["posted_at"]
+                    job.posted_at_is_refresh = True
                 if detail.get("location"):
                     job.location = detail["location"]
                 kept.append(job)

@@ -127,6 +127,39 @@ async def test_hipo_search_adds_descriptions_and_dates():
     assert all(j.posted_at is not None for j in enriched)
 
 
+async def test_hipo_dates_are_marked_as_refresh_dates():
+    """Hipo's JSON-LD datePosted is the day the employer last refreshed the
+    ad (most cards say today, even old ids). The flag lets the pipeline keep
+    the earliest date instead of making old postings look new: of the 10
+    active Hipo rows with a date on 2026-10-16, 8 were dated more than a
+    day after we first saw them."""
+    listing = fixture("hipo_listing.html")
+    respx.get(hipo.LISTING_URL.format(city="Cluj-Napoca")).mock(
+        return_value=httpx.Response(200, text=listing),
+    )
+    respx.get(url__regex=r"https://www\.hipo\.ro/locuri-de-munca/locuri_de_munca/.*").mock(
+        return_value=httpx.Response(200, text=fixture("hipo_detail.html")),
+    )
+    respx.get(hipo.LISTING_URL.format(city="Cluj-Napoca") + "/2").mock(
+        return_value=httpx.Response(200, text=listing),
+    )
+    jobs = await hipo.HipoScraper().search(SearchQuery("anything", "cluj"))
+    dated = [j for j in jobs if j.posted_at is not None]
+    undated = [j for j in jobs if j.posted_at is None]
+    assert dated and undated  # detail fetches are capped
+    assert all(j.posted_at_is_refresh for j in dated)
+    assert all(j.to_record()["date_posted_is_refresh"] is True for j in dated)
+    assert not any(j.posted_at_is_refresh for j in undated)
+
+
+def test_other_boards_dates_are_posting_dates():
+    from gosha.scrapers.base import RawJob
+
+    job = RawJob(url="https://x/1", title="QA", posted_at=datetime(2026, 10, 1, tzinfo=timezone.utc))
+    assert job.posted_at_is_refresh is False
+    assert job.to_record()["date_posted_is_refresh"] is False
+
+
 async def test_new_description_resets_the_stale_embedding(patched_db, session):
     """A job first stored title-only is re-embedded once a description arrives."""
     import pandas as pd

@@ -129,7 +129,7 @@ All in the working tree, uncommitted. `pytest` on the subset below: **166 passed
    entry-level titles. This costs one extra search per term, so cap it.
 4. Optional new source (NOT implemented, owner decision): SmartRecruiters Posting API
    (see Findings). Its robots.txt disallows `*`.
-5. Hipo dates: JSON-LD `datePosted` is the refresh date (most cards say today, even old
+5. **(Adapter side done, item 15; pipeline hook with gosha-pipe.)** Hipo dates: JSON-LD `datePosted` is the refresh date (most cards say today, even old
    IDs such as Vodafone "Discover Graduate Programme 2027" id 271007). It is stored as
    `posted_at`. Treat it as "last refreshed", or don't overwrite an existing `posted_at` on
    upsert (that lives in pipeline.py, not ours).
@@ -397,6 +397,21 @@ All uncommitted, in the working tree. `tests/test_scraper_jobspy.py` 49 passed; 
    `test_no_fallback_without_indeed_or_without_a_seniority_word`,
    `test_fallback_rows_go_through_the_keywords_level_filter`. Full suite 1179 passed, 9 skipped.
 
+15. **Hipo refresh dates (TODO 5), adapter side** — `gosha/scrapers/base.py` `RawJob.posted_at_is_refresh`
+   (default False) → `to_record()["date_posted_is_refresh"]`; `gosha/scrapers/hipo.py` sets it True whenever
+   posted_at comes from JSON-LD `datePosted`. Tests: `tests/scrapers/test_details.py`
+   `test_hipo_dates_are_marked_as_refresh_dates`, `test_other_boards_dates_are_posting_dates`.
+   Prod (read-only, 2026-10-16): 20 active Hipo rows (42 all-time); 10 have posted_at; of those, **8 are dated
+   >1 day after first_seen_at** (impossible for a real posting date), 2 within a day of first_seen_at, 4 within
+   a day of last_seen_at. Freshness (`pipeline.py` `when = job.posted_at or job.first_seen_at`) then treats
+   old ads as new.
+   **Pipeline hook sent to gosha-pipe** (herdr, with a proposed test): in `upsert_jobs`, read
+   `refreshed = row.get("date_posted_is_refresh") is True`; for an existing row with a refresh date set
+   `posted_at = min(existing.posted_at, new posted_at, existing.first_seen_at)` (naive datetimes as UTC);
+   other boards replace the date as before; new rows unchanged. The 8 rows heal on their next sighting.
+   Full suite at the time: 1241 passed, 9 skipped, 2 failed in `tests/test_filters_accuracy.py::test_required_years`
+   (gosha-pipe's in-flight red tests; `filters.py` untouched by us).
+
 Lead decision (e6fdc92): keep the cache, keep LinkedIn at 30; raise to 60 only after a deployed cycle
 shows search-429s down (owner deploys).
 
@@ -433,7 +448,10 @@ filters), no special path.
    native-only shape, pure and cycle-independent, every location served by a native source, what the keyword's
    filter keeps/drops, and `test_baseline_request_budget` (recomputes the worst case from the adapters'
    constants and `applies_to`; fails on a new source, location or cap until the constants are updated).
-   Full suite 1237 passed, 9 skipped; ruff clean. `.env.example` line requested from gosha-health.
+   Full suite 1237 passed, 9 skipped; ruff clean. `.env.example`: gosha-health added the SCRAPE_BASELINE
+   block (commented, default off) after SCRAPE_BROWSER_FALLBACK. Health needs no change: added searches
+   never reset yield baselines (the median rises within a few cycles), and switching the baseline off
+   later gives those boards the 2-cycle grace, so no false "collapsed" alert either.
 
 ### Why (prod, read-only, 2026-10-16)
 - What gets scraped = active subscriptions only: **22 searches from 12 users**, keywords all one family
