@@ -174,3 +174,15 @@ Deploy checklist update: step 4 → SCRAPE_BROWSER_FALLBACK is ON by owner decis
 - Next: manual review of every DM of the first new cycles; watch LinkedIn 429s; then decide LINKEDIN_RESULTS_PER_TERM 60.
 - Owner still to do: GitHub secrets DISCORD_BOT_TOKEN + ALERT_DM_USER_IDS (site watchdog / smoke DMs); off-box backup
   target; EMPTY_SEARCH_NUDGE_ENABLED when ready.
+
+## Post-release DM verification (2026-10-16, owner request: every DM checked by hand)
+- 17:35 cycle (03e5314): 65 DMs judged by hand → 51 right, 14 wrong (experienced-only roles, description-less
+  untitled roles, Alignerr AI-training gigs, one non-CS plant role). Fixed in 1fe6243 (asks_experienced incl.
+  'previous experience', lacks_level_evidence, is_gig_marketplace, CS-in-description for generic engineering
+  titles, full prefilter re-run at send time). Gate passed; deployed 18:05 UTC (CI 38944175819 green).
+- 18:28 cycle (1fe6243): 20 DMs, all from the re-checked queue, judged by hand → 20/20 within the owner's rules
+  (intern-only searches: only training positions; junior roles only where junior was chosen; 2-year/range rule).
+  0 duplicates per user (title+city check across all 222+ sent rows).
+- Pre-release would-send lists (would_send*.csv, scratchpad) were reviewed by hand at each step (48 → 46 → 51/30 → v3b).
+- KEEP DOING after each change to matching: export fresh prod data read-only, produce a would-send list with the
+  exact commit, judge every row, then gate (scratchpad release_gate.sh) and deploy.
