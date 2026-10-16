@@ -131,6 +131,51 @@ def test_named_countries(job_location, search, expected):
     assert located(job_location, search) is expected
 
 
+@pytest.mark.parametrize("job_location, search, expected", [
+    # Several places: a country named for one does not veto the others.
+    ("Cluj-Napoca / Munich, Germany", "cluj", True),
+    ("Cluj-Napoca / Munich, Germany", "munich", True),
+    ("Bucharest, Budapest (Hungary)", "bucharest", True),
+    ("Cluj, Bucharest, Warsaw (Poland)", "cluj", True),
+    ("Cluj, Bucharest, Warsaw (Poland)", "warsaw", True),
+    ("Bucharest / Chisinau, Moldova", "bucharest", True),
+    ("Bucharest or Remote (USA)", "bucharest", True),
+    ("Remote (USA/Europe)", "remote", True),
+    # ... while it still applies to its own place.
+    ("Arad (Israel), Haifa", "arad", False),
+    ("Chisinau / Calarasi, Moldova", "calarasi", False),
+    # Moldova is also the Romanian region.
+    ("Iasi, Moldova", "iasi", True),
+    ("Suceava, Moldova", "romania", True),
+])
+def test_several_places_in_one_location(job_location, search, expected):
+    assert located(job_location, search) is expected
+
+
+@pytest.mark.parametrize("job_location, search, expected", [
+    # US "City, ST" with no country: not the Romanian or European namesake.
+    ("Alexandria, VA", "romania", False),
+    ("Paris, TX", "europe", False),
+    ("Rome, GA", "eu", False),
+    # ... but Romanian county codes stay Romanian (AR is also Arkansas).
+    ("Arad, AR", "arad", True),
+    ("Constanta, CT", "romania", True),
+    # "US" as a word in a sentence is not the country.
+    ("Hybrid in Bucharest, US company", "bucharest", True),
+    ("Remote, US", "remote", False),
+    # Remote for another continent, by region.
+    ("Remote, LATAM", "remote", False),
+    ("Remote (Americas)", "remote", False),
+    ("Remote - APAC", "remote", False),
+    # ... and a European region anywhere in the string.
+    ("Remote US/EU", "remote", True),
+    ("Remote - EU", "europe", True),
+    ("EMEA / Remote", "europe", True),
+])
+def test_us_states_regions_and_eu(job_location, search, expected):
+    assert located(job_location, search) is expected
+
+
 @pytest.mark.parametrize("job_location, expected", [
     # RemoteOK: remote, but for someone living elsewhere.
     ("Remote - US only", False),
@@ -168,6 +213,8 @@ def test_nationwide_postings_do_not_reach_foreign_city_searches():
     ("VB.NET programmer", [".NET"]),
     ("Modern C++17 engineer", ["c++"]),
     ("C#10 / .NET 8", ["c#"]),
+    ("ASP.NET Core developer, apply on careers.company.net", [".net"]),
+    ("ADO.NET and Entity Framework", [".net"]),
     # Diacritics either way round.
     ("Agent Vânzări Cluj", ["vanzari"]),
     ("Agent Vanzari", ["vânzări"]),
@@ -185,6 +232,14 @@ def test_excluded_keywords_that_should_exclude(text, excluded):
     ("C Developer", ["c++"]),
     # A side that ends in a letter still needs a word boundary there.
     ("Network engineer", [".net"]),
+    # C is not C++ or C#.
+    ("Senior C++ Developer", ["c"]),
+    ("C# Backend Engineer", ["C"]),
+    # Not inside a web address.
+    ("Apply on careers.company.net/jobs/123", [".net"]),
+    ("Details: https://www.acme.net/careers", [".NET"]),
+    ("Send your CV to hr@acme.net", [".net"]),
+    ("See https://sales.acme.com/join", ["sales"]),
     ("ObjectiveC++ tooling", ["c++"]),
     ("Python Developer", ["   "]),
 ])
@@ -305,6 +360,11 @@ def test_intern_level_stays_strict():
     ("At least 4 years of experience (5 years is a plus)", 4),
     ("5+ years of experience in Java plus Spring Boot", 5),
     ("Nice to have: 3 years of experience with Kafka", None),
+    ("Preferably 3 years of experience in Go", None),
+    ("Bonus - 2 years of experience with Rust", None),
+    # A wish ending the previous clause, its period lost in scraping.
+    ("A degree in CS is strongly preferred 2-4 years of backend engineering experience Strong Git", 2),
+    ("Kotlin preferred 5+ years of experience in Java", 5),
     # "Experience" in another sentence, or not about the number.
     ("Over 5 years on the market. No prior experience required", None),
     ("Within 3 years you will grow into a lead. Experience with Selenium a plus", None),
@@ -443,3 +503,44 @@ def test_search_location_ok_is_one_rule_for_match_browse_and_feed():
     assert search_location_ok("Remote", ["cluj"], remote_ok=True)
     assert not search_location_ok("Remote - US only", ["cluj"], remote_ok=True)
     assert not search_location_ok(None, ["cluj"])
+
+
+@pytest.mark.parametrize("description, years", [
+    # The number and "experience" in different clauses.
+    ("Fixed-term contract for 2 years, experience with Excel is a plus", None),
+    ("Contract pe 2 ani, experiența în vânzări constituie un avantaj", None),
+    ("Bachelor's degree (4 years), experience with SQL", None),
+    ("Studii superioare (3 ani licență), experiență în contabilitate", None),
+    ("Salary increases every 2 years, experience in sales", None),
+    ("Training program lasting 2 years, experience not required", None),
+    # ... but a requirement written experience-first may cross one.
+    ("Experienta minima in contabilitate, 1-2 ani", 1),
+    ("Experience with Excel is a plus, 2 years in finance", None),
+    # The candidate's age, per mention.
+    ("Ai peste 18 ani și experiență în vânzări", None),
+    ("Must be 18 years or older with experience driving", None),
+    ("Vârsta minimă 18 ani, experiență de 1 an", 1),
+    ("20+ years of experience in enterprise architecture", 20),
+    # Ways of writing the requirement that were missed.
+    ("Experience 3+ years in Java", 3),
+    ("Experiență 2 ani", 2),
+    ("Experiență minimă 2 ani", 2),
+    ("Experience\n- 3+ years", 3),
+    ("Experience. 5 years.", 5),
+    ("10+ years required", 10),
+    ("7+ yrs exp.", 7),
+    # Negation on either side of the number.
+    ("We do not require 5 years of experience", None),
+    ("You don't need 5 years of experience to apply", None),
+    ("Experience of 5 years is not required", None),
+    ("Nu este necesară experiența de 3 ani", None),
+    ("No need to have 3 years of experience", None),
+    # The verifier's general phrasings.
+    ("Required: 3+ years in software development", 3),
+    ("Have worked 3 years as a developer", 3),
+    ("8+ years in the industry, building teams from scratch", 8),
+    ("Ideal: 3 years of experience", None),
+    ("Experience with Java for over 20 years in our team", None),
+])
+def test_required_years_reads_one_clause(description, years):
+    assert required_years(description) == years

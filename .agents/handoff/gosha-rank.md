@@ -385,3 +385,38 @@ Still held back by the lead until baselines: eval.yml, scripts/eval_ranking.py, 
 - Full suite 1283 passed, 9 skipped (2 freshness failures seen once were another agent mid-edit; 25/25 on rerun).
 Waiting on: gosha-pipe "required_years final" → regenerate baselines (main + held-out 261, mpnet + tfidf) → tell lead.
 Then: TODO 7 docs/EVAL.md full results rewrite with the final numbers; TODO 6 (Discord penalty eval).
+
+## Session 4 (2026-10-16): FINAL baselines regenerated, docs/EVAL.md rewritten — ready for the lead's commit
+- gosha-pipe declared required_years FINAL; baselines regenerated (with feedback) on the working tree with gosha-pipe's
+  **uncommitted gosha/filters.py** (md5 recorded in my scratchpad filters_at_regen.md5, unchanged during the run) →
+  **the lead must commit gosha/filters.py together with the baselines**, or CI measures different code.
+- Files for that commit: eval/results/all-mpnet-base-v2.json, eval/results/tfidf.json, eval/results/heldout/
+  {all-mpnet-base-v2,tfidf}.json (new), .github/workflows/eval.yml, scripts/eval_ranking.py,
+  tests/test_evaluation.py, docs/EVAL.md, gosha/filters.py (gosha-pipe's).
+- Both CI checks pass locally against the new baselines (`--check` exit 0, main and held-out).
+- Final nDCG@10: main production 0.750 (0.639–0.851), cosine 0.546, TF-IDF 0.626; held-out (261) production
+  0.604 (0.458–0.711), cosine 0.535, TF-IDF 0.508. Note: TF-IDF < cosine on held-out ("TF-IDF beats
+  embeddings" did not replicate). Feedback 0.3/0.3, one round, through the hybrid: main +0.054 (CI −0.013…+0.126),
+  held-out +0.066 (+0.003…+0.132); weights kept (main does not separate them). Discord main-set numbers unchanged;
+  held-out at production thresholds: CV 0.43 recall 0.852 / off-target 0.293; search 0.42 recall 0.826 / 0.345.
+- docs/EVAL.md: new "Results (2026-10-16): the ranking that ships" (both sets, step table, encoder sweep,
+  feedback through the hybrid, Discord held-out, hard filters unmeasured); 2026-10-01 section relabelled "before
+  the hybrid ranking"; "What is measured" describes the hybrid; CI paragraph covers both sets + fingerprints;
+  disclosure names heldout-ejobs-016, heldout-bestjobs-066, heldout-bestjobs-021 (the last one read by me, while
+  comparing seniority detectors); Limitations + "What to try next" updated (students-only personas, date-range CVs).
+- README (not my file) is now wrong on ranking. Proposed replacements for the lead:
+  - L37 "🎯 CV-matched feed": "Every posting is ranked against *your* CV on meaning (sentence embeddings) and on
+    the skills it names (TF-IDF), with seniority taken into account: a student sees internships before Senior roles.
+    No keyword setup needed. "Matches your python, react, docker" tells you why."
+  - L91 "The matching engine": "...Your feed ranks recent jobs on two signals against your CV: embedding cosine and
+    TF-IDF keyword overlap, each standardised over the candidate set, minus a seniority penalty
+    (gosha/seniority.py, the same level detector as the Discord filter). Your 👍/👎 history nudges the CV vector
+    (a Rocchio update), and the feed shows what your active searches would take on location and level (Show all
+    lifts that)..."
+  - L93 "How well it ranks": "[docs/EVAL.md] scores the ranking on 202 real postings × 14 sample CVs and on an
+    independent held-out set (261 × 10). The shipped ranking reaches nDCG@10 0.750 on the main set, against 0.546
+    for the old pure-embedding feed, and 0.604 against 0.535 on the held-out set. The held-out gain is the honest
+    one: the ranking was designed on the main set. The multilingual model once planned as an upgrade is worse;
+    👍/👎 feedback helps modestly. CI re-runs the eval on both sets for every ranking change."
+  - L206: "recommend.py   # feed ranking: embedding + keyword + seniority, search scope"
+Next (not started): TODO 6 (soft seniority penalty in Discord scores, measured), human label pass is the owner's.

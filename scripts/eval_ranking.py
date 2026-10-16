@@ -148,10 +148,30 @@ def summary_markdown(results: dict[str, dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def fingerprint(path: Path) -> str:
+    """Short content hash of an eval file, recorded with every result."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
 def check(result: dict, baseline_path: Path, tolerance: float) -> list[str]:
-    """Regressions of `result` against a committed baseline (empty = pass)."""
+    """Regressions of `result` against a committed baseline (empty = pass).
+
+    A baseline from other postings or personas measures something else:
+    adding five hard postings to the held-out set moves nDCG by itself, so
+    the comparison would pass or fail for the wrong reason. Regenerate the
+    baseline together with any change to the eval set.
+    """
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     problems = []
+    for key in ("model", "postings_sha256", "personas_sha256"):
+        if key not in baseline:
+            print(f"WARNING: baseline {baseline_path} has no {key}; regenerate it",
+                  file=sys.stderr)
+        elif baseline[key] != result.get(key):
+            problems.append(f"baseline {baseline_path} is for {key} {baseline[key]}, "
+                            f"this run is {result.get(key)}: regenerate the baseline")
+    if problems:
+        return problems
     now, then = result["feed"]["mean"]["ndcg@10"], baseline["feed"]["mean"]["ndcg@10"]
     if now < then - tolerance:
         problems.append(f"feed nDCG@10 {now:.3f} < baseline {then:.3f} - {tolerance}")
@@ -207,7 +227,11 @@ def main() -> int:
             feed_ranking="cosine" if spec == "tfidf" else args.feed_ranking,
         )
         name = spec if variant == "production" else f"{spec} [{variant}]"
-        result = {"model": spec, "job_text": variant, **info, **result}
+        result = {
+            "model": spec, "job_text": variant, **info, **result,
+            "postings_sha256": fingerprint(args.postings),
+            "personas_sha256": fingerprint(args.personas),
+        }
         results[name] = result
         print(f"{name}: nDCG@10 {result['feed']['mean']['ndcg@10']:.3f} "
               f"({time.monotonic() - started:.0f}s)", file=sys.stderr)

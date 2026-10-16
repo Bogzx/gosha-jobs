@@ -12,8 +12,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -121,6 +123,9 @@ async def upsert_jobs(df: pd.DataFrame) -> list[Job]:
                 salary_min, salary_max, salary_currency, salary_period,
             )
             posted_at = _parse_datetime(row, "date_posted")
+            # Hipo's date is the last refresh (RawJob.posted_at_is_refresh):
+            # an upper bound of the posting date. Absent (JobSpy) means not.
+            refreshed = _flag(row, "date_posted_is_refresh")
             level = row.get("experience_level")
             experience_level = level if level in EXPERIENCE_LEVELS else None
 
@@ -160,7 +165,17 @@ async def upsert_jobs(df: pd.DataFrame) -> list[Job]:
                     existing.salary_monthly_min_ron = monthly_min
                 if monthly_max is not None:
                     existing.salary_monthly_max_ron = monthly_max
-                if posted_at is not None:
+                if posted_at is not None and refreshed:
+                    # The posting is no newer than the earliest date we
+                    # know of, our first sighting included: a later refresh
+                    # must not make an old ad look new.
+                    existing.posted_at = min(
+                        d for d in (
+                            _utc(existing.posted_at), _utc(posted_at),
+                            _utc(existing.first_seen_at),
+                        ) if d is not None
+                    )
+                elif posted_at is not None:
                     existing.posted_at = posted_at
                 if experience_level is not None:
                     existing.experience_level = experience_level
@@ -221,7 +236,7 @@ async def run_scrape_stage(
     working; one that answers with nothing is not.
     """
     from gosha.scrape_health import get_scrape_health
-    from gosha.scraper import jobspy_boards_for, scrape_jobs_raw
+    from gosha.scraper import baseline_combos, jobspy_boards_for, scrape_jobs_raw
 
     health = health or get_scrape_health()
     attempted: set[str] = set()
@@ -237,16 +252,21 @@ async def run_scrape_stage(
         )
         all_subs = result.scalars().all()
 
-    if not all_subs:
+    # The baseline catalog (SCRAPE_BASELINE, default off): student-level
+    # tech searches on the native boards every cycle, subscriptions or not.
+    baseline = baseline_combos(int(time.time() // BASELINE_CYCLE_SECONDS))
+    if not all_subs and not baseline:
         # Not a failure — nobody has asked for anything, so no alert.
         log.info("No active subscriptions — nothing to scrape.")
         return []
 
-    scrape_combos = _scrape_combos(all_subs)
+    scrape_combos = _with_baseline(_scrape_combos(all_subs), baseline)
 
     all_jobs: list[Job] = []
     for combo, keywords in scrape_combos.items():
         keyword, location, boards, max_age_days = combo
+        if not boards:  # native sources only (the baseline catalog)
+            continue
         # Only the boards JobSpy actually asks for this location: none for
         # "remote", LinkedIn alone for "europe". Counting the rest as
         # attempted raised "indeed returned nothing" alerts for searches
@@ -303,15 +323,15 @@ _skipped_locations: set[str] = set()
 def _scrape_combos(subs: list[Subscription]) -> dict[tuple, list[str]]:
     """(keyword, location, boards, max_age_days) -> the searches' keywords.
 
-    One query per keyword and place: searches differing only in window or
+    One query per keyword, place and window: searches differing only in
     boards, or naming one city two ways ("cluj", "Cluj-Napoca"), each sent
-    the same query again. The widest window and every board asked for are
-    used; each search's own window and filters still apply at the match
-    stage. Locations that name no place (saved before validation, see
+    the same query again; the boards asked for are merged. Windows stay
+    apart, because the boards cap a result list: a 3-day search sharing a
+    30-day query could lose its fresh postings to older ones. Locations that name no place (saved before validation, see
     filters.clean_location) are not sent to the boards at all: each one
     cost a failing request per board per cycle.
     """
-    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    groups: dict[tuple[str, str, int], dict[str, Any]] = {}
     for sub in subs:
         for raw_location in sub.locations:
             location = clean_location(raw_location)
@@ -325,17 +345,53 @@ def _scrape_combos(subs: list[Subscription]) -> dict[tuple, list[str]]:
                 continue
             place = normalize_location(location)[0].lower()
             for keyword in sub.keywords:
-                group = groups.setdefault((keyword.lower().strip(), place), {
-                    "location": location.lower(), "boards": set(), "max_age": 0,
-                    "keywords": [],
+                key = (keyword.lower().strip(), place, sub.max_age_days)
+                group = groups.setdefault(key, {
+                    "location": location.lower(), "boards": set(), "keywords": [],
                 })
                 group["boards"].update(sub.boards or ())
-                group["max_age"] = max(group["max_age"], sub.max_age_days or 0)
                 group["keywords"].append(keyword)
     return {
-        (keyword, g["location"], tuple(sorted(g["boards"])), g["max_age"]): g["keywords"]
-        for (keyword, _place), g in groups.items()
+        (keyword, g["location"], tuple(sorted(g["boards"])), max_age): g["keywords"]
+        for (keyword, _place, max_age), g in groups.items()
     }
+
+
+# Scrape cycles are four hours apart: the cycle number baseline_combos
+# rotates on, stable across restarts.
+BASELINE_CYCLE_SECONDS = 4 * 3600
+
+
+def _with_baseline(
+    combos: dict[tuple, list[str]], baseline: list[Any],
+) -> dict[tuple, list[str]]:
+    """`combos` plus the baseline searches (gosha.scraper.BaselineCombo).
+
+    A baseline search a subscription already makes (same keyword, place and
+    window) is left to the subscription. The rest run right after the
+    subscriptions' searches for the same place, while eJobs' browse and
+    Hipo's city catalog are still in their 10-minute caches.
+    """
+    if not baseline:
+        return combos
+
+    def place(location: str) -> str:
+        return normalize_location(location)[0].lower()
+
+    taken = {(kw, place(loc), days) for kw, loc, _boards, days in combos}
+    ordered = list(combos.items())
+    for extra in baseline:
+        key = (extra.keyword.lower().strip(), place(extra.location), extra.max_age_days)
+        if key in taken:
+            continue
+        taken.add(key)
+        item = (
+            (key[0], extra.location.lower(), tuple(sorted(extra.boards)), extra.max_age_days),
+            list(extra.filter_keywords),
+        )
+        same_place = [i for i, ((_kw, loc, _b, _d), _k) in enumerate(ordered) if place(loc) == key[1]]
+        ordered.insert(same_place[-1] + 1 if same_place else len(ordered), item)
+    return dict(ordered)
 
 
 def _count_scraped(scraped: dict[str, set[str]], df: pd.DataFrame) -> None:
@@ -481,6 +537,10 @@ def job_matches_subscription(job: Job, sub: Subscription) -> bool:
     )
 
 
+# The Romanian boards date postings in local time.
+BOARD_TZ = ZoneInfo("Europe/Bucharest")
+
+
 def is_fresh_enough(job: Job, max_age_days: int | None) -> bool:
     """Posted within the subscription's max_age_days, as far as we know.
 
@@ -489,8 +549,9 @@ def is_fresh_enough(job: Job, max_age_days: int | None) -> bool:
     window brought in postings that a 3-day search was then sent. Judged
     on the board's posted date, else on when the posting was first seen.
     Compared by calendar day, since most boards give a date and no time,
-    in the posting's own time zone: a date at local midnight (+03:00) is the
-    day before in UTC, which made the last day of the window a day short.
+    in the boards' zone (Europe/Bucharest): a date at local midnight is
+    21:00 the day before in UTC, which is how Postgres hands it back, and
+    the last day of the window was a day short.
     """
     if not max_age_days:
         return True
@@ -499,8 +560,8 @@ def is_fresh_enough(job: Job, max_age_days: int | None) -> bool:
         return True
     if when.tzinfo is None:  # SQLite hands back naive UTC
         when = when.replace(tzinfo=timezone.utc)
-    oldest = (datetime.now(when.tzinfo) - timedelta(days=max_age_days)).date()
-    return when.date() >= oldest
+    oldest = (datetime.now(BOARD_TZ) - timedelta(days=max_age_days)).date()
+    return when.astimezone(BOARD_TZ).date() >= oldest
 
 
 def _title_relevant_for_any_keyword(
@@ -1197,6 +1258,21 @@ def _parse_float(row: pd.Series, col: str) -> float | None:
         return float(row[col])
     except (ValueError, TypeError):
         return None
+
+
+def _flag(row: pd.Series, col: str) -> bool:
+    """A boolean column; False when absent or NaN (numpy bools included)."""
+    value = row.get(col)
+    return isinstance(value, (bool, np.bool_)) and bool(value)
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    """Aware in UTC; SQLite hands back naive UTC."""
+    if value is None:
+        return None
+    if isinstance(value, pd.Timestamp):
+        value = value.to_pydatetime()
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
 def _parse_datetime(row: pd.Series, col: str) -> datetime | None:

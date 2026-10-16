@@ -122,7 +122,7 @@ ROMANIAN_CITIES: tuple[str, ...] = (
     "targu jiu", "drobeta turnu severin", "resita", "slatina", "tulcea",
     "zalau", "vaslui", "giurgiu", "slobozia", "calarasi", "alexandria",
     "sfantu gheorghe", "miercurea ciuc", "medias", "voluntari", "otopeni",
-    "ilfov", "floresti",
+    "ilfov", "floresti", "dej",
 )
 
 LOCATION_ALIASES: dict[str, dict[str, Any]] = {
@@ -206,7 +206,7 @@ LOCATION_ALIASES: dict[str, dict[str, Any]] = {
             "luxembourg",
             "croatia", "bulgaria", "serbia", "greece", "slovakia", "slovenia",
             "estonia", "latvia", "lithuania", "moldova",
-            "europe",
+            "europe", "eu", "emea",
         ],
     },
     "eu": {
@@ -233,7 +233,7 @@ LOCATION_ALIASES: dict[str, dict[str, Any]] = {
             "luxembourg",
             "croatia", "bulgaria", "serbia", "greece", "slovakia", "slovenia",
             "estonia", "latvia", "lithuania", "moldova",
-            "europe",
+            "europe", "eu", "emea",
         ],
     },
 }
@@ -380,7 +380,7 @@ def _alias(location: str) -> dict[str, Any] | None:
 
 # A slash-command option name pasted into its value: "location:Cluj",
 # "llocation:Cluj" (an active production search matched nothing for it).
-_OPTION_PREFIX_RE = re.compile(r"(?i)^\s*\w*location\s*[:=]\s*")
+_OPTION_PREFIX_RE = re.compile(r"(?i)^[\s*=:]*(?:\w*location\s*[:=])?[\s*=:]*")
 # Shorter than this and naming no known place: a fragment ("kra", "mun"),
 # not a town the alias table lacks.
 MIN_UNKNOWN_PLACE_LEN = 4
@@ -412,15 +412,16 @@ def clean_location(location: str) -> str | None:
 
 
 def place_suggestions(fragment: str, limit: int = 3) -> list[str]:
-    """Known places starting with `fragment`: "kra" → ["Krakow"]."""
+    """Known places starting with `fragment`: "kra" → ["Krakow"], "bac" →
+    ["Bacau"]."""
     key = _place(fragment)
     if not key:
         return []
-    names = sorted({
+    names = {
         alias["search"].split(",")[0] for name, alias in LOCATION_ALIASES.items()
         if _place(name).startswith(key)
-    })
-    return names[:limit]
+    } | {city.title() for city in ROMANIAN_CITIES if city.startswith(key)}
+    return sorted(names)[:limit]
 
 
 def is_romanian_location(location: str) -> bool:
@@ -458,9 +459,9 @@ def location_matches(job_location: str, match_substrings: list[str]) -> bool:
     if not job_location or pd.isna(job_location) or str(job_location).lower() == "nan":
         return False
     loc = _place(job_location)
-    countries = _named_countries(str(job_location))
     if any(
-        _place_pattern(sub).search(loc) and _counts_in(_place(sub), countries, loc)
+        _place_pattern(sub).search(part) and _counts_in(_place(sub), countries, loc)
+        for part, countries in _location_parts(str(job_location))
         for sub in match_substrings if sub
     ):
         return True
@@ -508,8 +509,13 @@ _COUNTRY_NAMES: dict[str, str] = {
     "england": "united kingdom", "scotland": "united kingdom",
     "great britain": "united kingdom", "espana": "spain", "polska": "poland",
     "czechia": "czech", "italia": "italy", "republic of moldova": "moldova",
-    "united states": "united states", "usa": "united states", "us": "united states",
+    # "us" alone is matched by _US_WORD_RE: "US company" is not a place.
+    "united states": "united states", "usa": "united states",
     "u s": "united states", "u s a": "united states", "america": "united states",
+    # Regions: remote for another continent.
+    "latam": "latam", "latin america": "latam", "americas": "americas",
+    "north america": "north america", "south america": "latam", "apac": "apac",
+    "asia pacific": "apac", "asia": "asia",
     "canada": "canada", "brazil": "brazil", "brasil": "brazil", "mexico": "mexico",
     "argentina": "argentina", "colombia": "colombia", "chile": "chile",
     "egypt": "egypt", "israel": "israel", "turkey": "turkey", "turkiye": "turkey",
@@ -538,30 +544,75 @@ _COUNTRY_CODES = {
     "lv": "latvia", "lt": "lithuania", "md": "moldova", "ua": "ukraine",
     "us": "united states",
 }
+# "US" as the country: on its own, last, or "US only" / "US-based".
+_US_WORD_RE = re.compile(r"(?<![a-z0-9])us(?=\s*(?:only|based)\b|\s*$|\s*[),])")
+# "City, ST" with no country: a US state. Not the codes Romanian counties
+# share (AR Arad, CT Constanța, IL Ialomița, MS Mureș).
+_US_STATE_CODES = frozenset(
+    "al ak az ca co de fl ga hi id in ia ks ky la me md ma mi mn mo mt ne nv nh nj nm "
+    "ny nc nd oh ok or pa ri sc sd tn tx ut vt va wa wv wi wy dc".split()
+)
 # A remote posting open to anyone, or to someone in Europe.
 _REMOTE_REGION_RE = re.compile(
     r"(?<![a-z0-9])(?:europe|european|eu|emea|cet|worldwide|anywhere|global)(?![a-z0-9])"
 )
 
 
+# Places in one location string: "Cluj-Napoca / Munich, Germany",
+# "Bucharest or Remote (USA)". Never inside brackets ("Remote (USA/Europe)").
+_PLACE_SEPARATOR_RE = re.compile(r"\s*(?:[/;|&]|\b(?:or|sau|and|si)\b)\s*(?![^()]*\))")
+_COMMA_OUTSIDE_BRACKETS_RE = re.compile(r",(?![^()]*\))")
+_BRACKETED_RE = re.compile(r"\([^()]*\)")
+# Romanian cities in the historic region of Moldova: "Iași, Moldova" is
+# in Romania. (Călărași and Florești are also towns in the Republic.)
+_MOLDAVIA_CITIES = frozenset({
+    "iasi", "bacau", "suceava", "vaslui", "botosani", "piatra neamt", "focsani", "galati",
+})
+
+
 @functools.lru_cache(maxsize=4096)
-def _named_countries(job_location: str) -> frozenset[str]:
-    """The countries a posting's location names; empty if none."""
-    found = {_COUNTRY_NAMES[m.group(0)] for m in _COUNTRY_NAME_RE.finditer(_place(job_location))}
-    parts = [part.strip() for part in fold(job_location).split(",")]
-    if len(parts) >= 3 and re.fullmatch(r"[a-z]{2}", parts[-1]):
-        found.add(_COUNTRY_CODES.get(parts[-1], parts[-1]))
-    return frozenset(found)
+def _location_parts(job_location: str) -> tuple[tuple[str, frozenset[str]], ...]:
+    """(part, countries named for it) for each place named.
+
+    A country applies to the place it is written with, not to every
+    place in the string: "Bucharest, Budapest (Hungary)" is in Bucharest
+    too. A bracketed country is its own comma part's ("Warsaw (Poland)");
+    a plain one ("Chisinau, Moldova") and Indeed's trailing country code
+    ("Porto Velho, RO, BR") are their whole piece's.
+    """
+    out: list[tuple[str, frozenset[str]]] = []
+    for piece in _PLACE_SEPARATOR_RE.split(fold(job_location)):
+        parts = _COMMA_OUTSIDE_BRACKETS_RE.split(piece)
+        shared = _country_names(_BRACKETED_RE.sub(" ", piece))
+        codes = [part.strip() for part in parts]
+        if len(codes) >= 3 and re.fullmatch(r"[a-z]{2}", codes[-1]):
+            shared |= {_COUNTRY_CODES.get(codes[-1], codes[-1])}
+        elif len(codes) == 2 and codes[-1] in _US_STATE_CODES:
+            shared |= {"united states"}
+        for part in parts:
+            bracketed = " ".join(_BRACKETED_RE.findall(part))
+            out.append((_place(part), frozenset(shared | _country_names(bracketed))))
+    return tuple(out)
+
+
+def _country_names(text: str) -> set[str]:
+    place = _place(text)
+    found = {_COUNTRY_NAMES[m.group(0)] for m in _COUNTRY_NAME_RE.finditer(place)}
+    if _US_WORD_RE.search(place):
+        found.add("united states")
+    return found
 
 
 def _counts_in(sub: str, countries: frozenset[str], loc: str) -> bool:
-    """Whether a match on `sub` holds for a posting at `loc` naming `countries`."""
+    """Whether a match on `sub` holds for a place at `loc` naming `countries`."""
     if not countries:
         return True
     if sub == "ro":  # a country code, but not when another country is named
         return "romania" in countries
     city_country = _CITY_COUNTRY.get(sub)
     if city_country is not None:
+        if sub in _MOLDAVIA_CITIES and "moldova" in countries:
+            return True
         return city_country in countries
     if sub in _REMOTE_PLACES:
         # "Remote - US only", "Remote (USA)": remote for someone elsewhere.
@@ -713,13 +764,23 @@ def matches_excluded_keywords(text: str, excluded: list[str]) -> bool:
     so "vanzari" excludes "Vânzări" and the reverse. The boundary is "no
     letter or digit on either side" rather than \\b, which needs a word
     character next to it: excluding "C++", "C#" or ".NET" never matched.
+    Web addresses do not count: ".NET" is not in "careers.company.net".
     """
     if not excluded or not text:
         return False
-    folded = fold(text)
+    folded = _WEB_ADDRESS_RE.sub(" ", fold(text))
     return any(
         _excluded_pattern(kw).search(folded) for kw in excluded if kw and kw.strip()
     )
+
+
+# URLs, e-mail addresses and bare host names, except the .NET names
+# themselves ("ASP.NET" looks like a host name).
+_WEB_ADDRESS_RE = re.compile(
+    r"\bhttps?://\S+|\bwww\.\S+|\S+@\S+|"
+    r"\b(?!(?:asp|vb|ado)\.net\b)[a-z0-9-]+(?:\.[a-z0-9-]+)*"
+    r"\.(?:com|net|org|ro|io|eu|co|info|biz|dev|app|uk|de)\b(?:/\S*)?"
+)
 
 
 @functools.lru_cache(maxsize=1024)
@@ -730,7 +791,8 @@ def _excluded_pattern(keyword: str) -> re.Pattern[str]:
     folded = fold(keyword).strip()
     body = r"\s+".join(re.escape(word) for word in folded.split())
     before = r"(?<!\w)" if re.match(r"\w", folded) else ""
-    after = r"(?!\w)" if re.search(r"\w$", folded) else ""
+    # "+" and "#" too: excluding "C" is not excluding "C++" or "C#".
+    after = r"(?![\w+#])" if re.search(r"\w$", folded) else ""
     return re.compile(before + body + after)
 
 
@@ -818,51 +880,94 @@ _NICE_TO_HAVE_RE = re.compile(
     r"\b(?:a plus|un plus|nice to have|preferred|preferably|advantage|bonus|"
     r"ideally|avantaj|de preferat)"
 )
-# The same wish written before the number: "Nice to have: 3 years of ...".
+# The wish written before the number: a heading ("Nice to have: 3 years",
+# "Bonus - 2 years") or an adverb ("Preferably 3 years"). Not a bare
+# "preferred", which ends the previous clause once scraping has lost its
+# period ("a degree is strongly preferred 3-6 years of experience").
 _NICE_TO_HAVE_BEFORE_RE = re.compile(
-    r"\b(?:nice to have|preferred|preferably|ideally|bonus|de preferat|optional)\W*$"
+    r"(?:\b(?:nice to have|preferred|bonus|optional|plus|ideal|ideally)\s*[:\-–]|"
+    r"\b(?:preferably|ideally|optionally|de preferat))\s*$"
 )
 # Sentences and bullets ("min." is not an end). A line ending in ":" is a
 # heading for the next one ("Experience:\n- 3+ years"), so it stays attached.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<!\bmin)(?<!\bnr)[.;!?](?=\s|$)|(?<!:)\n|•")
+# "Experience." or "Required experience" on its own: the next line's heading.
+_HEADING_RE = re.compile(
+    r"\W*(?:(?:required|relevant|professional|work|previous|prior|minimum)\s+)?"
+    r"experien\w*(?:\s+(?:required|necesar\w*|minim\w*|profesional\w*|anterioar\w*))?\W*"
+)
+# Clauses. The years and "experience" must share one: "Fixed-term contract
+# for 2 years, experience with Excel" is two. Brackets do not break one
+# ("experiența în Azure (1 an) constituie un avantaj").
+_CLAUSE_BREAK_RE = re.compile(r",\s|\s[-–|]\s")
+_EXPERIENCE_WORD = r"(?:experien\w*|exp\b|practic[ae]\b)"
 # Between the years and "experience": "3+ years of professional
 # experience", "5+ years of backend software development experience", "3
 # ani de experiență". A few words, none of them saying the years are
 # something else ("4 years old", "5 years on the market"). "4+ years of
-# Swift development" names the experience without the word.
+# Swift development", "8+ years in the industry" name the experience
+# without the word, and "10+ years required" needs no word at all.
 _GAP_WORD = r"(?!old\b|ago\b|on\b|in\s+business\b|pe\b|we\b|our\b|you\b|will\b)\S+\s+"
 _YEARS_THEN_EXPERIENCE_RE = re.compile(
     r"^[\s'’)]*(?:"
-    r"(?:" + _GAP_WORD + r"){0,8}(?:experien|practic[ae]\b)|"
-    r"(?:of|de)\s+(?:" + _GAP_WORD + r"){0,7}"
-    r"(?:development|programming|engineering|dezvoltare|programare)\b)"
+    r"(?:" + _GAP_WORD + r"){0,8}" + _EXPERIENCE_WORD + r"|"
+    r"(?:of|de|in)\s+(?:" + _GAP_WORD + r"){0,7}"
+    r"(?:development|programming|engineering|dezvoltare|programare)\b|"
+    r"in\s+(?:(?:the|a|this)\s+)?(?:industry|field|domain|domeniu|similar\s+(?:role|position))\b|"
+    r"(?:required|needed|necesar\w*|obligatori\w*)\b)"
 )
-# Years the posting says it does not want: "we are not looking for a
-# senior with 10 years of experience", "no need for 5 years".
-_NOT_WANTED_RE = re.compile(
-    r"\b(?:not looking for|nu cautam|we don't need|we do not need|no need for|"
-    r"nu avem nevoie de)\b"
+# "Experience 3+ years", "experiență minimă 2 ani", "experience: at least 3
+# years", "experiență în domeniul ... de minim 2 ani": "experience" a word
+# or two before the number, or further back with a requirement word just
+# before it.
+_REQUIREMENT_WORD = (
+    r"(?:min(?:im(?:um|al|a)?)?\.?|at least|cel putin|of|de|over|peste|more than|"
+    r"mai mult de|:|-|–|,|\()"
 )
-# "Experience: at least 3 years", "experiență în domeniul ... de minim 2
-# ani", "experiență minimă în contabilitate, 1-2 ani": the number right
-# after a requirement word, with "experience" earlier in the sentence.
 _EXPERIENCE_THEN_YEARS_RE = re.compile(
-    r"experien\w*\b.{0,80}?(?:min(?:im(?:um|al)?)?\.?|at least|cel putin|of|de|"
-    r"over|peste|more than|mai mult de|:|-|,|\()\s*$",
+    _EXPERIENCE_WORD + r"(?:\s*:)?(?:\s+\S+){0,2}?\s*$|"
+    + _EXPERIENCE_WORD + r".{0,80}?" + _REQUIREMENT_WORD + r"\s*$",
     re.S,
 )
+_ONLY_REQUIREMENT_WORDS_RE = re.compile(r"\s*(?:" + _REQUIREMENT_WORD + r"\s*)*")
+# "Have worked 3 years as a developer": experience without the word.
+_WORKED_RE = re.compile(r"\b(?:worked|working|lucrat)\s+(?:for\s+)?(?:at least\s+|over\s+)?$")
+# Years the posting says it does not ask for. General phrasing, either
+# side of the number: "we are not looking for / do not require / don't
+# need 5 years", "nu căutăm / nu este necesară ...", "5 years ... is not
+# required".
+_NOT_WANTED_BEFORE_RE = re.compile(
+    r"\b(?:not looking for|not seeking|(?:do|does|did) not (?:require|need|ask for|expect)|"
+    r"(?:don't|doesn't|dont|doesnt) (?:require|need|ask for|expect)|"
+    r"no need (?:for|to have|to)|without|"
+    r"nu cautam|nu avem nevoie de|nu (?:este|e|sunt) (?:necesar\w*|obligatori\w*)|"
+    r"nu (?:necesita|solicitam|cerem|pretindem))\b"
+)
+_NOT_WANTED_AFTER_RE = re.compile(
+    r"\b(?:not (?:required|necessary|needed|mandatory)|optional|"
+    r"nu (?:este|e|sunt) (?:necesar\w*|obligatori\w*))\b"
+)
+# Years of something other than experience, right after the number.
+_OTHER_YEARS_RE = re.compile(r"^\s*(?:contract\w*|warranty|garantie|ago|in urma)\b")
 # A company's age, not the candidate's experience: "on the market", "pe
 # piață", "10 ani de activitate", and for ten years and more "we have 15
-# years of experience", "a company with over 10 years of experience". Nor
-# the candidate's age ("vârsta recomandată: 18–40 ani").
+# years of experience", "a company with over 10 years of experience".
 _COMPANY_AGE_RE = re.compile(
     r"\b(?:on the market|pe piata|in business|founded|since|de activitate|"
-    r"of activity|of history|varsta|age|aged)\b"
+    r"of activity|of history|in our (?:team|company)|in the company|"
+    r"in echipa noastra|in compania noastra)\b"
 )
 _COMPANY_SUBJECT_RE = re.compile(
     r"\b(?:we have|we've|we bring|avem|are peste|has over|have over|has more than|"
     r"with over|with more than|cu peste|in peste|company|compania|companie|firma)\b"
 )
+# The candidate's age, per mention: "18 years or older", "vârsta minimă 18
+# ani", "ai peste 18 ani".
+_AGE_AFTER_RE = re.compile(
+    r"^\s*(?:old|or older|or over|and over|and older|of age|impliniti|de ani impliniti)\b"
+)
+_AGE_WORD_RE = re.compile(r"\b(?:varsta\w*|age|aged|majorat\w*)\b")
+_AGE_BEFORE_RE = re.compile(r"\b(?:peste|over|at least|minim\w*|must be|be|esti|ai)\s*$")
 
 
 @functools.lru_cache(maxsize=4096)
@@ -870,20 +975,23 @@ def required_years(description: str | None) -> int | None:
     """The years of experience a posting requires; None if unstated.
 
     A number counts only when "experience"/"experiență" names it in the
-    same sentence: a few words after it ("3+ years of professional
-    experience") or just before it after a requirement word ("experience:
-    at least 3 years"). "A company with 20 years on the market", "a 1-year
-    contract", "Within 3 years you will grow into a lead" are not
-    requirements. A range counts as its lower bound ("3-5 years" is 3).
-    Nice-to-haves are skipped, and of the rest the largest wins: "5+ years
-    of experience overall, 2 years with Docker" asks for five.
+    same clause: a few words after it ("3+ years of professional
+    experience") or before it ("Experience: at least 3 years"). Written
+    experience-first, the number may sit in the next clause when nothing
+    but a requirement word comes before it ("experiență minimă în
+    contabilitate, 1-2 ani"). "A company with 20 years on the market", "a
+    1-year contract", "Within 3 years you will grow into a lead", "18 years
+    or older" are not requirements. A range counts as its lower bound
+    ("3-5 years" is 3). Nice-to-haves and years the posting says it does
+    not need are skipped, and of the rest the largest wins: "5+ years of
+    experience overall, 2 years with Docker" asks for five.
 
     Cached: the match stage asks for every subscription and keyword.
     """
     if not description:
         return None
     found: list[int] = []
-    for sentence in _SENTENCE_SPLIT_RE.split(fold(description)):
+    for sentence in _sentences(fold(description)):
         for m in _YEARS_RE.finditer(sentence):
             years = _requirement(sentence, m)
             if years is not None:
@@ -891,26 +999,55 @@ def required_years(description: str | None) -> int | None:
     return max(found) if found else None
 
 
+def _sentences(text: str) -> list[str]:
+    """Sentences, with a lone "Experience." heading joined to the next."""
+    out: list[str] = []
+    heading = ""
+    for sentence in _SENTENCE_SPLIT_RE.split(text):
+        if _HEADING_RE.fullmatch(sentence):
+            heading += sentence.strip() + ": "
+            continue
+        out.append(heading + sentence)
+        heading = ""
+    return out
+
+
 def _requirement(sentence: str, m: re.Match[str]) -> int | None:
     head, rest = sentence[: m.start()], sentence[m.end() :]
-    if not (
-        _YEARS_THEN_EXPERIENCE_RE.match(rest) or _EXPERIENCE_THEN_YEARS_RE.search(head)
-    ):
-        return None
-    # This mention's own tail: up to a bracket, the next clause or the
-    # next number ("At least 4 years (5 years is a plus)" asks for four).
-    tail = re.split(r"[(\d]|,\s", rest, maxsplit=1)[0]
-    if (
-        _NICE_TO_HAVE_RE.search(tail)
-        or _NICE_TO_HAVE_BEFORE_RE.search(head)
-        or _NOT_WANTED_RE.search(head)
-    ):
-        return None
+    head_clause = _CLAUSE_BREAK_RE.split(head)[-1]
+    rest_clause = _CLAUSE_BREAK_RE.split(rest, maxsplit=1)[0]
+    # This mention's own tail: up to a bracket or the next number ("At
+    # least 4 years (5 years is a plus)" asks for four).
+    tail = re.split(r"[(\d]", rest_clause, maxsplit=1)[0]
     raw = m.group(1)
     years = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
-    if not 1 <= years <= 30 or _COMPANY_AGE_RE.search(sentence):
+    if not 1 <= years <= 30 or _OTHER_YEARS_RE.match(rest_clause):
         return None
-    if years >= 10 and _COMPANY_SUBJECT_RE.search(head):
+
+    if _YEARS_THEN_EXPERIENCE_RE.match(rest_clause) or _WORKED_RE.search(head_clause):
+        wish = tail
+    else:
+        before = _EXPERIENCE_THEN_YEARS_RE.search(head)
+        if before is None:
+            return None
+        crosses = before.start() < len(head) - len(head_clause)
+        if crosses and not _ONLY_REQUIREMENT_WORDS_RE.fullmatch(head_clause):
+            return None
+        wish = head[before.start() :] + tail
+    if _NICE_TO_HAVE_RE.search(wish) or _NICE_TO_HAVE_BEFORE_RE.search(head):
+        return None
+    if _NOT_WANTED_BEFORE_RE.search(head_clause) or _NOT_WANTED_AFTER_RE.search(tail):
+        return None
+    clause = head_clause + m.group(0) + rest_clause
+    if _COMPANY_AGE_RE.search(clause):
+        return None
+    if years >= 10 and _COMPANY_SUBJECT_RE.search(head_clause):
+        return None
+    if (
+        _AGE_AFTER_RE.match(rest_clause)
+        or _AGE_WORD_RE.search(clause)
+        or (16 <= years <= 19 and _AGE_BEFORE_RE.search(head_clause))
+    ):
         return None
     return years
 

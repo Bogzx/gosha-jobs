@@ -108,8 +108,49 @@ Old-code checks were made by loading HEAD's files from a `git archive` copy in t
     - `INTERN_RE`, `ENTRY_LEVEL_RE` and the keyword regexes take "(working) student(s)".
     - Told gosha-rank these names are stable. Tests: `test_titles_that_are_not_senior`, `test_titles_that_are_senior`, `test_working_students_are_internships`, `test_search_location_ok_is_one_rule_for_match_browse_and_feed`.
 
+## Lead follow-up after checkpoint c5cc7bc (verifier findings), all with tests
+1. **Multi-place locations** (`_location_parts`, `_PLACE_SEPARATOR_RE`, `_MOLDAVIA_CITIES`):
+   - The string is split on `/ ; | & or sau and si`, never inside brackets.
+   - A bracketed country applies to its own comma part. A plain one, or Indeed's trailing code, applies to its piece.
+   - "Iași, Moldova" (the region) matches. A 2-part "City, ST" with a US state code counts as US; the codes Romanian counties share (AR, CT, IL, MS) are excluded.
+   - "us" counts only standalone or as "US only/based". LATAM/Americas/APAC/Asia are non-European regions.
+   - The remote region check reads the whole string ("Remote US/EU" is remote). "eu" and "emea" are in the europe lists.
+   - Tests: `test_several_places_in_one_location`, `test_us_states_regions_and_eu`.
+   - Prod, 1350 locations vs the checkpoint: only US places changed (Alexandria VA, Vienna VA, Paris NY, Rome NY, Dublin OH).
+2–5. **`required_years` per clause, FINAL** (told gosha-rank):
+   - Clauses break on ", ", " - ", " | "; brackets don't. The number and "experience" share a clause. Written experience-first, the number may sit in the next clause if only requirement words precede it.
+   - A lone "Experience." line is the next line's heading.
+   - Also counted: "exp", "N years required", "N years in the industry/field/similar role", "worked N years".
+   - A nice-to-have before the number only counts as a heading (":" or "-") or an adverb.
+   - Age is judged per mention: "N years old / or older", age words in the clause, 16–19 after peste/over/ai.
+   - Company age is checked per clause, now including "in our team/company".
+   - Negation is generic, both sides of the number (`_NOT_WANTED_BEFORE_RE` / `_NOT_WANTED_AFTER_RE`), written from general phrasing.
+   - The verifier's v1 (52 cases) and v2 now read all cases as expected. Eval split unchanged vs c5cc7bc.
+   - Tests: `test_required_years_reads_one_clause` and the earlier tables.
+6. **Freshness** is counted in Europe/Bucharest days (`BOARD_TZ`); naive values are UTC. This covers Postgres returning UTC. The prod image has the tz data.
+7. **Combos** are keyed (keyword, place, max_age_days), with boards merged. Different windows stay separate queries.
+8. **`clean_location`:**
+   - Leading `*`, `=`, `:` and "...location:" are stripped.
+   - "dej" added to ROMANIAN_CITIES.
+   - Suggestions search ROMANIAN_CITIES too ("Bac" → Bacau).
+9. **Excluded words** ignore URLs, e-mails and bare host names (`_WEB_ADDRESS_RE`, which keeps ASP/VB/ADO.NET). "C" no longer excludes "C++" or "C#".
+- **Hipo refresh dates** (gosha-scrape's request, `upsert_jobs`): when `date_posted_is_refresh` is set, an existing row's posted_at becomes min(existing, new, first_seen_at). Test: tests/test_pipeline.py `test_refresh_dates_never_move_posted_at_forward`.
+- **Baseline catalog hook** (`run_scrape_stage`, `_with_baseline`, `BASELINE_CYCLE_SECONDS`), behind `SCRAPE_BASELINE` (default off):
+  - It runs even when there are no subscriptions.
+  - A baseline combo with the same (keyword, place, window) as a subscription's is dropped. The rest are inserted right after the same place's subscription combos, for the boards' 10-minute caches.
+  - `boards=()` skips JobSpy.
+  - Baseline rows go through the normal match stage.
+  - Tests: tests/test_pipeline_baseline.py.
+  - Review notes for gosha-scrape and the lead: the merge key includes the window (item 7). In regex-fallback mode (TODO 6), baseline rows make the generic-keyword flood worse.
+
+## Held-out postings I looked at (for docs/EVAL.md; none since the lead's rule)
+- `heldout-ejobs-016` ("Dezvoltator Web Middle, Claude Code, Deploy & Automatizări"): the "nu căutăm un senior cu 10 ani" sentence led to the first negation rule. It is now replaced by the generic phrase lists.
+- `heldout-bestjobs-066` ("Java Backend Engineer (f/m/x)"): "5+ years of hands-on java and spring boot development experience" led to widening the gap to 8 words.
+- `heldout-bestjobs-021` ("Software Engineer - Full Stack"): seen only through gosha-rank's report. My test uses a paraphrase.
+- Before the rule I also ran old-vs-new aggregate level splits on eval/heldout, which printed the titles of postings whose years changed (the two above). From now on, only eval/postings.jsonl.
+
 ## In progress (exact state)
-Nothing half-applied. Full suite: 1159 passed, 9 skipped; ruff clean (2026-10-16, server).
+Nothing half-applied. Full suite: 1325 passed, 9 skipped; ruff clean (2026-10-16, server, after the follow-up).
 
 ## Remaining TODO (prioritized)
 1. **Web feed hard filters**: owned and being implemented by gosha-rank in recommend.py (their handoff "Feed hard filters"). Rule agreed: per active search, `search_location_ok` AND `matches_experience_level`, OR'ed; candidates only, never the window. Nothing for me unless they ask.
@@ -122,6 +163,7 @@ Nothing half-applied. Full suite: 1159 passed, 9 skipped; ruff clean (2026-10-16
 8. `gosha/delivery.py` is unused by the pipeline: wire it in or delete it (ask the lead).
 9. Browse `posted_within_days` still floors in UTC (SQL), the same off-by-one as review item 8. Low.
 10. "Ro-Ro Logistics, Hamburg" still matches romania (no country named). Accepted.
+11. **If baseline rotation lands** (`baseline_combos(cycle)` returns different searches per cycle): keep the rotating combos OUT of `searches_by_source` in `run_scrape_stage`, or ask gosha-health for a separate parameter. Otherwise every cycle "removes" searches, the native boards stay in health's 2-cycle grace forever, and collapse detection goes blind (gosha-health, 2026-10-16). Today's baseline is fixed, so nothing to do yet.
 
 ## Open review points from the orchestrator
 1. **Keyword gate inconsistent with `_is_junior`:** addressed. The gate now accepts unmarked titles with ≤2 years required for junior keywords; internship keywords stay strict. Tests: `test_unmarked_posting_reaches_a_junior_keyword_search` in both test_filters_accuracy.py and test_pipeline_accuracy.py. Measured over the 14 personas × eval postings, family-matched grade-2 postings passing the gate:
@@ -148,8 +190,9 @@ See Remaining TODO. Measurements behind them:
 ## How to verify
 - On this aarch64 server prefix with `LD_PRELOAD=$PWD/.venv/lib/python3.11/site-packages/scikit_learn.libs/libgomp-a49a47f9.so.1.0.0`.
 - `.venv/bin/python -m pytest -q tests/test_filters_accuracy.py tests/test_pipeline_accuracy.py tests/test_browse_accuracy.py tests/test_search_input.py tests/test_deliver.py`: 241 passed.
-- `.venv/bin/python -m pytest -q`: 1159 passed, 9 skipped (server, after the corrections; other agents' tests are included).
-- Old-vs-new measurement on both eval sets: `git show HEAD:gosha/filters.py > <scratch>/filters_old.py`, then for each posting compare `required_years` and `matches_experience_level(title, ["intern","junior"], None, description)` per level, using the old module loaded via importlib from that path.
+- `.venv/bin/python -m pytest -q`: 1325 passed, 9 skipped (server, after the follow-up; other agents' tests included).
+- Verifier scripts (lead's): `/tmp/claude-1001/-home-ubuntu-gosha-jobs/3f714841-0998-4735-a06e-3fd5c1335b14/scratchpad/v1.py`–`v5.py`, `v9.py`, run with `PYTHONPATH=.` from the repo root. Do NOT run v7/v8: they read held-out postings.
+- Old-vs-new measurement on eval/postings.jsonl only (not held-out): `git show HEAD:gosha/filters.py > <scratch>/filters_old.py`, then for each posting compare `required_years` and `matches_experience_level(title, ["intern","junior"], None, description)` per level, using the old module loaded via importlib from that path.
 - Measurement scripts are in `.agents/handoff/gosha-pipe-probes/`; run them from the repo root with `PYTHONPATH=.`:
   - `measure4.py`: level-filter split on the eval set.
   - `gate.py <path-to-old-filters.py>`: gate before/after. Create the old copy with `git show 5490d6a:gosha/filters.py > /tmp/filters_old.py`.

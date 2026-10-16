@@ -259,3 +259,20 @@ def test_cli_check_fails_on_regression(tmp_path):
     out = run_cli("--models", "tfidf", "--no-feedback", "--check", str(baseline))
     assert out.returncode == 1
     assert "REGRESSION: feed nDCG@10" in out.stderr
+
+
+def test_cli_check_refuses_a_baseline_from_another_eval_set(tmp_path):
+    """The held-out set grew from 253 to 258 postings; a baseline from the
+    old file compares two different measurements."""
+    run_cli("--models", "tfidf", "--no-feedback", "--write-results", str(tmp_path))
+    baseline = tmp_path / "tfidf.json"
+    data = json.loads(baseline.read_text())
+    assert len(data["postings_sha256"]) == len(data["personas_sha256"]) == 16
+    data["postings_sha256"] = "0" * 16
+    data["feed"]["mean"]["ndcg@10"] -= 0.2  # would pass on the numbers alone
+    baseline.write_text(json.dumps(data))
+
+    out = run_cli("--models", "tfidf", "--no-feedback", "--check", str(baseline))
+    assert out.returncode == 1
+    assert "regenerate the baseline" in out.stderr
+

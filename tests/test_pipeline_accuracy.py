@@ -154,6 +154,13 @@ def test_freshness_counts_days_in_the_postings_own_time_zone(monkeypatch):
     assert not pipeline.is_fresh_enough(job, 7)
     job.posted_at = datetime(2026, 10, 9, 0, 0)  # naive: UTC
     assert pipeline.is_fresh_enough(job, 7)
+    # Postgres hands timestamptz back in UTC: the same local midnight.
+    job.posted_at = datetime(2026, 10, 8, 21, 0, tzinfo=timezone.utc)
+    assert pipeline.is_fresh_enough(job, 7)
+    job.posted_at = datetime(2026, 10, 8, 21, 0)  # naive UTC, as SQLite returns it
+    assert pipeline.is_fresh_enough(job, 7)
+    job.posted_at = datetime(2026, 10, 8, 20, 30, tzinfo=timezone.utc)  # 23:30 local, 8th
+    assert not pipeline.is_fresh_enough(job, 7)
 
 
 # ── Deliver stage ─────────────────────────────────────────────────────

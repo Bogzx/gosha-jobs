@@ -4,8 +4,11 @@ name: Ranking eval
 # ranks well. On any change to the ranking path it re-runs the offline eval
 # (docs/EVAL.md) with the production model and fails if feed nDCG@10, or
 # Discord recall / off-target rate at the delivery threshold, moved more
-# than the tolerance against the committed baseline. Torch is CPU-only
-# here, so this job stays a few minutes long.
+# than the tolerance against the committed baseline, on the main set and
+# on the independent held-out set (eval/heldout/, never tuned on). A
+# baseline only counts for the exact eval files it was computed on
+# (scripts/eval_ranking.py check): a change to eval/ ships with regenerated
+# baselines. Torch is CPU-only here, so this job stays a few minutes long.
 
 on:
   pull_request:
@@ -13,6 +16,10 @@ on:
       - gosha/matching.py
       - gosha/embeddings.py
       - gosha/recommend.py
+      - gosha/lexical.py
+      - gosha/seniority.py
+      # seniority.py reads posting levels through the filters' regexes
+      - gosha/filters.py
       - gosha/pipeline.py
       - gosha/evaluation.py
       - scripts/eval_ranking.py
@@ -55,3 +62,13 @@ jobs:
           python scripts/eval_ranking.py --cache-dir "" \
             --check eval/results/all-mpnet-base-v2.json | tee eval-summary.md
           cat eval-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Same on the held-out set
+        # Runs even when the main set failed: both numbers belong in the
+        # review, and a gain on main alone is the overfitting this catches.
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          python scripts/eval_ranking.py --cache-dir "" \
+            --postings eval/heldout/postings.jsonl --personas eval/heldout/personas.jsonl \
+            --check eval/results/heldout/all-mpnet-base-v2.json | tee heldout-summary.md
+          { echo "### Held-out set"; cat heldout-summary.md; } >> "$GITHUB_STEP_SUMMARY"

@@ -269,3 +269,42 @@ async def test_record_delivery(patched_db, session: AsyncSession):
     assert uj.job_id == job.id
     assert uj.relevance_score == 0.75
     assert uj.delivered_at is not None
+
+
+@pytest.mark.asyncio
+async def test_refresh_dates_never_move_posted_at_forward(patched_db):
+    """Hipo's datePosted is the last refresh: 8 of 10 dated active Hipo
+    rows in production were "posted" days after we first saw them, so old
+    ads passed freshness as new."""
+    from datetime import datetime, timezone
+
+    from gosha.pipeline import upsert_jobs
+
+    utc = timezone.utc
+
+    def row(day, refresh=True, url="https://www.hipo.ro/locuri-de-munca/271007/x"):
+        return pd.DataFrame([{
+            "job_url": url, "title": "QA Engineer", "company": "Acme",
+            "location": "Cluj-Napoca, Romania", "description": "d", "site": "hipo",
+            "date_posted": datetime(2026, 10, day, tzinfo=utc),
+            "date_posted_is_refresh": refresh,
+        }])
+
+    def day_of(value):
+        return value.replace(tzinfo=None).day
+
+    (job,) = await upsert_jobs(row(1))
+    (job,) = await upsert_jobs(row(16))  # refreshed later: keep the earliest
+    assert day_of(job.posted_at) == 1
+    # A refresh date after our first sighting is capped to that sighting.
+    (late,) = await upsert_jobs(row(30, url="https://www.hipo.ro/x/2"))  # new row: as given
+    (late,) = await upsert_jobs(row(31, url="https://www.hipo.ro/x/2"))
+    assert late.posted_at.replace(tzinfo=None) <= late.first_seen_at.replace(tzinfo=None)
+    # Other boards' dates are replaced as before.
+    (other,) = await upsert_jobs(row(1, refresh=False, url="https://ejobs.ro/x/3"))
+    (other,) = await upsert_jobs(row(5, refresh=False, url="https://ejobs.ro/x/3"))
+    assert day_of(other.posted_at) == 5
+    # JobSpy frames have no such column.
+    plain = row(7, url="https://ejobs.ro/x/4").drop(columns=["date_posted_is_refresh"])
+    (plain_job,) = await upsert_jobs(plain)
+    assert day_of(plain_job.posted_at) == 7

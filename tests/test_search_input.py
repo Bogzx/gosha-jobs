@@ -28,6 +28,10 @@ from gosha.services import subscriptions as subs_service
     ("llocation:Cluj", "Cluj"),
     ("location: Iasi", "Iasi"),
     ("Location=Cluj-Napoca", "Cluj-Napoca"),
+    ("*location:Cluj", "Cluj"),
+    ("=Cluj", "Cluj"),
+    # Short real towns.
+    ("Dej", "Dej"),
     ("iasi", "iasi"),
     ("Cluj-Napoca, Romania", "Cluj-Napoca, Romania"),
     # Short but known.
@@ -44,6 +48,13 @@ from gosha.services import subscriptions as subs_service
 ])
 def test_clean_location(typed, cleaned):
     assert clean_location(typed) == cleaned
+
+
+def test_suggestions_include_romanian_towns():
+    from gosha.filters import place_suggestions
+
+    assert "Bacau" in place_suggestions("Bac")
+    assert "Krakow" in place_suggestions("kra")
 
 
 async def _user(session, discord_id: int = 9101) -> User:
@@ -181,11 +192,13 @@ async def test_unusable_location_tokens_never_reach_the_scrapers(
 
 
 async def test_searches_sharing_a_place_are_scraped_once(patched_db, session, monkeypatch):
-    """Two searches for "python" in Cluj with different windows or boards
-    (or "cluj" / "Cluj-Napoca") sent the same JobSpy query twice a cycle."""
+    """Searches for "python" in Cluj written "cluj" / "Cluj-Napoca" / "Cluj",
+    or with different boards, sent the same JobSpy query again. Different
+    windows stay apart: the boards cap a result list, and a 3-day search
+    sharing a 14-day query could lose fresh postings to older ones."""
     user = await _user(session, 9401)
     for locations, days, boards in (
-        (["cluj"], 7, ["linkedin"]), (["Cluj-Napoca"], 14, ["indeed"]), (["Cluj"], 7, ["linkedin"]),
+        (["cluj"], 7, ["linkedin"]), (["Cluj-Napoca"], 14, ["indeed"]), (["Cluj"], 7, ["indeed"]),
     ):
         sub = Subscription(user_id=user.id, max_age_days=days)
         sub.keywords = ["Python"]
@@ -205,6 +218,7 @@ async def test_searches_sharing_a_place_are_scraped_once(patched_db, session, mo
     from gosha.scrape_health import ScrapeHealth
 
     await pipeline.run_scrape_stage(_NoTunnels(), ScrapeHealth())
-    # The widest window and every board asked for; each search's own
-    # window is still enforced at the match stage (is_fresh_enough).
-    assert asked == [("python", "cluj", 14, ("indeed", "linkedin"))]
+    assert asked == [
+        ("python", "cluj", 7, ("indeed", "linkedin")),
+        ("python", "cluj-napoca", 14, ("indeed",)),
+    ]
