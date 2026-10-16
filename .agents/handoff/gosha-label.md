@@ -142,7 +142,10 @@ TODO 2 is now done by gosha-rank (held-out run: production 0.625 vs cosine 0.543
      - The pacing was enforced by `scratchpad/targeted/run_targeted.py` (a lock on httpx's transport) and checked in the per-request log.
      - Scratchpad files (not in the repo, not needed again): `/tmp/claude-1001/-home-ubuntu-gosha-agents/bd50c079-.../scratchpad/targeted/`, holding `cand_targeted.jsonl`, `requests.log` and `collect.stderr`.
    - **The run overlapped the prod cycle that started at 12:26.** The lead's original check (`grep -c 'jobs for'`) cannot see the JobSpy phase. Prod made no native-board request during my run, and the lead was told.
-   - **BestJobs answered 403 to all 10 searches from this IP.** Prod got about 260 × 200 at 08:57–08:59; the accidental ~12:30 run already got 0 BestJobs postings. So the refusal most likely predates my traffic; the cause is unknown. The lead was told; the owner's decision on `SCRAPE_BROWSER_FALLBACK` lives with gosha-scrape.
+   - **BestJobs answered 403 to all 10 searches.** **Correction (lead and gosha-scrape, 2026-10-16): this was not an IP block.** It was the TLS fingerprint of this host's `.venv` (uv's standalone CPython 3.11.16 with OpenSSL 3.5.9).
+     - The prod image (Debian python:3.11-slim, OpenSSL 3.5.7) gets 200 from the same IP with the same code.
+     - So the 0 BestJobs results in both of my runs say nothing about prod.
+     - Future live checks run in a throwaway prod-image container (see `.agents/README.md`, "Live checks against job boards"), and only with the lead's OK.
    - Of 57 candidates, 36 were new to both sets. Most were off-target, because the boards match keywords loosely ("c#" returns truck drivers).
    - Added:
      - `heldout-ejobs-084`: dotnet, senior.
@@ -167,15 +170,32 @@ This agent's work is complete. Nothing is half-done, and every change is in `eva
 - update the README counts and `tests/test_heldout.py`;
 - tell gosha-rank to rerun.
 
-The thin families (mob 5, dotnet 5, emb 6) stay thin. The boards have few such postings, and BestJobs currently refuses this IP. Only the owner or lead can decide on another collection.
+The thin families (mob 5, dotnet 5, emb 6) stay thin. The boards have few such postings, and my two runs got no BestJobs postings because of the venv's TLS fingerprint. A collection run in the prod image might add some BestJobs postings; that is the lead's call.
 
 Optional, not owned by me: mention the held-out set in `docs/EVAL.md`.
 
 ### How to verify (current)
 - Load check: **`261 10`**. Grade-2 counts: h-ml 15, h-data-ro 23, h-ops 17, h-qa-ro 8, h-fe 9, h-mob 5, h-emb 6, h-dotnet 5, h-java 7, h-cs-ro 20.
-- `.venv/bin/python -m pytest -q tests/test_heldout.py` gives 7 passed. The full suite (with the LD_PRELOAD from the README) gave **1268 passed, 9 skipped** on 2026-10-16 at about 13:10 UTC.
+- `.venv/bin/python -m pytest -q tests/test_heldout.py` gives 9 passed. The full suite (with the LD_PRELOAD from the README) gave **1268 passed, 9 skipped** on 2026-10-16 at about 13:10 UTC.
 
 ## For the owner's human label pass (added by the lead, 2026-10-16)
-- "Exactly 2 years required" is labelled inconsistently: main set 6 junior / 1 mid, held-out 7 mid / 0 junior.
-  Product rule (filters + seniority) is 2 years = junior. Decide one labelling rule and apply it to both sets
-  in one pass, without looking at ranker scores. Agents must not relabel this.
+- ~~"Exactly 2 years required" is labelled inconsistently~~ **RESOLVED by the owner's decision, applied by gosha-label on 2026-10-16. See "Two-year rule applied" below.**
+
+## Two-year rule applied (owner's decision, 2026-10-16), uncommitted
+Rule: when the headline requirement is exactly 2 years, or "2+ years", the level is `junior` (the product's line, `filters.JUNIOR_MAX_YEARS`). A range such as 2–4 or 2–3, or a posting that is mid or senior for another reason, is unchanged. Applied to both sets in one pass, by reading the text. No ranker output was looked at.
+
+- **Changed (9 postings)**, each with the note `level: 2-year rule (owner 2026-10-16)`, appended to any existing note:
+  - main `eval/postings.jsonl`: `ejobs-027` (any → junior; "minim 2 ani" in pharma promotion);
+  - held-out, mid → junior: `heldout-ejobs-002`, `heldout-ejobs-005`, `heldout-ejobs-006`, `heldout-ejobs-034`, `heldout-ejobs-045`, `heldout-ejobs-052`, `heldout-ejobs-059`, `heldout-jobicy-014`.
+- **Considered and left (the level does not rest on the 2 years):**
+  - main: `bestjobs-032` (2–4 years, mid), `bestjobs-023` (2–5, junior) and `bestjobs-035` (2–3, junior). The two ranges labelled junior are a separate inconsistency, outside this decision, for the owner. Also `ejobs-057` (3+ years, QA lead).
+  - main, already junior: `bestjobs-050`, `bestjobs-052`, `ejobs-026`, `ejobs-031` and `ejobs-039`.
+  - main, "2 years" not about work experience: `ejobs-015` and `bestjobs-042`.
+  - held-out: `heldout-ejobs-032` (also 4+ years of SQL), `heldout-ejobs-086` ("Mid Level" title), `heldout-ejobs-074` (Team Leader) and `heldout-bestjobs-045` (2–3 years).
+- **Grades:** the full grade matrix (24 personas × both sets) is identical before and after, because `junior`, `any` and `mid` are all in `APPLICABLE_LEVELS`. Nothing to recompute.
+- **Docs:**
+  - `eval/heldout/README.md`: the rule, level counts (junior 36 → 44, mid 71 → 63), the lang × level table, the note count (205) and a "Two-year rule applied" section.
+  - `docs/EVAL.md` (at the lead's request): the rule in Data → Labels, held-out 258 → 261, the limitation bullet marked resolved, and "What to try next" trimmed.
+- **Test:** `tests/test_heldout.py::test_two_year_rule_relabels_are_junior[main|heldout]`. The held-out total is unchanged at 261.
+- **CI eval gate:** `eval/results/*.json` and `eval/results/heldout/*.json` now fail `--check` with "regenerate the baseline", because `postings_sha256` changed. These files are gosha-rank's. Checked offline: TF-IDF main gives nDCG@10 0.6257, identical to the stored baseline, so only the fingerprint moved.
+- Full suite: **1327 passed, 9 skipped** (2026-10-16).

@@ -140,10 +140,20 @@ rules are the ones in `gosha/evaluation.py` and `docs/EVAL.md`.
   "Senior Platform Engineer" filed as entry level, "Technical Analyst I"
   filed as senior.
   - `intern`: internship, working student, stagiu or practică.
+  - **Years, as the product reads them** (owner's decisions of
+    2026-10-16; the product's lines are `filters.JUNIOR_MAX_YEARS` = 2
+    and `seniority.SENIOR_MIN_YEARS` = 5):
+    - a range counts as its lower bound, so 2–4 years means 2;
+    - up to 2 years (including "2+") is `junior`;
+    - 3–4 years is `mid`;
+    - 5 or more years is `senior`.
+
+    The years apply only when nothing else sets the level: a title, a
+    lead role, or "preferred only" (which makes it `any`).
   - `junior`: junior, entry level, absolvent, graduate programme or
-    "early-career" in the title or text, or 0–2 years asked
-    (1–2 or 0–3 also count).
-  - `mid`: 2–4 years asked (3–5 and 4+ included), a "Medior", "Middle" or
+    "early-career" in the title or text, or at most 2 years asked
+    (by the rule above).
+  - `mid`: 3–4 years asked (by the rule above), a "Medior", "Middle" or
     "Mid" title, or experience demanded without a number ("experienced",
     "solid experience", "cu experiență").
   - `senior`: 5+ years asked, or a senior, lead, staff, principal,
@@ -159,7 +169,7 @@ rules are the ones in `gosha/evaluation.py` and `docs/EVAL.md`.
   requirements). Several Hipo, Vodafone and PPC postings open with a
   Romanian company paragraph and then describe the role in English; those
   are `en`.
-- **note**: present on 197 postings. It records the evidence behind the
+- **note**: present on 205 postings. It records the evidence behind the
   level (for example "3-5 years") and any ambiguity. Three kinds of note
   matter most for a human review:
   - **"description is company boilerplate"** (5 postings: Booking
@@ -198,14 +208,50 @@ applicable.
 
 A person's review is still the open item.
 
+### Two-year rule applied (2026-10-16, owner's decision)
+
+Until this date, this set labelled "exactly 2 years" or "2+ years" as
+`mid`, and the main set labelled it `junior`. The owner settled it the
+product's way: `junior`.
+
+- Changed from `mid` to `junior`, each with the note "level: 2-year rule
+  (owner 2026-10-16)":
+  - `heldout-ejobs-002`, `-005`, `-006`, `-034`, `-045`, `-052` and
+    `-059`;
+  - `heldout-jobicy-014`.
+- Left as they are, because the level does not rest on the 2 years:
+  - `heldout-ejobs-032`: it also asks for 4+ years of SQL;
+  - `heldout-ejobs-086`: its title says "Mid Level";
+  - `heldout-ejobs-074`: Team Leader;
+  - `heldout-bestjobs-045`: a 2–3 year range (changed by the range rule
+    below).
+- No grade changed, because `mid` and `junior` both count as applicable.
+- No ranker output was looked at.
+
+### Range rule applied (2026-10-16, owner's decision)
+
+A range of years is labelled by its lower bound, as the filters read it.
+
+- Changed, with the note "level: range lower-bound rule (owner
+  2026-10-16)": `heldout-bestjobs-045` (2–3 years), from `mid` to
+  `junior`.
+- Left as they are:
+  - every other range in this set already matched its lower bound;
+  - `heldout-ejobs-016`: its "Middle" title sets the level;
+  - `heldout-bestjobs-080`: its 1–3 years are "preferred" only, so it
+    stays `any`.
+- No grade changed.
+- No ranker output was looked at.
+
+
 ### Counts
 
 | family | postings | | level | postings | | lang / source | postings |
 |---|---|---|---|---|---|---|---|
 | `py` | 12 | | `intern` | 17 | | `en` | 183 |
-| `java` | 13 | | `junior` | 36 | | `ro` | 78 (29.9%) |
+| `java` | 13 | | `junior` | 45 | | `ro` | 78 (29.9%) |
 | `dotnet` | 11 | | `any` | 63 | | bestjobs | 102 |
-| `be` | 20 | | `mid` | 71 | | ejobs | 86 |
+| `be` | 20 | | `mid` | 62 | | ejobs | 86 |
 | `fe` | 14 | | `senior` | 74 | | hipo | 51 |
 | `fs` | 29 | | | | | jobicy | 19 |
 | `mob` | 8 | | | | | remoteok | 3 |
@@ -227,8 +273,8 @@ Language by level:
 
 | | intern | junior | any | mid | senior |
 |---|---|---|---|---|---|
-| en | 15 | 21 | 44 | 42 | 61 |
-| ro | 2 | 15 | 19 | 29 | 13 |
+| en | 15 | 23 | 44 | 40 | 61 |
+| ro | 2 | 22 | 19 | 22 | 13 |
 
 ## Personas (`personas.jsonl`, 10)
 

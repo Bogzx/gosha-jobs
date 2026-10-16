@@ -111,3 +111,38 @@ def test_every_persona_has_enough_relevant_postings(personas):
     for persona in people:
         assert persona.family in ev.ADJACENT, persona.id
         assert sum(ev.grade(persona.family, p) == 2 for p in postings) >= 4, persona.id
+
+
+TWO_YEAR_NOTE = "level: 2-year rule (owner 2026-10-16)"
+TWO_YEAR_RELABELS = {
+    ROOT / "eval" / "postings.jsonl": {"ejobs-027"},
+    POSTINGS: {
+        "heldout-ejobs-002", "heldout-ejobs-005", "heldout-ejobs-006", "heldout-ejobs-034",
+        "heldout-ejobs-045", "heldout-ejobs-052", "heldout-ejobs-059", "heldout-jobicy-014",
+    },
+}
+
+
+@pytest.mark.parametrize("path", list(TWO_YEAR_RELABELS), ids=["main", "heldout"])
+def test_two_year_rule_relabels_are_junior(path):
+    # Owner's decision: exactly 2 years (or "2+ years" as the headline) is junior, in both sets.
+    noted = {r["id"]: r["level"] for r in rows(path) if TWO_YEAR_NOTE in r.get("note", "")}
+    assert set(noted) == TWO_YEAR_RELABELS[path]
+    assert set(noted.values()) == {"junior"}
+
+
+RANGE_NOTE = "level: range lower-bound rule (owner 2026-10-16)"
+RANGE_RELABELS = {
+    ROOT / "eval" / "postings.jsonl": {
+        "bestjobs-032": "junior", "bestjobs-109": "junior", "bestjobs-101": "mid",
+        "ejobs-032": "mid", "bestjobs-087": "senior",
+    },
+    POSTINGS: {"heldout-bestjobs-045": "junior"},
+}
+
+
+@pytest.mark.parametrize("path", list(RANGE_RELABELS), ids=["main", "heldout"])
+def test_range_rule_relabels_use_the_lower_bound(path):
+    # Owner's decision: a range of years is labelled by its lower bound, as the filters read it.
+    noted = {r["id"]: r["level"] for r in rows(path) if RANGE_NOTE in r.get("note", "")}
+    assert noted == RANGE_RELABELS[path]

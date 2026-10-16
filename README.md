@@ -34,7 +34,7 @@ The best roles get 200 applicants in the first 48 hours. GOSHA makes sure you're
 |  |  |
 |---|---|
 | 🧪 **Try it without an account** | [`/demo`](https://gosha.bogdantruta.com/demo) ranks today's postings for one of four sample CVs (one written in Romanian) with the same code as the signed-in feed, "why this matched" included. Only a persona id goes to the server; nothing is stored ([`gosha/api/demo.py`](gosha/api/demo.py)). |
-| 🎯 **CV-matched feed** | Every posting gets a match score from sentence-embedding similarity against *your* CV — no keyword setup needed. "Matches your python, react, docker" tells you why. |
+| 🎯 **CV-matched feed** | Every posting is ranked against *your* CV on meaning (sentence embeddings) and on the skills it names (TF-IDF), with seniority taken into account: a student sees internships before Senior roles. No keyword setup needed. "Matches your python, react, docker" tells you why. |
 | 🔭 **8 job boards, one feed** | Indeed, LinkedIn, Glassdoor (via [JobSpy](https://github.com/speedyapply/JobSpy)) plus native adapters for **eJobs.ro**, **BestJobs.ro**, **Hipo.ro**, **RemoteOK** and **[Jobicy](https://jobicy.com)** (remote jobs open to Europe). Cross-board duplicates collapse into one card. |
 | 📬 **Discord alerts** | The bot scrapes around the clock and DMs you fresh matches. Saved searches are managed on the web — zero slash-command setup (slash commands still work too). |
 | ✅ **Self-filling tracker** | Click **Apply** and the job is already in your tracker. Move it through applied → screen → interview → offer, with notes. |
@@ -88,9 +88,9 @@ flowchart LR
 
 Three processes share one database — the bot (Discord + scheduler), the API (FastAPI for the SPA), and Caddy (static SPA + TLS). The web app never talks to the bot directly: the database, including an `outbox` table for DM requests, is the only contract. Full layering details in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-**The matching engine:** jobs and CVs are embedded with `all-mpnet-base-v2` (sentence-transformers). Your feed is a cosine ranking of recent jobs against your CV vector, nudged by your 👍/👎 history (a Rocchio update). At this scale numpy brute force beats a vector database — embeddings live as `float32` bytes in regular columns. Discord DMs use the same CV vector: each saved search's query is blended with it, so the search decides what is relevant and your CV decides between postings that fit it equally well (users without a CV are matched on the search alone).
+**The matching engine:** jobs and CVs are embedded with `all-mpnet-base-v2` (sentence-transformers). Your feed ranks recent jobs on two signals against your CV: the embedding cosine and TF-IDF keyword overlap, each standardised over the candidate set, minus a seniority penalty ([`gosha/seniority.py`](gosha/seniority.py), the same level detector as the Discord filter). Your 👍/👎 history nudges the CV vector (a Rocchio update), and the feed shows what your active searches would take on location and level ("Show all" lifts that). At this scale numpy brute force beats a vector database — embeddings live as `float32` bytes in regular columns. Discord DMs use the same CV vector: each saved search's query is blended with it, so the search decides what is relevant and your CV decides between postings that fit it equally well (users without a CV are matched on the search alone).
 
-**How well it ranks — measured, not assumed:** [docs/EVAL.md](docs/EVAL.md) scores the ranking on 202 real postings against 14 sample CVs. The honest summary: on that set the embeddings do *not* beat a TF-IDF keyword baseline (nDCG@10 0.546 vs 0.626), they cannot see seniority, and the multilingual model once planned as an upgrade is worse still; the 👍/👎 update does help (+0.10 nDCG@10 after one round). The eval set the current Discord thresholds and is re-run in CI on every ranking change.
+**How well it ranks — measured, not assumed:** [docs/EVAL.md](docs/EVAL.md) scores the ranking on 202 real postings × 14 sample CVs and on an independent held-out set (261 × 10). The shipped ranking reaches nDCG@10 0.759 on the main set, against 0.549 for the old pure-embedding feed, and 0.604 against 0.535 on the held-out set. The held-out gain is the honest one: the ranking was designed on the main set. The multilingual model once planned as an upgrade is worse, and 👍/👎 feedback helps modestly. The eval set the current Discord thresholds, and CI re-runs it on both sets for every ranking change.
 
 ## Tech stack
 
@@ -203,7 +203,7 @@ gosha/
 ├── scrapers/      # one adapter per job board (+ scrape_health.py: yield alerts)
 ├── bot.py         # Discord adapter (slash commands)
 ├── pipeline.py    # scrape → match → deliver cycle
-├── recommend.py   # CV-similarity feed ranking
+├── recommend.py   # feed ranking: embedding + keyword + seniority, search scope
 └── llm.py         # DeepSeek / OpenRouter / Gemini provider port
 web/               # React SPA (Vite + Tailwind)
 tests/             # pytest suite (650+ tests)

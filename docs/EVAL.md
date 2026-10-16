@@ -79,7 +79,41 @@ with the CV by `blend_with_user_vector`, feedback by
   14 are written in Romanian. The people are invented.
 - **Labels.** Each posting carries one or more role families and a level
   (`intern`, `junior`, `any`, `mid`, `senior`), assigned by reading its
-  title and opening lines. A persona's grade follows from a rule in
+  title and opening lines.
+
+  **Two-year rule (owner's decision, 2026-10-16).** A posting whose
+  headline requirement is exactly 2 years, or "2+ years", is `junior`.
+  This is the product's line (`filters.JUNIOR_MAX_YEARS`). A posting that
+  is mid or senior for another reason (its title, or more years asked
+  elsewhere) keeps its level.
+  - Applied to both sets in one pass, without looking at any ranker
+    output: 1 main posting (`ejobs-027`, any → junior) and 8 held-out
+    postings (mid → junior).
+  - Each changed posting carries a `note` saying so.
+  - No grade changed: `junior`, `any` and `mid` are all levels a
+    student can apply to.
+
+  **Range rule (owner's decision, 2026-10-16).** A range of years
+  ("2–4 years") is labelled by its lower bound, as the filters read it:
+  up to 2 is `junior`, 3–4 is `mid`, and 5 or more is `senior`
+  (`seniority.SENIOR_MIN_YEARS`). A title, a lead role or a
+  "preferred only" requirement still takes precedence.
+  - Applied to both sets in one pass, without looking at any ranker
+    output. Each changed posting carries a `note` saying so.
+  - Main set (5 postings):
+    - `bestjobs-032`: 2–4 years, mid → junior;
+    - `bestjobs-109`: 1–2 years, any → junior;
+    - `bestjobs-101`: 3–5 years, any → mid;
+    - `ejobs-032`: 3–5 years, senior → mid;
+    - `bestjobs-087`: 5–6 years, any → senior.
+  - Held-out set: `heldout-bestjobs-045` (2–3 years), mid → junior.
+  - **Two main postings change grades:**
+    - `bestjobs-087`: 2 → 1 for `fe` and `fe-ro`, and 1 → 0 for `mob`;
+    - `ejobs-032`: 1 → 2 for `acc-ro`.
+
+    Main-set results computed before this date used the old labels.
+
+  A persona's grade follows from a rule in
   `gosha/evaluation.py`:
   - **2** = same family, at a level a student can apply to;
   - **1** = same family but senior, or an adjacent family (`ADJACENT`);
@@ -90,7 +124,7 @@ with the CV by `blend_with_user_vector`, feedback by
   plain JSON, one posting per line, so a human pass is cheap and is the
   most valuable next step.
 
-- **Held-out set** (`eval/heldout/`, see its README): 258 postings
+- **Held-out set** (`eval/heldout/`, see its README): 261 postings
   collected on 2026-10-16 and 10 personas, sharing no posting or persona
   with the main set. Ranking choices are made on the main set and only
   reported here; it is never tuned on.
@@ -122,9 +156,9 @@ MRR and P@10 on grade-2 postings. Results:
 
 | Set | Ranking | nDCG@10 (95% CI) | R-prec | MRR | P@10 |
 |---|---|---|---|---|---|
-| main (202 × 14) | **production** (hybrid + seniority) | **0.750** (0.639–0.851) | 0.533 | 0.801 | 0.429 |
-| main | embedding cosine only (old feed) | 0.546 (0.445–0.645) | 0.282 | 0.526 | 0.300 |
-| main | TF-IDF only | 0.626 (0.521–0.727) | 0.417 | 0.664 | 0.357 |
+| main (202 × 14) | **production** (hybrid + seniority) | **0.759** (0.651–0.858) | 0.547 | 0.801 | 0.429 |
+| main | embedding cosine only (old feed) | 0.549 (0.449–0.647) | 0.277 | 0.526 | 0.300 |
+| main | TF-IDF only | 0.638 (0.527–0.740) | 0.415 | 0.700 | 0.357 |
 | held-out (261 × 10) | **production** | **0.604** (0.458–0.711) | 0.362 | 0.804 | 0.400 |
 | held-out | embedding cosine only | 0.535 (0.415–0.642) | 0.351 | 0.709 | 0.320 |
 | held-out | TF-IDF only | 0.508 (0.378–0.622) | 0.301 | 0.565 | 0.300 |
@@ -132,7 +166,7 @@ MRR and P@10 on grade-2 postings. Results:
 What this says, in order of confidence:
 
 1. **The production ranking beats both of its parts on both sets.** The
-   gain over the old cosine feed is +0.20 on the main set and +0.07 on
+   gain over the old cosine feed is +0.21 on the main set and +0.07 on
    the held-out set.
 2. **Read the held-out gain as the real one.** The hybrid, its weights
    and the seniority rules were designed while looking at the main set;
@@ -141,7 +175,7 @@ What this says, in order of confidence:
    held-out number is itself slightly optimistic for the seniority part
    (see the disclosure under Data).
 3. **"TF-IDF beats the embeddings" did not replicate.** On the main set
-   TF-IDF alone was ahead of the cosine (0.626 vs 0.546), which is what
+   TF-IDF alone was ahead of the cosine (0.638 vs 0.549), which is what
    started the hybrid; on the held-out set it is behind (0.508 vs 0.535).
    Neither signal is reliably better alone, which is the case for mixing
    them, not for either one.
@@ -158,6 +192,8 @@ held-out reported, never tuned on, with the size it had then):
 | + z-scores clipped at ±3 (chosen a priori: a sparse keyword score can sit √N SD out, ~44 at 2,000 postings) | 0.743 | 0.624 (258) |
 | + one seniority detector shared with the Discord level filter (`gosha/filters.py`) | 0.750 | 0.617 (258) |
 | + final `required_years`, held-out grown to 261 | 0.750 | 0.604 (261) |
+| labels: owner's two-year rule (9 postings, no grade changed) | 0.750 | 0.604 (261) |
+| labels: ranges by their lower bound (7 postings; 2 main postings change grades) | 0.759 | 0.604 (261) |
 
 Encoders tried inside the hybrid (main set only, an earlier sweep
 script, so comparable only with each other): `bge-small-en-v1.5` 0.687,
@@ -172,10 +208,10 @@ top 10, nDCG@10 on what is still unrated):
 
 | like / dislike weight | main: before → after (Δ 95% CI) | held-out: before → after (Δ 95% CI) |
 |---|---|---|
-| 0.15 / 0.15 | 0.348 → 0.405 (+0.010 … +0.118) | 0.352 → 0.376 (−0.005 … +0.058) |
-| **0.3 / 0.3 (production)** | 0.348 → 0.402 (−0.013 … +0.126) | 0.352 → 0.418 (+0.003 … +0.132) |
-| 0.5 / 0.5 | 0.348 → 0.413 (−0.005 … +0.138) | 0.352 → 0.471 (+0.018 … +0.247) |
-| 0.3 / 0 (likes only) | 0.348 → 0.364 (−0.031 … +0.060) | 0.352 → 0.344 (−0.060 … +0.038) |
+| 0.15 / 0.15 | 0.352 → 0.411 (+0.010 … +0.121) | 0.352 → 0.376 (−0.005 … +0.058) |
+| **0.3 / 0.3 (production)** | 0.352 → 0.407 (−0.013 … +0.129) | 0.352 → 0.418 (+0.003 … +0.132) |
+| 0.5 / 0.5 | 0.352 → 0.419 (−0.005 … +0.142) | 0.352 → 0.471 (+0.018 … +0.247) |
+| 0.3 / 0 (likes only) | 0.352 → 0.371 (−0.028 … +0.064) | 0.352 → 0.344 (−0.060 … +0.038) |
 
 Feedback still helps, by less than under the pure cosine (+0.10): the
 update moves only the embedding half of the score. The main set does not
@@ -184,7 +220,8 @@ held-out column would be tuning on it). Likes alone (0.3 / 0) show no
 gain on either set.
 
 **Discord delivery** is unchanged by the feed ranking (it scores the
-blended cosine, see below); the main-set numbers below still hold. On the
+blended cosine, see below); the main-set numbers below still hold (the
+label passes moved them by at most 0.002). On the
 held-out set, at the production thresholds: with a CV (0.43) recall 0.852,
 off-target passed 0.293; search only (0.42) recall 0.826, off-target
 0.345.
@@ -315,23 +352,19 @@ and it double-counted feedback the vector already carried.
   is untested; a CV that states experience only as date ranges
   ("2016 – present") reads as junior.
 - **One snapshot of the boards, one day.**
-- **The two sets label "exactly 2 years required" differently.** Among
-  postings whose level comes from the years they ask for, those asking
-  for exactly 2 are labelled 6 junior / 1 mid in the main set and 7 mid /
-  0 junior in the held-out set. The product rule is 2 = junior (the
-  Discord junior filter, `filters.JUNIOR_MAX_YEARS`, and the feed's
-  seniority both use it), so the held-out set scores those 7 as level
-  errors. Neither set has been relabelled; this is listed for the human
-  label pass.
+- **"Exactly 2 years required", and ranges of years, were labelled
+  inconsistently** until 2026-10-16 (main set junior, held-out set mid).
+  Both sets now follow the owner's two-year and range rules (see
+  Data). Results computed before
+  that date counted those held-out postings as level errors.
 - **The held-out set has seen a little tuning.** Three held-out postings
   shaped `required_years` rules (see Data), so held-out numbers that
   involve seniority are slightly optimistic.
 
 ## What to try next (not done here)
 
-- **A human pass over the labels** (including the "exactly 2 years"
-  conflict above), then more personas, with mid and senior CVs among
-  them.
+- **A human pass over the labels**, then more personas, with mid and
+  senior CVs among them.
 - **Feedback weights through the hybrid.** One round now moves the rest
   of the ranking less than it did; whether stronger weights help needs
   more personas than the main set has.
