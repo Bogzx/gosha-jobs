@@ -49,6 +49,53 @@ def strip_invisible(text: str) -> str:
     """`text` without characters that render as nothing (see _INVISIBLE_RE)."""
     return _INVISIBLE_RE.sub("", text)
 
+
+# Requisition codes employers put at either end of a title: "Trainee Java
+# Developer IRC293492", "ID248805 Junior QA Engineer", "... (REQ#43448)",
+# "... - JobID-0296", "... | REF#294305", "(ID 593)". 54 of 7,666 stored
+# LinkedIn titles had one on 2026-10-16, mostly trainee and junior roles;
+# DMs showed them and the dedup key kept them apart from other boards'
+# copies. Only a known prefix followed by 3+ digits, only at an end.
+_CODE = r"(?:req(?:uisition)?(?:\s*id)?|ref|job\s*-?\s*id|id|irc|jr)\s*[#:._-]?\s*\d{3,}"
+_TRAILING_CODE_RE = re.compile(
+    rf"\s*(?:[-–—|,:]\s*)?[(\[]?\s*(?<![A-Za-z0-9])(?:{_CODE})\s*[)\]]?\s*$", re.IGNORECASE,
+)
+_LEADING_CODE_RE = re.compile(
+    rf"^\s*[(\[]?(?:{_CODE})(?![A-Za-z0-9])[)\]]?\s*(?:[-–—|,:]\s*)?(?=\S)", re.IGNORECASE,
+)
+
+
+# Job sites that repost other employers' ads under their own name (LinkedIn:
+# Undelucram.ro, Hipo.ro; Hipo's own "Entry Level Jobs in TOP Companies -
+# Hipo.ro" cards). The DM named the job site as the employer, and dedup
+# could not pair the repost with the employer's own ad.
+_REPOSTER_RE = re.compile(r"undelucram|\bhipo\s*\.?\s*ro\b", re.IGNORECASE)
+# "Undelucram.ro on behalf of: **Continental Anvelope Romania**"
+_ON_BEHALF_RE = re.compile(
+    r"on behalf of:\s*(?:\*\*\s*([^*\n]{2,80}?)\s*\*\*|([^*\n]{2,80}?)\s*(?:\n|$))",
+    re.IGNORECASE,
+)
+
+
+def is_reposter(company: str | None) -> bool:
+    """A job site's name in the employer field."""
+    return bool(_REPOSTER_RE.search(company or ""))
+
+
+def reposter_client(description: str | None) -> str | None:
+    """The employer a reposted ad names as its client ("on behalf of: X")."""
+    match = _ON_BEHALF_RE.search((description or "")[:500])
+    if not match:
+        return None
+    return (match.group(1) or match.group(2) or "").strip(" .,:-") or None
+
+
+def strip_title_codes(title: str) -> str:
+    """`title` without a requisition code at its start or end; unchanged if
+    nothing else would be left."""
+    stripped = _LEADING_CODE_RE.sub("", _TRAILING_CODE_RE.sub("", title)).strip()
+    return stripped or title
+
 # Hosts that refused a plain request (403) and answered one made with a
 # browser's TLS fingerprint. Process-wide, so the refused request is paid
 # once per host and process, not once per search.
@@ -205,6 +252,14 @@ class RawJob:
             value = getattr(self, name)
             if isinstance(value, str):
                 setattr(self, name, strip_invisible(value).strip())
+        self.title = strip_title_codes(self.title)
+        # Hipo's reposted cards: "Tech I Engineering Intern I @ Vertiv".
+        if is_reposter(self.company) and " @ " in self.title:
+            title, _, employer = self.title.rpartition(" @ ")
+            if title.strip() and employer.strip():
+                self.title, self.company = title.strip(), employer.strip()
+        elif is_reposter(self.company):
+            self.company = reposter_client(self.description) or self.company
 
     def to_record(self) -> dict[str, Any]:
         """Column names match what gosha.pipeline.upsert_jobs reads."""

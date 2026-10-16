@@ -499,3 +499,22 @@ async def test_fallback_rows_go_through_the_keywords_level_filter(monkeypatch):
     df = await scraper.scrape_jobs_raw(_Tunnels(), "junior java", "bucuresti", 14, ["indeed"])
     kept = filter_dataframe(df, "junior java")
     assert sorted(kept["job_url"]) == ["https://in/1", "https://in/2"]
+
+
+async def test_linkedin_dates_are_marked_as_refresh_dates(monkeypatch):
+    """LinkedIn's card date is the repost date: on 2026-10-16, 11 of the 109
+    active Romanian LinkedIn rows were dated on average 76 days after we first
+    saw them. Indeed and Glassdoor showed none, so theirs stay posting dates."""
+    monkeypatch.setattr(scraper, "DELAY_BETWEEN_SEARCHES", 0)
+    monkeypatch.setattr(
+        scraper, "scrape_jobs",
+        lambda **kw: pd.DataFrame([{
+            "job_url": f"https://x/{kw['site_name'][0]}", "site": kw["site_name"][0],
+            "date_posted": "2026-10-10",
+        }]),
+    )
+    df = await scraper.scrape_jobs_raw(
+        _Tunnels(), "python developer", "cluj", 14, ["indeed", "linkedin", "glassdoor"],
+    )
+    flags = dict(zip(df["site"], df["date_posted_is_refresh"]))
+    assert flags == {"linkedin": True, "indeed": False, "glassdoor": False}

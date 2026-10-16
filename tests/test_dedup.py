@@ -351,3 +351,106 @@ async def test_multi_city_and_remote_copies_group(patched_db, session):
     assert await _group_ids(session, multi, iasi, remote, cluj) == [
         multi.id, multi.id, remote.id, remote.id,
     ]
+
+
+# ── The same posting DM'd twice (prod, 2026-10-12..15) ──────────────────
+# 10 of the 130 DMs sent were a posting the user already had from another
+# board, under another spelling of the employer.
+
+
+@pytest.mark.parametrize(
+    ("title", "a", "b"),
+    [
+        ("Internship - Local IT - Lugoj", "FORVIA HELLA", "HELLA"),
+        ("IT SACM Coordinator - Internship (1-Year Fixed-Term Contract, with Possibility of Extension)",
+         "DRÄXLMAIER Group", "DRÄXLMAIER"),
+        ("ExStream Developer Internship",
+         "Societe Generale Global Solution Centre Romania", "Société Générale"),
+        ("Network Engineer with German - Junior Consultant", "MHP – A Porsche Company", "MHP"),
+        ("Java Developer", "Endava Holding", "Endava"),
+    ],
+)
+def test_normalize_key_reduces_groups_parents_and_local_centres(title, a, b):
+    assert dedup.normalize_key(title, a) == dedup.normalize_key(title, b)
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("Banca Transilvania", "Transilvania Bank"),
+        ("Bosch", "Boschung"),
+        ("IT Services", "Group"),
+    ],
+)
+def test_normalize_key_keeps_different_employers_apart(a, b):
+    assert dedup.normalize_key("Java Developer", a) != dedup.normalize_key("Java Developer", b)
+
+
+def test_normalize_key_keeps_a_name_made_only_of_noise_words():
+    # Nothing but "group"/"services" left to strip: the name itself is kept.
+    assert dedup.normalize_key("Java Developer", "Global Services Group") is not None
+
+
+async def test_an_employers_longer_local_name_groups_with_the_brand(patched_db, session):
+    """Undelucram.ro reposts for "Continental Anvelope Romania" (the name
+    gosha.scraper takes from "on behalf of:"); LinkedIn has Continental's own
+    copy. Same title, same city."""
+    own = Job(url="https://linkedin.com/jobs/view/7622", title="Internship IT (8h) - Tires",
+              company="Continental", location="Timişoara, Timiş, Romania", source="linkedin")
+    repost = Job(url="https://linkedin.com/jobs/view/7621", title="Internship IT (8h) - Tires",
+                 company="Continental Anvelope Romania", location="Timisoara Metropolitan Area",
+                 source="linkedin")
+    other_city = Job(url="https://linkedin.com/jobs/view/9", title="Internship IT (8h) - Tires",
+                     company="Continental", location="Sibiu, Romania", source="linkedin")
+    session.add_all([own, repost, other_city])
+    await session.commit()
+    assert await dedup.assign_dedup_groups() == 1
+    assert await _group_ids(session, own, repost, other_city) == [own.id, own.id, None]
+
+
+async def test_reposter_joins_the_employer_its_posting_names(patched_db, session):
+    """Hipo.ro reposts AUMOVIO's internship on LinkedIn under its own name;
+    the description names AUMOVIO. A reposter posting that names nobody else
+    in the group stays on its own."""
+    own = Job(url="https://linkedin.com/jobs/view/7921",
+              title="Hardware Test Engineer – Internship (Iasi)", company="AUMOVIO",
+              location="Iași, Braşov, Romania", source="linkedin")
+    repost = Job(url="https://linkedin.com/jobs/view/8011",
+                 title="Hardware Test Engineer - Internship (Iasi)", company="Hipo.ro",
+                 location="Ilfov, Romania", source="linkedin",
+                 description="**Company Description** Since its spin-off in September 2025 "
+                             "AUMOVIO continues the business of the former Continental Automotive.")
+    unnamed = Job(url="https://linkedin.com/jobs/view/7437",
+                  title="Hardware Test Engineer - Internship (Iasi)", company="Hipo.ro",
+                  location="Iasi, Romania", source="linkedin",
+                  description="Peste 100 de ani de incredere si traditie.")
+    session.add_all([own, repost, unnamed])
+    await session.commit()
+    assert await dedup.assign_dedup_groups() == 1
+    assert await _group_ids(session, own, repost, unnamed) == [own.id, own.id, None]
+
+
+async def test_two_brands_sharing_a_word_are_not_merged(patched_db, session):
+    a = Job(url="https://x/a", title="Data Analyst", company="Banca Transilvania",
+            location="Cluj-Napoca, Romania", source="ejobs")
+    b = Job(url="https://x/b", title="Data Analyst", company="Transilvania Bank",
+            location="Cluj-Napoca, Romania", source="linkedin")
+    session.add_all([a, b])
+    await session.commit()
+    assert await dedup.assign_dedup_groups() == 0
+
+
+def test_same_posting_matches_what_grouping_matches():
+    """For gosha.pipeline's check of a user's expired deliveries, which
+    compared normalize_key only."""
+    t = "Internship IT (8h) - Tires"
+    assert dedup.same_posting(t, "Continental Anvelope Romania", t, "Continental")
+    assert dedup.same_posting("Internship - Local IT - Lugoj", "FORVIA HELLA",
+                              "Internship - Local IT - Lugoj", "HELLA")
+    assert not dedup.same_posting(t, "Continental", "Data Analyst", "Continental")
+    assert not dedup.same_posting("Data Analyst", "Banca Transilvania", "Data Analyst", "Transilvania Bank")
+    assert not dedup.same_posting("Data Analyst", "Unknown", "Data Analyst", "Unknown")
+    # A reposter with its text: matched when the text names the employer.
+    assert dedup.same_posting("Hardware Test Engineer", "Hipo.ro", "Hardware Test Engineer", "AUMOVIO",
+                              text_a="Since its spin-off in September 2025 AUMOVIO continues")
+    assert not dedup.same_posting("Hardware Test Engineer", "Hipo.ro", "Hardware Test Engineer", "AUMOVIO")

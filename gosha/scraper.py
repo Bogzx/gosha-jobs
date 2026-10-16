@@ -20,7 +20,7 @@ import pandas as pd
 from jobspy import scrape_jobs
 
 from gosha.filters import city_only, expand_keyword, normalize_location
-from gosha.scrapers.base import strip_invisible
+from gosha.scrapers.base import is_reposter, reposter_client, strip_invisible, strip_title_codes
 
 if TYPE_CHECKING:
     from gosha.ssh_tunnels import SSHTunnelManager
@@ -485,6 +485,25 @@ async def scrape_jobs_raw(
             merged[column] = merged[column].map(
                 lambda v: strip_invisible(v).strip() if isinstance(v, str) else v
             )
+    if "title" in merged.columns:
+        merged["title"] = merged["title"].map(
+            lambda v: strip_title_codes(v) if isinstance(v, str) else v
+        )
+    # LinkedIn reposts by job sites name the employer "on behalf of: X".
+    if "company" in merged.columns and "description" in merged.columns:
+        reposts = merged["company"].map(lambda v: isinstance(v, str) and is_reposter(v))
+        if reposts.any():
+            clients = merged.loc[reposts, "description"].map(reposter_client)
+            merged.loc[reposts, "company"] = clients.where(
+                clients.notna(), merged.loc[reposts, "company"],
+            )
+
+    # LinkedIn's card date is the repost date: on 2026-10-16, 11 of the 109
+    # active Romanian LinkedIn rows were dated on average 76 days after we
+    # first saw them. Marked as a refresh date (RawJob.posted_at_is_refresh),
+    # so the pipeline keeps the earliest. Indeed and Glassdoor showed none.
+    if "site" in merged.columns:
+        merged["date_posted_is_refresh"] = merged["site"].eq("linkedin")
 
     if "job_level" in merged.columns:
         merged["experience_level"] = merged["job_level"].map(experience_level_from_job_level)

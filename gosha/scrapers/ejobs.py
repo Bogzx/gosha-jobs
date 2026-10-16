@@ -102,9 +102,31 @@ def _extract_description(detail: dict) -> str:
     return html_to_text("\n\n".join(p for p in parts if p))
 
 
+def _parse_date(raw: Any) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def _extract_detail(body: str) -> dict[str, Any]:
-    description = _extract_description(json.loads(body))
-    return {"description": description} if description else {}
+    """{description, posted_at} from a /jobs/{id} payload.
+
+    The detail's creationDate is when the posting first went live; the
+    list's "creationDate" is the last republish (see _parse).
+    """
+    detail = json.loads(body)
+    extracted: dict[str, Any] = {}
+    description = _extract_description(detail)
+    if description:
+        extracted["description"] = description
+    posted_at = _parse_date(detail.get("creationDate"))
+    if description and posted_at:
+        extracted["posted_at"] = posted_at
+    return extracted
 
 
 def experience_level(career_level_ids: list[Any] | None) -> str | None:
@@ -224,13 +246,12 @@ def _parse(
         if not job_id or not item.get("title"):
             continue
 
-        posted_at: datetime | None = None
-        raw_date = item.get("creationDate")
-        if raw_date:
-            try:
-                posted_at = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00"))
-            except ValueError:
-                posted_at = None
+        # The list's "creationDate" is the last republish, not the first
+        # posting: 1961022 is listed at 2026-06-10T08:40:00Z while its detail
+        # page has creationDate 2026-06-01T15:46:56Z and republishDate
+        # 2026-06-10T08:40:00+03:00. Marked as a refresh date, so the pipeline
+        # keeps the earliest; the detail's creationDate replaces it when read.
+        posted_at = _parse_date(item.get("creationDate"))
         if cutoff and posted_at and posted_at < cutoff:
             continue
 
@@ -256,6 +277,7 @@ def _parse(
             # eJobs quotes gross monthly figures.
             salary_period="monthly" if (salary_min or salary_max) else None,
             posted_at=posted_at,
+            posted_at_is_refresh=posted_at is not None,
             source="ejobs",
             experience_level=experience_level(item.get("careerLevelsIds")),
         ))
@@ -298,9 +320,12 @@ class EjobsScraper:
                     MAX_DETAIL_FETCHES,
                 )
                 for job in wanted:
-                    description = (details.get(_detail_url(job)) or {}).get("description")
-                    if description:
-                        job.description = description
+                    detail = details.get(_detail_url(job)) or {}
+                    if detail.get("description"):
+                        job.description = detail["description"]
+                    if detail.get("posted_at"):
+                        job.posted_at = detail["posted_at"]
+                        job.posted_at_is_refresh = False
                 return jobs
         except Exception as exc:
             log.warning("eJobs scrape failed for %r in %r: %s", query.keyword, query.location, exc)

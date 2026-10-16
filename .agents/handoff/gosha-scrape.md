@@ -592,3 +592,84 @@ code in the same image.
 - (c) not needed.
 Conclusion: the runtime (its TLS handshake) decides, not our code. Deploying this branch keeps BestJobs working.
 Recipe for live checks in the prod image: `.agents/README.md` → "Live checks against job boards".
+
+## DM field audit (owner priority, 2026-10-16 ~13:40 UTC; prod read-only SELECTs, no probes)
+A DM (`views.build_job_embed_with_buttons`) shows: title (linked to url), company, location, salary
+("min - max CUR", **no period**), the first 300 chars of the description, source. **No posted date.**
+Measured on active rows (n: linkedin 1378, bestjobs 88, ejobs 64, glassdoor 57, hipo 20, indeed 19) and on the
+130 jobs actually DM'd (`user_jobs.dm_status='sent'`).
+
+| Field | Before (prod, main) | After (this branch) |
+|---|---|---|
+| Company 'Unknown'/empty | 0 everywhere | — |
+| URL tracking/non-canonical | 0 (glassdoor `jl=`, indeed `jk=` are the ids; linkedin `/jobs/view/<id>`) | — |
+| Title requisition codes | 38 of 4,553 distinct stored titles (LinkedIn, mostly trainee/junior: "Trainee Java Developer IRC293492", "ID248805 Junior QA…", "(REQ#43448)", "JobID-0296"; eJobs "(ID 593)") | **0** (replayed `strip_title_codes` over all 4,553: 38 stripped, 0 false positives) |
+| Invisible chars in DM'd descriptions | eJobs **50 of 53** DMs | 0 (50be546) |
+| HTML entities in DM'd descriptions | Hipo **5 of 5** DMs | 0 (50be546) |
+| Vague location in DMs | Hipo 2/5 "Toate Orasele", Glassdoor 2/21 | Hipo fixed (city from JSON-LD); Glassdoor unchanged |
+| Foreign-city DMs | **19 Glassdoor DMs for Munich/Kraków** (12–15 Oct) from subs located 'mun'/'kra': main's `location_matches` is a substring test | 0: branch matches whole words and `clean_location` drops 'mun'/'kra' (gosha-pipe) |
+| Foreign rows in the web feed | LinkedIn: only 115 of 1,378 active rows in Romania (679 explicit USA, most "other" US cities); 1,704 user_jobs rows (0 DMs) | new ones stop (remote gating, e6fdc92 and earlier); stored ones until expiry — one-off deactivation proposed to gosha-pipe/lead |
+| posted_at later than our first sighting | eJobs **29/64**, LinkedIn **270/1321** (Romanian: 11/109, avg 76 days later), Hipo 8/10; DMs: eJobs 7/53 and Hipo 3/5 dated after the DM | 0 on next sighting: all three flagged `date_posted_is_refresh`, pipeline keeps min(existing, new, first_seen_at) |
+| Salary | DM'd: 1 of 130 had one. Active: eJobs 7/64 (the list has `salary` only when published; formats parse), BestJobs 22/88 EUR monthly (2 without period), LinkedIn 265 USD (US jobs) | period rendering → gosha-pipe |
+| No description in DM | eJobs 3/53, LinkedIn 2/34 | — |
+| No date | BestJobs 88/88 (the board publishes none), Hipo 10/20 | — |
+
+### Done (uncommitted)
+16. **Title codes** — `gosha/scrapers/base.py` `strip_title_codes` (known prefix req/requisition id/ref/job id/id/irc/jr +
+    3+ digits, only at the start or end, keeps the title if nothing else would be left), applied in `RawJob.__post_init__`
+    and to JobSpy titles in `scraper.scrape_jobs_raw`. Stored rows heal on next sighting (upsert rewrites title).
+    Tests: `tests/scrapers/test_text_cleaning.py` (10 real cases, 9 must-not-change, RawJob, JobSpy).
+17. **eJobs dates** — `gosha/scrapers/ejobs.py`: list `creationDate` is the republish time (fixture 1961022: list
+    2026-06-10T08:40:00Z vs detail creationDate 2026-06-01T15:46:56Z, republishDate 2026-06-10T08:40:00+03:00), now
+    `posted_at_is_refresh=True`; `_extract_detail` returns the detail's creationDate as `posted_at` (with a description),
+    which replaces the list date with the flag off. The list date still drives the adapter's age cut-off (a reposted ad
+    is still open). Not fixed: the list time looks like Bucharest wall-clock labelled Z (one pair of evidence; irrelevant
+    once flagged). Tests: `tests/scrapers/test_ejobs_descriptions.py` (4, incl. an end-to-end search with the real fixtures).
+18. **LinkedIn dates** — `gosha/scraper.py`: JobSpy rows get `date_posted_is_refresh = (site == "linkedin")`.
+    Test: `test_linkedin_dates_are_marked_as_refresh_dates`.
+Full suite 1374 passed, 9 skipped (8 transient failures in tests/test_search_input.py from another agent's in-flight
+edit; that file passes on rerun, 29/29); ruff clean.
+
+### Sent to gosha-pipe (DM rendering / matching, not ours)
+Salary period in the DM; a "Posted" field; the 'mun'/'kra' users (did they mean München/Kraków?); one-off deactivation of
+active foreign LinkedIn/Glassdoor rows for the web feed.
+
+### Open (needs data)
+- eJobs remote postings show location "Romania" (6/64 active). The fixtures have no work-model field; one detail fetch in
+  the prod image (lead OK) would show whether `workModel` exists, then location could read "Remote (Romania)".
+
+## Lead review round (2026-10-16 ~14:00): duplicate DMs, eJobs dates, empty descriptions
+Source: lead's review exports (`/tmp/claude-1001/-home-ubuntu-gosha-jobs/3f714841-…/scratchpad/review-delivery/`,
+user_jobs.csv + jobs.csv), prod read-only SELECTs. Uncommitted.
+
+19. **Dedup: one posting under several employer spellings** — `gosha/dedup.py`:
+    - `company_words` (used by `normalize_key`): drops legal forms, corporate-shape words (`_COMPANY_NOISE`: group,
+      holding, global, solution(s), centre/center, romania, international, …), a parent brand in front
+      (`_PARENT_BRANDS = {"forvia"}`) and "– A X Company"; keeps the name whole if only noise words.
+    - Grouping (`_postings`): same normalized title, then employers that `same_employer` accepts (equal, or one is the
+      other's first/last words, ≥5 chars: "continental"/"continental anvelope", "stefanini"/"stefanini emea"), and a
+      reposter row (`scrapers.base.is_reposter`: Undelucram.ro, Hipo.ro) joins the one employer of that title that its
+      description names (descriptions loaded only for reposter rows). City split as before. Older-row check uses the same rule.
+    - `same_posting(title_a, company_a, title_b, company_b, text_a=, text_b=)` for gosha-pipe's expired-delivery check.
+    Before → after (lead's export): the 6 split DM pairs (HELLA, DRÄXLMAIER ×2, Continental via Undelucram, Société
+    Générale, AUMOVIO via Hipo.ro) **0/6 → 6/6 grouped**; 4 of them now share normalize_key (also covered by pipe's
+    expired-delivery check), the other 2 group while active. Active rows (1,621): groups 202 → 207, rows hidden 295 → 308;
+    every new merge checked by eye (Stefanini, Amazon/Amazon Science, Ascom/Ascom UMS, Activision/Activision Blizzard,
+    Orange/Orange Services, Macrobond, Asirom via Hipo.ro — the Hipo URL names Asirom). Known pre-existing gap: US cities
+    are not in `_CITIES`, so US copies in different cities group (TikTok San Jose/Seattle).
+    Tests: `tests/test_dedup.py` (5 pair cases, 3 must-not-merge, noise-only name, Continental incl. other city, Hipo.ro
+    named/unnamed, Banca Transilvania/Transilvania Bank, `same_posting`).
+20. **Reposter → client at the source** — `gosha/scrapers/base.py` `is_reposter`, `reposter_client` ("on behalf of: X",
+    bold or plain, first 500 chars); `RawJob.__post_init__`: Hipo cards "X @ Employer" from a reposter → title X, company
+    Employer; other reposter rows take the client from the description. `gosha/scraper.py` does the same for JobSpy rows.
+    DMs now name the employer, not the job site. Tests in `tests/scrapers/test_text_cleaning.py`.
+21. **eJobs dates (lead item 2)** = item 17 above (already done before the request).
+22. **Empty descriptions (lead item 3): cap NOT raised.** Of the 21 active Hipo/BestJobs rows without a description, 17
+    were last seen before 2026-10-01 (before detail enrichment shipped) and are still `is_active`; among rows seen in the
+    last 7 days only hipo 1, bestjobs 1, ejobs 2, linkedin 2 lack one. Detail volume is low (24 h: ~213 Hipo, ~170
+    BestJobs page fetches). The lever is expiry of rows not seen for weeks (gosha-pipe): not seen 14 d but active —
+    hipo 9/20, bestjobs 8/88, linkedin 19/177, ejobs 6/64, indeed 3/19.
+    Observed: active LinkedIn rows went from 1,378 (~13:30) to 177 (~14:10) — someone deactivated rows in prod.
+Full suite: 1442 passed, 9 skipped, 9 failed — all `TypeError: ... unexpected keyword argument 'scraped_for'` in
+tests/test_alert_scenarios.py / tests/test_scrape_health.py from gosha-pipe's in-flight pipeline.py edit (not ours). Ruff on
+gosha/ and tests/ clean (scripts/migrate_sqlite_to_postgres.py has 2 F821 from someone's in-flight edit).
