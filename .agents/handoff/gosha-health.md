@@ -1,6 +1,17 @@
 # Handoff: gosha-health — scrape-failure alerting (DM-only to the owner)
 
-Written: 2026-10-16 ~12:06 UTC, updated on the server 2026-10-16 (lead review applied, all 12 items) · Branch: wip/agents-2026-10-16 · Base commit: c67e734
+Updated: 2026-10-16 on the server · Branch: wip/agents-2026-10-16 · Committed by the lead in **23aa9a9** (183 alert tests pass) · Status: **complete for this round, standing by**
+
+## Current state (read this first)
+- **Done**: every ops alert is an owner DM only (bot, heartbeat watchdog, site watchdog on GitHub Actions, scraper-smoke workflow). One off switch rule and one ID syntax in every path; dedup + cooldown + "recovered"; short flap window (bot 2h, site 1h) that still pages a re-failure that persists; undelivered DMs retried; per-board collapse baselines with a 2-cycle grace when a board loses a search; closed-DM notices once per user; heartbeat page ≤1/hour. Both lead reviews (12 items, then A–F) applied and verified; details in the last two sections.
+- **Owner setup still needed (not an agent's job; touches prod/GitHub):**
+  1. Prod `.env`: `ALERT_DM_USER_IDS=<@Bogdanila's numeric ID>` (Developer Mode → Copy User ID; `123`, `<@123>`, `<@!123>` all work), then restart the bot with the new code. Startup log says `Ops alerts will be DMed to [...]`.
+  2. GitHub → Settings → Secrets → Actions: `DISCORD_BOT_TOKEN` (same token as `DISCORD_TOKEN`) and `ALERT_DM_USER_IDS`.
+  3. After the deploy (it adds `GET /api/v1/health/freshness`), run Actions → "Site watchdog" → Run workflow once; it should be green.
+- **Old state files — compatible, checked by loading old-format files with the new code:**
+  - `data/alerts_state.json`: **keep it.** Old entries load (new fields default; no `recent`). Deleting it is also safe, but a condition still failing would then be paged once more.
+  - `data/scrape_health.json`: **delete it once at this deploy (recommended).** It loads fine, but it has no record of past searches, so the first cycle gets no search-change grace. gosha-pipe regrouped searches in this round (per keyword + canonical place), and a resulting yield drop could be reported as a false "yield collapsed" after 2 cycles. Deleting it costs about 3 cycles of re-learning baselines; dead-board streaks restart at 0.
+- Nothing in progress. No production contact, no real Discord messages, no commits by me.
 
 ## Mission (one paragraph, self-contained)
 User request: "put one agent to check if the jobs are successfully scraped or not, and if they are not send an alert to me @Bogdanila on discord". Later requirement change from the user: **alerts go ONLY as a Discord DM to the owner** (ALERT_DM_USER_IDS, numeric ID). No channel posts, no @mentions, admins are not paged implicitly, and one off switch (`ALERTS_ENABLED=false` or empty `ALERT_DM_USER_IDS`). Detection must cover all-zero cycles, one dead board, yield collapse, empty descriptions, embedding failure, a hung/crashed bot or server down (out of process), and a failing daily smoke workflow, with dedup/cooldown and "recovered" messages.
