@@ -417,9 +417,23 @@ TODO 3 ("junior X" fallback for Indeed): design only so far — expand_keyword g
 would double searches. Plan: Indeed-only stripped variant, at most 2 per keyword. Not started.
 Lead review points 5 and 6: done (item 12). 7a (baseline catalog, with gosha-pipe) still open.
 
-## Design: baseline catalog scrape (review point 7a) — NOT implemented
-Status: design for lead review. Scraper side (`gosha/scraper.py`) is ours; the pipeline side is
-gosha-pipe's (`run_scrape_stage`), specified below as an interface only.
+## Design: baseline catalog scrape (review point 7a)
+Status: **Tier A scraper side implemented** (lead OK, item 14 below); **Tier B NOT approved** until a deployed
+cycle shows LinkedIn search-429s down. Pipeline side is gosha-pipe's (`run_scrape_stage`), specified below as
+an interface only; the lead forwards the spec to gosha-pipe after its current correction is committed.
+Lead decision on DMs: baseline jobs go through the normal per-subscription match like any other job (same
+filters), no special path.
+
+14. **Implemented (uncommitted):** `gosha/scraper.py` `BaselineCombo`, `baseline_enabled`
+   (`SCRAPE_BASELINE`, default off), `baseline_combos(cycle)`, `BASELINE_KEYWORD = "junior developer"`,
+   `BASELINE_LOCATIONS` (bucuresti, cluj, timisoara, iasi, oradea, romania, remote), `BASELINE_MAX_AGE_DAYS = 14`,
+   budget constants `BASELINE_MAX_LIST_REQUESTS = 171`, `BASELINE_MAX_DETAIL_FETCHES = 410` (worst case per
+   cycle with cold caches, from the adapters' page/detail caps; typical ≈55 list requests, details cached 24 h).
+   Every combo has `boards=()`. Tests: `tests/test_scraper_baseline.py` (17): off by default / switch values,
+   native-only shape, pure and cycle-independent, every location served by a native source, what the keyword's
+   filter keeps/drops, and `test_baseline_request_budget` (recomputes the worst case from the adapters'
+   constants and `applies_to`; fails on a new source, location or cap until the constants are updated).
+   Full suite 1237 passed, 9 skipped; ruff clean. `.env.example` line requested from gosha-health.
 
 ### Why (prod, read-only, 2026-10-16)
 - What gets scraped = active subscriptions only: **22 searches from 12 users**, keywords all one family
@@ -452,11 +466,11 @@ levels, expands to 1 term) × locations `bucuresti, cluj, timisoara, iasi, orade
 eJobs and Hipo ignore the keyword for tech searches (IT-department browse / city catalog, both cached
 10 min, so a city a subscription already searched costs nothing more); BestJobs searches it; Jobicy/RemoteOK
 serve `remote`.
-Requests per cycle, from measured sizes: eJobs ≈7 browse pages (500/page; nationwide 2) + ≤25 detail
+Requests per cycle, from measured sizes: eJobs ≈13 browse pages (100/page: Bucharest 3, nationwide 6) + ≤25 detail
 fetches/search, 24 h detail cache → ≤150 the first cycle, then new postings only (≈10–30); Hipo ≈26 list
 pages (Buc 9, Toate-Orasele 12, others 1–2) + ≤20 details/search, cached; BestJobs 6 searches + ≤20 details
 each, cached; Jobicy 0–1 (3 h cache); RemoteOK 1. **≈40 list requests per cycle, details mostly cache hits,
-zero LinkedIn/Indeed/Glassdoor.** All under `details.HOST_BUDGET_PER_HOUR` (250/host/hour).
+zero LinkedIn/Indeed/Glassdoor.** (Corrected: ≈55 list requests, worst case 171; see item 14.) All under `details.HOST_BUDGET_PER_HOUR` (250/host/hour).
 **Tier B — LinkedIn rotation (after the LinkedIn-cap decision and lead OK):** 2 LinkedIn-only combos
 per cycle from the eval personas' tech families (python developer, java developer, .net developer, frontend
 developer, mobile developer, machine learning engineer, data analyst, embedded software engineer, devops
@@ -472,10 +486,13 @@ are left out (Indeed: 9 rows for python @ Cluj; Glassdoor has no Romanian domain
    Run it also when there are no active subscriptions (today the stage returns early).
 2. Merge: a baseline combo whose (keyword, normalized place) group already exists is dropped (the
    subscription's combo wins); otherwise add `(keyword, location, boards, max_age_days) -> list(filter_keywords)`.
+   Note: a baseline combo has a different keyword from the subscriptions', so it is not dropped for the
+   same city; eJobs' browse and Hipo's catalog are cached only 10 min, so running each baseline combo next to
+   the subscription combos for the same place (or right after them) turns those into cache hits.
 3. `boards == ()` → skip `scrape_jobs_raw` for it (no JobSpy call, JobSpy boards not counted attempted);
    `_scrape_extra_sources` runs it as any combo.
-4. Decide whether baseline rows are DM candidates. Recommendation: yes — they still pass each
-   subscription's own filters in the match stage; they only widen the pool.
+4. DMs (lead decision): baseline rows go through the normal per-subscription match like any other job,
+   same filters, no special path.
 5. Health: baseline combos make sources attempted every cycle (steadier yields); `searches_by_source`
    changes once on rollout, so gosha-health's per-source baselines re-learn — tell gosha-health.
 

@@ -12,6 +12,7 @@ import os
 import random
 import re
 import time
+from dataclasses import dataclass
 from functools import partial, wraps
 from typing import TYPE_CHECKING
 
@@ -274,6 +275,68 @@ def indeed_fallback_terms(terms: list[str]) -> list[str]:
 def scrape_direct_enabled() -> bool:
     """SCRAPE_DIRECT=true lets JobSpy also use the server's own IP."""
     return os.getenv("SCRAPE_DIRECT", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# ── Baseline catalog ────────────────────────────────────────────────────
+# Searches run every cycle whatever the subscriptions are. The web feed
+# ranks every stored posting, and what gets stored is what subscriptions
+# search: on 2026-10-16 that was 22 searches from 12 users, all of them
+# "computer science internship" variants and mostly in Cluj, so a junior
+# user's feed, or a Bucharest one's, had almost nothing that fit.
+#
+# Native boards only (eJobs, BestJobs, Hipo; BestJobs, RemoteOK and Jobicy
+# for "remote"): no LinkedIn, Indeed or Glassdoor request, since LinkedIn
+# already answers 110-372 job pages and 27-112 searches per cycle with 429.
+# eJobs and Hipo ignore a tech keyword (IT-department browse, city catalog,
+# both cached 10 minutes), so the keyword only steers BestJobs' search and
+# the filter: "junior developer" keeps intern, junior and unmarked
+# (<= 2 years asked) tech titles, and drops senior and non-tech ones.
+BASELINE_KEYWORD = "junior developer"
+BASELINE_LOCATIONS = ("bucuresti", "cluj", "timisoara", "iasi", "oradea", "romania", "remote")
+BASELINE_MAX_AGE_DAYS = 14
+# One cycle's worst case with cold caches: every search reads up to its
+# adapter's page cap (eJobs 6, Hipo 20, Jobicy 3, BestJobs one per city
+# queried, RemoteOK 1) plus eJobs' /cities once, and fetches up to its
+# detail cap (eJobs 25, Hipo 20, BestJobs 20). Typical is far lower: about
+# 55 list requests for the board sizes measured on 2026-10-16 (eJobs
+# Bucharest 3 pages, nationwide 6; Hipo Bucharest 9, nationwide 12, the
+# others 1-2), and detail pages are cached for 24 h. Asserted in
+# tests/test_scraper_baseline.py.
+BASELINE_MAX_LIST_REQUESTS = 171
+BASELINE_MAX_DETAIL_FETCHES = 410
+
+
+@dataclass(frozen=True)
+class BaselineCombo:
+    """One baseline search, in the shape of pipeline._scrape_combos' keys."""
+
+    keyword: str  # what is searched
+    location: str  # user spelling, as in Subscription.locations
+    boards: tuple[str, ...]  # JobSpy boards; () = native sources only
+    max_age_days: int
+    filter_keywords: tuple[str, ...]  # for filter_dataframe / relevance_predicate
+
+
+def baseline_enabled() -> bool:
+    """SCRAPE_BASELINE=true turns the baseline catalog on (default off)."""
+    return os.getenv("SCRAPE_BASELINE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def baseline_combos(cycle: int = 0) -> list[BaselineCombo]:
+    """The baseline searches for scrape cycle number `cycle` (no I/O).
+
+    `cycle` is for a later rotation over more searches; every cycle gets
+    the same searches today.
+    """
+    if not baseline_enabled():
+        return []
+    return [
+        BaselineCombo(
+            keyword=BASELINE_KEYWORD, location=location, boards=(),
+            max_age_days=BASELINE_MAX_AGE_DAYS, filter_keywords=(BASELINE_KEYWORD,),
+        )
+        for location in BASELINE_LOCATIONS
+    ]
 
 
 async def _scrape_single(
