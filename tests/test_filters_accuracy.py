@@ -717,11 +717,15 @@ def test_an_internship_keyword_follows_the_searchs_levels(title):
 
 
 TRAINING = [
-    "Working Student Data Engineering", "Graduate Programme IT", "Trainee SAP Consultant",
+    "Working Student Data Engineering", "Trainee SAP Consultant",
     "Software Engineering Internship", "Stagiu de practică IT", "Apprenticeship Software Developer",
     "Student Programme - Data Analytics",
 ]
-JUNIOR = ["Junior Java Developer", "Software Engineer Backend(Django)", "Graduate Software Engineer"]
+# A graduate programme is a junior position (owner, 2026-10-17).
+JUNIOR = [
+    "Junior Java Developer", "Software Engineer Backend(Django)", "Graduate Software Engineer",
+    "Graduate Programme IT",
+]
 
 
 @pytest.mark.parametrize("title", TRAINING)

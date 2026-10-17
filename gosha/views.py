@@ -255,11 +255,15 @@ def build_job_embed_with_buttons(
     relevance_score: float | None = None,
     match_info: str | None = None,
     scored_with_cv: bool = False,
+    levels: list[str] | None = None,
 ) -> tuple[discord.Embed, JobFeedbackView]:
     """Build a Discord embed + feedback buttons for a job delivery.
 
     The score is a DM score (gosha.matching.dm_match_label) unless the
     user's CV was blended in, which keeps the cosine scale (match_label).
+    `levels` are the search's experience levels: an internship and a
+    junior job must not look alike, so the posting's level among them is
+    the first field ("Level: Internship" / "Junior"), left out when unclear.
 
     Every value is whitespace-clean and non-empty (Discord refuses the
     whole message over one empty field). Returns (embed, view) tuple.
@@ -270,6 +274,9 @@ def build_job_embed_with_buttons(
         url=_web_url(job.url),
         color=discord.Color.green(),
     )
+    level = _LEVEL_NAMES.get(_matched_level(job, levels))
+    if level:
+        embed.add_field(name="Level", value=level, inline=True)
     embed.add_field(name="Company", value=_clip(_one_line(job.company) or "Unknown", 100), inline=True)
     embed.add_field(name="Location", value=_short_places(job.location), inline=True)
     embed.add_field(name="Salary", value=_salary(job), inline=True)
@@ -303,6 +310,17 @@ _PERIOD_WORD = {
     "hourly": "hour", "daily": "day", "weekly": "week", "monthly": "month",
     "yearly": "year", "annual": "year", "annually": "year",
 }
+
+
+_LEVEL_NAMES = {"intern": "Internship", "junior": "Junior"}
+
+
+def _matched_level(job, levels: list[str] | None) -> str | None:
+    if not levels:
+        return None
+    from gosha.filters import matched_level
+
+    return matched_level(job.title or "", levels, job.experience_level, job.description)
 
 
 def _one_line(text: str | None) -> str:

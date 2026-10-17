@@ -307,6 +307,7 @@ async def run_scrape_stage(
     # What the searches behind each query ask for: the scrape filter keeps
     # what any of them could take (each search's own levels apply at match).
     levels_for = _levels_per_group(all_subs)
+    remote_groups = _remote_groups(all_subs)
 
     all_jobs: list[Job] = []
     for combo, keywords in scrape_combos.items():
@@ -332,6 +333,7 @@ async def run_scrape_stage(
         _count_scraped(scraped, df)
         upserted = await _store_filtered(
             df, keywords, levels_for.get(_group_of(combo)), f"JobSpy {keyword!r} in {location!r}",
+            location, _group_of(combo) in remote_groups,
         )
         _note_scraped(scraped_for, combo, upserted)
         all_jobs.extend(upserted)
@@ -342,6 +344,7 @@ async def run_scrape_stage(
     all_jobs.extend(
         await _scrape_extra_sources(
             scrape_combos, attempted, scraped, searches_by_source, scraped_for, levels_for,
+            remote_groups,
         )
     )
 
@@ -436,6 +439,15 @@ def _levels_per_group(subs: list[Subscription]) -> dict[tuple, list[str]]:
                 levels = out.setdefault(search_group(keyword, location, sub.max_age_days), [])
                 levels.extend(lv for lv in (sub.experience_levels or ["any"]) if lv not in levels)
     return out
+
+
+def _remote_groups(subs: list[Subscription]) -> set[tuple]:
+    """The search groups at least one search with remote_ok belongs to."""
+    return {
+        search_group(keyword, location, sub.max_age_days)
+        for sub in subs if sub.remote_ok
+        for keyword in sub.keywords for location in sub.locations
+    }
 
 
 def _note_scraped(
@@ -556,10 +568,16 @@ async def refresh_known_rows(df: pd.DataFrame) -> int:
 
 async def _store_filtered(
     df: pd.DataFrame, keywords: list[str], levels: list[str] | None, what: str,
+    location: str | None = None, remote_ok: bool = False,
 ) -> list[Job]:
     """filter_dataframe, then upsert what it keeps and refresh the stored
-    jobs among what it drops (refresh_known_rows). Logs instead of raising."""
-    kept = filter_dataframe(df, keywords, levels)
+    jobs among what it drops (refresh_known_rows). Logs instead of raising.
+    `location` is the query's place, which a kept job must fit (remote
+    postings too with `remote_ok`)."""
+    kept = filter_dataframe(
+        df, keywords, levels,
+        locations=[location] if location else None, remote_ok=remote_ok,
+    )
     jobs = await _upsert_safely(kept, what)
     # Needs a unique index: filter_dataframe masks without resetting it, and
     # both producers (scrape_jobs_raw, _scrape_extra_sources) concat with
@@ -586,6 +604,7 @@ async def _scrape_extra_sources(
     searches_by_source: dict[str, set[tuple]] | None = None,
     scraped_for: dict[tuple, set[int]] | None = None,
     levels_for: dict[tuple, list[str]] | None = None,
+    remote_groups: set[tuple] | None = None,
 ) -> list[Job]:
     """Run the plugin scrapers for every (keyword, location) combo.
 
@@ -620,10 +639,11 @@ async def _scrape_extra_sources(
             if searches_by_source is not None:
                 searches_by_source.setdefault(scraper.name, set()).add(combo)
             frames: list[pd.DataFrame] = []
+            expired: set[str] = set()  # listed, but their own page says expired
             for term in terms:
                 query = SearchQuery(
                     keyword=term, location=location, max_age_days=max_age_days,
-                    relevant=relevant,
+                    relevant=relevant, on_expired=expired.add,
                 )
                 try:
                     raw_jobs = await scraper.search(query)
@@ -634,13 +654,16 @@ async def _scrape_extra_sources(
                     frames.append(pd.DataFrame([r.to_record() for r in raw_jobs]))
 
             if not frames:
+                await _deactivate_expired(scraper.name, expired)
                 continue
             df = pd.concat(frames, ignore_index=True)
             df = df.drop_duplicates(subset=["job_url"], keep="first")
+            await _deactivate_expired(scraper.name, expired - set(_row_urls(df)))
             if scraped is not None:
                 _count_scraped(scraped, df)
             jobs = await _store_filtered(
                 df, keywords, levels, f"{scraper.name} {keyword!r} in {location!r}",
+                location, _group_of(combo) in (remote_groups or ()),
             )
             _note_scraped(scraped_for, combo, jobs)
             if jobs:
@@ -649,6 +672,38 @@ async def _scrape_extra_sources(
                     "%s: %d jobs for %r in %r", scraper.name, len(jobs), keyword, location,
                 )
     return collected
+
+
+async def _deactivate_expired(source: str, urls: set[str]) -> None:
+    """Deactivate the stored rows of postings their board still lists but
+    whose own page says expired (BestJobs keeps listing some): the adapter
+    drops them, and the dead-link check gets a 200, so they stayed active
+    until 30 days unseen. upsert_jobs reactivates a row seen live again."""
+    if not urls:
+        return
+    try:
+        async with get_session() as session:
+            ids = list((await session.execute(
+                select(Job.id).where(
+                    Job.source == source, Job.url.in_(urls), Job.is_active.is_(True),
+                )
+            )).scalars())
+            if not ids:
+                return
+            await session.execute(
+                update(Job).where(Job.id.in_(ids)).values(is_active=False),
+            )
+            await session.commit()
+    except Exception as exc:  # a stale row must not end the scrape cycle
+        log.warning("Deactivating %s expired jobs failed: %s", source, exc)
+        return
+    log.info("Deactivated %d jobs %s marks expired", len(ids), source)
+    try:
+        from gosha.events import emit_job_expired
+        for job_id in ids:
+            await emit_job_expired(job_id)
+    except Exception:
+        pass
 
 
 def _applies(scraper: object, query: object) -> bool:
@@ -1265,7 +1320,7 @@ async def deliver_pending(bot: JobBot) -> int:
             loc_str = ", ".join(sub.locations[:2])[:60]
             embed, view = build_job_embed_with_buttons(
                 job, uj.id, uj.relevance_score, f"{kw_str} in {loc_str}",
-                scored_with_cv=user.cv_embedding is not None,
+                scored_with_cv=user.cv_embedding is not None, levels=sub.experience_levels,
             )
             outcome = await _dm_user(bot, user.discord_user_id, embed, view)
             if outcome == DM_SENT:

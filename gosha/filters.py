@@ -800,14 +800,14 @@ def title_is_relevant(
     if want_entry and _training_only(keyword, levels):
         # Owner rule: an internship search without the junior level gets
         # training positions only (internship, traineeship, apprenticeship,
-        # working student, graduate programme, stagiu/practică), from the
-        # title or the board's own "intern" label. No junior, unmarked or
-        # "entry"-labelled regular jobs.
+        # working student, stagiu/practică), from the title or the board's
+        # own "intern" label. No junior, unmarked or "entry"-labelled regular
+        # jobs, and no graduate hires (owner, 2026-10-17: junior).
         training = INTERN_RE.search(title) or (
             experience_level == "intern"
             and (not want_tech or STRONG_CS_RE.search(title))
         )
-        if not training or says_senior(title):
+        if not training or says_senior(title) or _graduate_hire(title, description):
             return False
     elif want_entry:
         # The board's label, when the years asked for agree (_is_junior).
@@ -1129,7 +1129,7 @@ def matches_company_blacklist(company: str, blacklist: list[str]) -> bool:
 INTERN_RE = re.compile(
     r"(?i)\b(?:intern(?:ship)?s?|trainees?|traineeship|apprentice(?:ship)?s?|"
     r"placements?|co.?op|summer|academy|(?:working\s+)?students?|"
-    r"(?:graduate|student|trainee)\s+(?:program(?:me)?s?|scheme)|"
+    r"(?:student|trainee)\s+(?:program(?:me)?s?|scheme)|"
     r"stagiar\w*|stagi[ui]|practicant\w*|practic[aă])(?!\w)"
 )
 
@@ -1142,6 +1142,64 @@ JUNIOR_RE = re.compile(
     r"no\s+experience)(?!\w)"
 )
 
+# Owner, 2026-10-17: internship and junior are different levels. A training
+# position open to students is an internship; one that needs a finished
+# degree (a graduate programme, Tenaris's "Junior Engineer (Global Trainee)"
+# "for recent graduates" with a Bachelor's) is a junior position. A degree
+# named alone ("Bachelor's degree in CS") does not say finished: internships
+# write it about the degree in progress.
+_FINISHED_DEGREE_RE = re.compile(
+    r"\b(?:completed|finished|obtained)\s+(?:a\s+|your\s+|their\s+)?(?:university\s+|"
+    r"bachelor'?s?\s+|master'?s?\s+|higher\s+)?(?:degree|studies|education)\b|"
+    r"\b(?:have|has|you'?ve)\s+(?:recently\s+)?graduated\b|"
+    r"\bstudii\s+(?:superioare\s+)?finalizate\b|\bdiploma\s+de\s+(?:licenta|master|absolvire)\b"
+)
+# Written for recent graduates: enough for a trainee title, which says
+# nothing either way, but not for an internship title ("Software Engineer
+# Intern ... Recent graduates are welcome").
+_RECENT_GRADUATES_RE = re.compile(
+    r"\b(?:recent(?:ly)?|new(?:ly)?|fresh)\s+graduat\w*|\bproaspat\w*\s+absolvent\w*"
+)
+# The same posting open to people still studying.
+_OPEN_TO_STUDENTS_RE = re.compile(
+    r"\bstudent\w*|\bundergraduat\w*|\b(?:currently\s+)?(?:enrolled|studying)\b|"
+    r"\b(?:currently\s+)?pursuing\b|\b(?:final|last|penultimate)[\s-]+year\b|"
+    r"\bmasterand\w*|\bin\s+curs\s+de\s+(?:finalizare|absolvire)\b|\banul\s+(?:[ivx]+|\d)\b"
+)
+# Training words that do not say who may apply: a "Global Trainee" programme
+# may want graduates; an internship takes students.
+_TRAINEE_WORD_RE = re.compile(r"(?i)\b(?:trainees?|traineeship|academy)\b")
+
+
+def _graduate_hire(title: str, description: str | None) -> bool:
+    """A training position that needs a finished degree: the text asks for
+    one, or (unless the title says internship) is written for recent
+    graduates; and it is not open to students."""
+    if not description:
+        return False
+    text = fold(description)
+    if _OPEN_TO_STUDENTS_RE.search(text):
+        return False
+    if _FINISHED_DEGREE_RE.search(text):
+        return True
+    internship_title = INTERN_RE.search(_TRAINEE_WORD_RE.sub(" ", title or ""))
+    return not internship_title and bool(_RECENT_GRADUATES_RE.search(text))
+
+
+def is_training_position(
+    title: str, board_level: str | None = None, description: str | None = None,
+) -> bool:
+    """The intern level: a training title (internship, traineeship,
+    apprenticeship, working student, stagiu) or the board's "intern" label,
+    not a senior title, and not a graduate hire (_graduate_hire)."""
+    title = split_glued_level(str(title or "")).lower()
+    if says_senior(title):
+        return False
+    if not (INTERN_RE.search(title) or board_level == "intern"):
+        return False
+    return not _graduate_hire(title, description)
+
+
 # Past junior, short of SENIOR_RE: "Mid-Level", "Medior", "Engineer II".
 MID_TITLE_RE = re.compile(
     r"(?i)\b(?:mid(?:dle)?(?:.?level)?|medior|intermediate|experienced|expert|"
@@ -1149,8 +1207,9 @@ MID_TITLE_RE = re.compile(
 )
 
 # Required experience as postings state it: "3+ years", "minimum 2-4
-# years", "two (2) years", "minim 3 ani", "un an de experiență". Only
-# counted near the word "experience" (see required_years).
+# years", "two (2) years", "minim 3 ani", "un an de experiență", "min. 24
+# luni", "18 months". Only counted near the word "experience" (see
+# required_years).
 _NUMBER_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
     "seven": 7, "eight": 8, "nine": 9,
@@ -1160,8 +1219,12 @@ _YEARS_RE = re.compile(
     r"(?<![\w.,])(\d{1,2}|" + "|".join(_NUMBER_WORDS) + r")"
     r"(?:\s*\(\d{1,2}\))?\s*\+?\s*"
     r"(?:(?:-|–|to|la|sau|or|si|and)\s*\d{1,2}\s*\+?\s*)?"
-    r"(?:years?|yrs?|y(?=\+|\s+of\b)|ani|an)\b"
+    r"(?P<unit>years?|yrs?|y(?=\+|\s+of\b)|ani|an|months?|luni|luna)\b"
 )
+
+
+def _is_months(m: re.Match[str]) -> bool:
+    return m.group("unit").startswith(("mon", "lun"))
 # A posting asking for this many years is not one a student can apply to.
 # Two is still junior on the boards (the eval set's junior postings ask
 # for up to two years); three is where mid-level postings start.
@@ -1343,6 +1406,11 @@ def _requirement(sentence: str, m: re.Match[str]) -> int | None:
     tail = re.split(r"[(\d]", rest_clause, maxsplit=1)[0]
     raw = m.group(1)
     years = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
+    if _is_months(m):
+        # Rounded up, so "more than JUNIOR_MAX_YEARS" holds exactly when
+        # the months are more than 24: "min. 24 luni" (8319) is two years,
+        # "18 luni" is two, 30 months is three.
+        years = -(-years // 12)
     if not 1 <= years <= 30 or _OTHER_YEARS_RE.match(rest_clause):
         return None
 
@@ -1383,13 +1451,17 @@ def _is_junior(title: str, experience_level: str | None, description: str | None
     (eval/postings.jsonl). An unmarked posting is junior unless the board
     files it as mid/senior or it asks for more than JUNIOR_MAX_YEARS.
     """
+    # One level each (owner, 2026-10-17): a training position is the intern
+    # level, even titled "Graduate Intern" or "Trainee/Junior Consultant".
+    if is_training_position(title, experience_level, description):
+        return False
     if JUNIOR_RE.search(title):
         return True
     # An explicit senior title outranks the board's label, which keeps the
     # most junior of the levels the employer ticked.
-    if says_senior(title) or INTERN_RE.search(title) or MID_TITLE_RE.search(title):
+    if says_senior(title) or MID_TITLE_RE.search(title):
         return False
-    if experience_level in ("intern", "mid", "senior"):
+    if experience_level in ("mid", "senior"):
         return False
     # An "entry" label still needs the years to agree: eJobs and BestJobs
     # keep the most junior of the levels the employer ticked, and 28 of 52
@@ -1400,9 +1472,11 @@ def _is_junior(title: str, experience_level: str | None, description: str | None
 def _asks_junior_years(title: str, description: str | None) -> bool:
     """No more than JUNIOR_MAX_YEARS asked for, or none stated, and not a
     posting written for experienced people (asks_experienced)."""
-    # In a title the years are the requirement ("Java Developer (3+ years)").
+    # In a title the years are the requirement ("Java Developer (3+ years)");
+    # months there are a duration ("12 month contract").
     in_title = [
-        int(m.group(1)) for m in _YEARS_RE.finditer(fold(title)) if m.group(1).isdigit()
+        int(m.group(1)) for m in _YEARS_RE.finditer(fold(title))
+        if m.group(1).isdigit() and not _is_months(m)
     ]
     years = max(in_title) if in_title else required_years(description)
     if years is not None and years > JUNIOR_MAX_YEARS:
@@ -1555,11 +1629,14 @@ _ENTRY_AUDIENCE_RE = re.compile(
     r"\b(?:la\s+)?inceput(?:ul)?\s+de\s+cariera\b|\binceputul\s+carierei\b|"
     r"\bbeginners?\b|\bincepator\w*|\bdebutant\w*|\btrainee\w*|"
     r"\bwe\s+(?:will\s+)?train\s+you\b|\bte\s+(?:vom\s+)?forma\w*\b|"
-    r"\b(?:basic|fundamental)\s+(?:knowledge|understanding|skills)\b|"
-    r"\bcunostinte\s+de\s+baza\b|\bnotiuni\s+(?:de\s+baza|elementare)\b|"
-    r"\b(?:eager|willing|motivated|keen|dornic\w*)\s+(?:to\s+|sa\s+)?(?:learn|invet\w*)\b|"
     r"\bdon'?t\s+(?:yet\s+)?meet\s+all\b"
 )
+# Not evidence on their own: "basic knowledge/understanding of", "eager to
+# learn". Postings for experienced people write them next to the experience
+# they demand (Siemens SRM 8266: "Basic understanding of system integration"
+# beside "Oracle database administration experience", "Tcl/Tk experience";
+# NTT QA 8380). Of the 25 judged postings whose only evidence they were,
+# 2 were right (sent DMs 0 of 12, gosha-label's audit 1 of 7, eval 1 of 6).
 # Not evidence when the posting is above them ("mentor junior engineers")
 # or turns them away ("students will not be considered").
 _ABOVE_AUDIENCE_RE = re.compile(
@@ -1591,6 +1668,18 @@ _ENTRY_ROLE_TITLE_RE = re.compile(
     r"(?i:\b(?:analyst|engineer|developer|specialist|consultant|technician|administrator|"
     r"accountant|tester|scientist|representative|agent))\s+(?:I|1)(?![\w.])|"
     r"(?i:\b(?:level\s*1|l1|tier\s*1|nivel\s*1))\b"
+)
+# A minimum graduation grade asked for: a graduate hire. "Candidates must
+# hold a completed university degree and have achieved a minimum graduation
+# grade of 9/10" (The Access Group's "Software Engineer", 8294, whose
+# experience is all "might also include"), "minimum GPA of 3.5", "media de
+# absolvire minim 8". A degree alone is not one: postings for experienced
+# people ask for degrees too.
+_GRADE_REQUIRED_RE = re.compile(
+    r"\b(?:graduation|degree|diploma|licenta|absolvire)\s+(?:grade|average|mark|gpa)s?\b|"
+    r"\bgpa\b|\bgrade\s+point\s+average\b|"
+    r"\bmedi[ae]\s+(?:generala\s+)?(?:de\s+|la\s+)?(?:absolvire|licenta)\b|"
+    r"\bnota\s+(?:minima\s+)?(?:de\s+|la\s+)?(?:absolvire|licenta)\b"
 )
 # The same level one named in the text: "As a Technical Analyst I", "As a
 # Level 1 Customer Support Consultant". Read on the raw text (case kept).
@@ -1643,8 +1732,8 @@ def has_entry_evidence(
     DM_ENTRY_LABEL_IS_EVIDENCE), an entry-role or level-one title
     (assistant, clerk, associate, "Analyst I", "L1"), at most two years
     asked (even as a wish), "0-2 years", "no experience required" in any
-    of its wordings, or wording for graduates, students, a first job, a
-    new trade, "we train you"."""
+    of its wordings, a graduation grade asked for and no years, or wording
+    for graduates, students, a first job, a new trade, "we train you"."""
     # Outside the cache: DM_ENTRY_LABEL_IS_EVIDENCE is a switch.
     if (
         DM_ENTRY_LABEL_IS_EVIDENCE and experience_level == "entry"
@@ -1671,6 +1760,8 @@ def _entry_evidence(title: str | None, intern_label: bool, description: str | No
     if _LEVEL_ONE_TEXT_RE.search(description):
         return True
     text = fold(description)
+    if years is None and _GRADE_REQUIRED_RE.search(text):
+        return True
     # "Minim 1-2 ani reprezintă un avantaj": at most two years, as a wish.
     wished = required_years(_NICE_TO_HAVE_RE.sub(" ", text))
     if wished is not None and wished <= JUNIOR_MAX_YEARS:
@@ -1740,13 +1831,10 @@ def matches_experience_level(
         return True
     title_lower = split_glued_level(str(title)).lower() if title else ""
 
-    if "intern" in wanted:
+    if "intern" in wanted and is_training_position(title_lower, experience_level, description):
         # Training positions only: a training title or the board's own
-        # "intern" label, never a senior title.
-        if (INTERN_RE.search(title_lower) or experience_level == "intern") and not says_senior(
-            title_lower
-        ):
-            return True
+        # "intern" label, never a senior title or a graduate hire.
+        return True
     if "junior" in wanted and _is_junior(title_lower, experience_level, description):
         return True
     if "mid" in wanted:
@@ -1768,6 +1856,7 @@ def city_only(location: str) -> str:
 
 def filter_dataframe(
     df: pd.DataFrame, keyword: str | list[str], levels: list[str] | None = None,
+    *, locations: list[str] | None = None, remote_ok: bool = False,
 ) -> pd.DataFrame:
     """Apply title-relevance filtering to a scraped DataFrame.
 
@@ -1775,6 +1864,9 @@ def filter_dataframe(
     for *any* of the provided keywords. An `experience_level` column
     (native adapters) is passed through as the board's seniority label,
     and a `description` column for the years of experience asked.
+    With `locations` (the query's place), a job must also be somewhere
+    its searches take (search_location_ok, as at match time): boards
+    answer a Cluj query with US postings, and 1,201 of them were stored.
     """
     if df.empty or "title" not in df.columns:
         return df
@@ -1787,9 +1879,11 @@ def filter_dataframe(
 
     levels = df["experience_level"] if "experience_level" in df.columns else [None] * len(df)
     descriptions = df["description"] if "description" in df.columns else [None] * len(df)
+    places = df["location"] if "location" in df.columns else [None] * len(df)
     mask = [
         relevant(str(t), level(lvl), level(desc))
-        for t, lvl, desc in zip(df["title"], levels, descriptions)
+        and (locations is None or search_location_ok(level(place), locations, remote_ok))
+        for t, lvl, desc, place in zip(df["title"], levels, descriptions, places)
     ]
 
     before = len(df)
@@ -1802,3 +1896,20 @@ def filter_dataframe(
             before, len(filtered), removed, keywords,
         )
     return filtered
+
+
+def matched_level(
+    title: str, levels: list[str] | None, board_level: str | None, description: str | None,
+) -> str | None:
+    """The level a search took a posting at, for the DM ("Level: Internship"):
+    "intern" when the search wants interns and it is a training position
+    (it wins for an intern+junior search), "junior" when the search wants
+    junior and it is a junior role, else None (any/mid/senior searches, or
+    neither). The intern and junior branches of matches_experience_level."""
+    wanted = {canonical_level(level) or level.lower() for level in levels or []}
+    title = split_glued_level(str(title or "")).lower()
+    if "intern" in wanted and is_training_position(title, board_level, description):
+        return "intern"
+    if "junior" in wanted and _is_junior(title, board_level, description):
+        return "junior"
+    return None

@@ -605,3 +605,185 @@ def test_a_glued_intern_title_is_an_internship():
     assert title_is_relevant(title, "computer science internship", None, FILLER, ["intern"])
     assert has_entry_evidence(title, None, FILLER)
     assert not matches_experience_level("SeniorData Engineer", ["junior"])
+
+
+# ── Months ("min. 24 luni", OKKWEBMEDIA's Wordpress developer, 8319) ───
+# Unparsed, the posting stated no years, so under V3 it lacked evidence
+# and left junior searches; 24 months is two years, which is junior.
+WORDPRESS = (
+    "Căutăm Wordpress developer la sediul nostru din Cluj-Napoca/remote!\n\n"
+    "ℹ Cerințe:\n"
+    "✅ să ai cunoștințe bune de Wordpress, PHP, SQL, Javascript și CSS\n"
+    "✅ să fii atent la detalii\n"
+    "✅ să ai experienta de min. 24 luni\n\n"
+    "☝ Constituie avantaj:\n"
+    "🚩 experiență dezvoltare pluginuri Wordpress\n"
+)
+
+
+def test_months_of_experience_count_as_years():
+    assert required_years(WORDPRESS) == 2
+    assert filters.dm_junior_ok("Wordpress developer", None, WORDPRESS + FILLER)
+
+
+@pytest.mark.parametrize("text, years", [
+    ("Minim 18 luni experiență în programare.", 2),
+    ("At least 30 months of experience as a developer.", 3),
+    ("Experience: 36 months.", 3),
+    ("6 months of practical experience.", 1),
+    ("A 6 month internship in our team.", None),
+    ("18 months of experience is a plus.", None),
+])
+def test_months_round_up_to_years(text, years):
+    assert required_years(text) == years
+
+
+def test_more_than_24_months_is_not_junior():
+    text = "At least 30 months of experience as a developer." + FILLER
+    assert not matches_experience_level("PHP Developer", ["junior"], None, text)
+
+
+def test_months_in_a_title_are_a_duration_not_a_requirement():
+    text = "5+ years of experience with Java." + FILLER
+    assert not matches_experience_level("Java Developer (12 month contract)", ["junior"], None, text)
+
+
+# ── Graduate hire by grade (The Access Group "Software Engineer", 8294) ─
+# Its experience is all "might also include", no years; what it asks for
+# is a degree with a minimum graduation grade, which is a graduate hire.
+ACCESS = (
+    "About you:\n\n"
+    "You’re someone who enjoys building modern web applications and cares about "
+    "performance, user experience, and delivering value. You’re curious, collaborative, "
+    "and enjoy working in a fast-paced environment where you can learn and grow.\n\n"
+    "Your skills and experiences might also include:\n\n"
+    "* Experience building modern web applications and working across frontend and backend\n"
+    "* Exposure to cloud platforms (such as AWS, Azure or GCP) and Infrastructure as Code tools\n\n"
+    "Note: Candidates must hold a completed university degree and have achieved a minimum "
+    "graduation grade of\n**9/10**\nto be considered for this position.\n"
+)
+
+
+def test_a_minimum_graduation_grade_is_entry_evidence():
+    assert has_entry_evidence("Software Engineer", None, ACCESS + FILLER)
+    assert filters.dm_junior_ok("Software Engineer", None, ACCESS + FILLER)
+    assert matches_experience_level("Software Engineer", ["junior"], None, ACCESS + FILLER)
+
+
+@pytest.mark.parametrize("text", [
+    "Minimum GPA of 3.5 required.",
+    "Media de absolvire minim 8.",
+])
+def test_grade_requirements_in_other_words(text):
+    assert has_entry_evidence("Software Engineer", None, text + FILLER)
+
+
+@pytest.mark.parametrize("text", [
+    # Years asked: the grade does not make it a graduate hire.
+    ACCESS + "3+ years of professional experience with TypeScript.",
+    # A degree alone, no grade.
+    "Candidates must hold a completed university degree in Computer Science.",
+])
+def test_not_graduate_hire_evidence(text):
+    assert not has_entry_evidence("Software Engineer", None, text + FILLER)
+
+
+# ── "Basic knowledge/understanding", "eager to learn": not evidence alone ─
+# Postings for experienced people write them beside the experience they
+# demand. Siemens "SRM Backend & Tools Engineer" (8266, sent to a junior
+# search) and NTT DATA "QA Engineer with SQL/Database Testing" (8380).
+SIEMENS_SRM = (
+    "Required at Onboarding:\n\n"
+    "* Oracle database administration experience (operations, maintenance, troubleshooting)\n"
+    "* Strong SQL skills (maintenance tasks, error analysis)\n"
+    "* Experience with at least one scripting language (Python, Perl or comparable – Tcl/Tk "
+    "will be trained on the job)\n"
+    "* Basic understanding of system integration & interface architectures (SAP, PLM tools, "
+    "file transfer)\n"
+    "* Tcl/Tk experience\n"
+)
+NTT_QA = (
+    "* Hands-on experience developing and maintaining UI and REST API test automation using "
+    "Playwright or Cypress\n"
+    "* Experience in manual software testing, preferably within Agile environments (e.g., Scrum)\n"
+    "* Experience working with test management tools such as Jira and Xray\n"
+    "* Basic understanding of the software development lifecycle (SDLC)\n"
+)
+
+
+@pytest.mark.parametrize("title, text", [
+    ("SRM Backend & Tools Engineer", SIEMENS_SRM),
+    ("QA Engineer with SQL/Database Testing", NTT_QA),
+    ("Software Engineer", "Eager to learn new technologies."),
+    ("Software Engineer", "Cunoștințe de bază de Java."),
+])
+def test_basic_knowledge_is_not_entry_evidence(title, text):
+    assert not has_entry_evidence(title, None, text + FILLER)
+
+
+def test_basic_knowledge_beside_real_evidence_still_passes():
+    text = "Basic knowledge of Java. Students and recent graduates are welcome." + FILLER
+    assert has_entry_evidence("Software Engineer", None, text)
+
+
+# ── Internship and junior are different levels (owner, 2026-10-17) ───────
+# A training position open to students is an internship; one that needs a
+# finished degree is junior. Real titles and sentences from sent DMs.
+TENARIS = (
+    "This role is part of the Global Trainee Program (GTP) – a unique opportunity for recent "
+    "graduates to gain practical experience and receive structured training over a 2-year "
+    "period.\n\n"
+    "* Bachelor's degree in Electrical Engineering | Automation Engineering | Metallurgy | "
+    "Material Science | Industrial Engineering | Mechanical Engineering or related fields\n"
+)
+INTEL_GRADUATE_INTERN = (
+    "* Currently pursuing a Master’s degree in Computer Science, Computer Engineering, Electrical "
+    "Engineering, Applied Mathematics, or a related technical field (able to keep student status "
+    "for at least 1 year).\n"
+)
+YONDER_TRAINEE = (
+    "* Having Technical Studies: currently pursuing or a graduate of a Bachelor's Degree and/or "
+    "a Master's Degree\n"
+)
+IT_INTERN_GRADUATE = (
+    "Recently completed a degree in IT, Computer Science, Information Systems, or a related "
+    "field.\n"
+)
+
+
+@pytest.mark.parametrize("title, board_level, text, level", [
+    # Recent graduates, not students: a graduate hire, whatever "Trainee" says.
+    ("Junior Engineer (Global Trainee) | Zalau", "entry", TENARIS, "junior"),
+    # A graduate programme by its title.
+    ("Vodafone Romania Discover Graduate IT-AI Engineering Programme, 2027", None, "", "junior"),
+    # An internship that asks for a finished degree.
+    ("IT Intern - 6 months FTC", "entry", IT_INTERN_GRADUATE, "junior"),
+    # "Graduate Intern" for master's students: an internship, and only that.
+    ("MLIR Compiler Engineering Graduate Intern (f/m/d)", None, INTEL_GRADUATE_INTERN, "intern"),
+    # Open to people still studying: a training position, not a junior role.
+    ("On-the-job Trainee Program, Junior Developer, Cluj-Napoca", "entry", YONDER_TRAINEE, "intern"),
+    # "Recent graduates are welcome" does not make an internship a junior role.
+    ("Software Engineer Intern", None, "Recent graduates are welcome.", "intern"),
+])
+def test_intern_and_junior_are_different_levels(title, board_level, text, level):
+    text += FILLER
+    assert filters.matched_level(title, ["intern", "junior"], board_level, text) == level
+    assert matches_experience_level(title, ["intern"], board_level, text) == (level == "intern")
+    assert matches_experience_level(title, ["junior"], board_level, text) == (level == "junior")
+
+
+def test_an_intern_only_search_does_not_get_a_graduate_trainee_programme():
+    title, text = "Junior Engineer (Global Trainee) | Zalau", TENARIS + FILLER
+    assert not title_is_relevant(title, "computer science internship", "entry", text, ["intern"])
+
+
+@pytest.mark.parametrize("levels, level", [
+    (["intern"], "intern"), (["junior"], None), (["any"], None), (["mid"], None), ([], None),
+])
+def test_matched_level_names_the_level_the_search_took(levels, level):
+    assert filters.matched_level("Software Engineering Internship", levels, None, FILLER) == level
+
+
+def test_matched_level_for_a_junior_role():
+    assert filters.matched_level("Junior Java Developer", ["intern", "junior"], None, FILLER) == "junior"
+    assert filters.matched_level("Junior Java Developer", ["intern"], None, FILLER) is None
