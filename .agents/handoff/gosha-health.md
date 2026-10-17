@@ -1,6 +1,6 @@
 # Handoff: gosha-health — scrape-failure alerting (DM-only to the owner)
 
-Updated: 2026-10-16 · Branch: wip/agents-2026-10-16 · **All my work is committed and RELEASED**: main = 1fe6243, deployed 18:05 UTC 2026-10-16 (alerting in 23aa9a9; DM features, GDPR export and privacy notice in 01cad5a; smoke "blocked from CI" in 03e5314). Status: **standing by. No new work, no live requests** (lead's order).
+Updated: 2026-10-17 ~12:30 UTC · Branch: wip/agents-2026-10-16 · Earlier work committed and released (main = d4158c7). **Latest assignment (alert review + PG CI job) is uncommitted in the working tree: see "Assignment 2026-10-17" below.** Status: (1b) commit-ready, reported to the lead; standing by.
 
 ## Current state (read this first)
 - **Live in production**: owner-DM-only ops alerts (bot, heartbeat watchdog, site watchdog, scraper smoke); site-watchdog stale limit follows the 4h schedule; DM Apply-click tracking (`/api/v1/r/<token>`); weekly owner click report (Monday 08:00 UTC, default ON); monthly empty-search nudge (default OFF); `apply_clicks` + `search_nudges` in the GDPR export and account deletion; privacy notice covers both; scraper smoke treats 403/429-on-every-probe as "blocked from CI (advisory)" and runs with SCRAPE_BROWSER_FALLBACK=true. Working tree clean.
@@ -12,6 +12,106 @@ Updated: 2026-10-16 · Branch: wip/agents-2026-10-16 · **All my work is committ
 - **What to watch after release (read-only; ask the lead first)**: the next daily smoke at 06:17 UTC should be green or show eJobs/Glassdoor as `[BLKD]`, with no issue and no DM. The first weekly click report is due Monday 2026-10-19 08:00 UTC.
 - **Notes for others**: if gosha-pipe's `baseline_combos(cycle)` ever rotates its searches, those must stay out of `searches_by_source`, or collapse detection goes blind. DM clicks deliberately create no Application row (lead decision).
 - No production contact, no real Discord messages, no commits by me.
+- **Git is NOT frozen any more** (lead, 2026-10-17 ~12:30 UTC): commits resumed; the lead commits, not me. Never add `Co-Authored-By: Claude`, `Claude-Session:` or 'Generated with Claude Code' lines.
+
+## Assignment 2026-10-17 (new lead): alert review + Postgres CI job
+### (1) Ops alerts since 2026-10-16 17:00 UTC (read-only, checked 12:15 UTC 2026-10-17)
+Sources: `docker exec gosha-bot cat data/alerts_state.json` / `scrape_health.json` / `click_report.json`,
+`docker logs gosha-bot` (only from 11:30 today: the deploy recreated the container, older logs are gone),
+read-only SELECTs on `jobs` and `events`, `gh run list/view` for the two workflows.
+- **`data:descriptions:bestjobs`: fired, DMed, correct.** Raised 2026-10-16 17:41:25 UTC ("90% of the 40 postings
+  ... no description"), `announced=true`, `last_sent` 2026-10-17 06:35:24 → delivered (state rolls back on a failed
+  DM). With the 6h cooldown that is likely 3 DMs (raise 17:41, reminders ~00:35 and 06:35; exact reminder times
+  are not logged). Real: all 40 BestJobs postings of the last 24h were first seen 2026-10-16 17:xx; 36/40 were
+  empty then. Now 18 have descriptions (re-seen through 11:50 today) and **22 are still empty and active, last
+  seen 18:25–18:26 on the 16th** (no longer in search results, so no cycle refills them; matching sees titles
+  only → for gosha-scrape/gosha-pipe, maybe d2b3ab3's stored-row refresh). Baseline (1–8 days before): 0/39 empty.
+- **It is now stuck, silently**: 22/40 = 55% is between the clear rate (<50%) and the alert rate (≥80%), so no
+  reminder and no recovery. Around 17:41 today those 40 leave the 24h window; BestJobs adds ~0–3 new postings/day
+  outside bursts (Oct: 1,1,33,3,1,41), so `recent < 10` = "can't tell" and the key stays active indefinitely with
+  no "recovered" DM until a day with ≥10 new BestJobs postings at <50% empty. Not noisy, but the owner never hears
+  it ended. (Superseded by (1b) below.) Earlier idea: clear `data:descriptions:<src>` when the window has too
+  few postings to judge AND none of them is empty, or judge descriptions on the last N postings instead of 24h.
+- **Weekly click report: sent once on Friday 2026-10-16 17:36:25 UTC** (`click_report.json`), not Monday. Cause:
+  `clicks.report_due` is true when there is no stamp yet, so the first boot sends the overdue Mon-10-12 slot at
+  once. One-off, by design of the catch-up; next due Mon 2026-10-19 08:00 UTC.
+- **No other in-process alert left a trace**: `alerts_state.json` has no other active key and `recent` is empty
+  (it only keeps 2h). Scrape cycles (8 `scrape.cycle` events 17:33 → 11:51) all had 8 sources, totals 2431–2634;
+  `scrape_health.json` streaks/collapse streaks all 0 (hipo dipped once to 285 vs ~460, above the 25% line).
+  No `data/watchdog_paged_at` → the heartbeat watchdog never paged. Since 11:30: no scheduler exceptions, no
+  alert-delivery errors. Startup log confirms `Ops alerts will be DMed to [<owner id>]`. LinkedIn gave 115× HTTP
+  429 in the 11:33 cycle (yield 268 vs ~315 median: no alert, correctly).
+- **Site watchdog is OFF**: all 5 scheduled runs since 2026-10-16 19:59 UTC printed "Site watchdog off: needs
+  secrets DISCORD_BOT_TOKEN + ALERT_DM_USER_IDS". GitHub also ran the */30 cron only 5 times in ~14h. So the
+  out-of-process "bot/server down" alert does not exist yet → owner setup step 2.
+- **Scraper smoke**: 2026-10-17 run (scheduled 06:17, ran 10:44 UTC) green, every source `[OK]`; it closed issue
+  #11 (open since 10-05) and tried to DM "recovered", but "DISCORD_BOT_TOKEN / ALERT_DM_USER_IDS not set; Discord
+  was not told" (same missing secrets).
+
+### (1b) Stuck-alert root fix (lead-approved ~12:45 UTC; working tree, uncommitted, COMMIT-READY)
+- **Lead ruling**: keep scrape_health's first_seen window (my data beat the last_seen metric); 48h rule approved.
+  **Correction (from gosha-scrape)**: the 22 BestJobs rows are EXPIRED postings: `bestjobs._apply_details` drops
+  expired pages, so neither upsert nor refresh_known_rows (on main since d2b3ab3) sees them. The data fix is the
+  expired-deactivation in the tree (pipe's `pipeline._deactivate_expired` + scrape adapter). The "filter drops
+  them once their page says Middle" explanation below is superseded.
+- **Done: `check_data_quality` ignores deactivated rows** (`gosha/scrape_health.py`, the descriptions query's
+  `.where(..., Job.is_active.is_(True))`, baseline included). Before, it counted them, so deactivating the expired
+  rows would not have cleared the alert. Test: `test_d_bestjobs_incident_recovers_once_expired_rows_are_deactivated`
+  (10-16 shape; at 12:00 next day (40, 22) → no verdict; 22 deactivated → 18 active, 0 empty → cleared →
+  "recovered" DM). Fails on HEAD's scrape_health.py (verified by swapping it in), passes now.
+- **Done: every open alert can end.** `gosha/alerts.py`: `_Active.judged` (when a detector last called it failing;
+  persisted, None in old state files → the clock starts at the first decide() after load);
+  `Alerter(unresolved_seconds=DEFAULT_UNRESOLVED_SECONDS=48h)`; decide() closes any open key not judged failing
+  for 48h: announced → `Dispatch.closed` line "<text> _(no verdict for 2d0h: closed; it pages again if it comes
+  back)_" under "❔ GOSHA — closed without a verdict"; silent flap → closed silently. Not put in `recent`, so a
+  return pages afresh. Rolled back like the rest if the DM fails. 48h = 2 runs of the slowest detector
+  (deadlink_check / cv_retention, every 24h). docs/ALERTS.md paragraph. For prod's open BestJobs key: the clock
+  starts at the first check after the deploy; it closes 48h later unless it fails or clears first.
+- **NOT done: the lead's metric change (judge by last_seen_at).** Data (prod, read-only, 12:28 UTC): last_seen_at is
+  when a search last KEPT a posting (pipeline.upsert_jobs sets it only for rows that pass the scrape filter), and
+  most new postings are kept only in their first cycle: of 41 BestJobs postings first seen in 48h, 38 were last kept
+  within 1h of first sight and 3 in the latest cycle (LinkedIn 184/273 first cycle only, 50 latest). So:
+  (a) "seen in the latest cycle" leaves 2 BestJobs, 48 LinkedIn new postings now → mostly below the 10-posting
+  minimum → detector blind; (b) "last_seen within 24h" rates old postings too: today 94 BestJobs rows, 54 of them
+  older with text → the 10-16 incident would have read ~36/94 (38%), below 80%, no alert (estimate: last_seen
+  values of that moment are overwritten). The 22 rows are not unlisted: per gosha-pipe's WIP refresh_known_rows
+  docstring (pipeline.py:525) the filter drops them once their page says Middle, so upsert never refreshes them.
+  That refresh fixes the data, the rate then clears ("recovered"); the 48h rule covers any limbo. I tried the
+  "new AND seen in the board's latest cycle" variant, measured it on prod, and reverted it (the only
+  scrape_health.py change is the is_active filter above).
+- Tests (all fail on HEAD's alerts.py, verified by swapping it in): tests/test_alerts.py
+  `test_an_alert_nothing_can_judge_is_closed_with_a_message`, `test_a_failure_judged_once_a_day_is_never_closed`,
+  `test_a_silent_flap_is_closed_silently`, `test_an_old_state_file_starts_the_clock_at_load`,
+  `test_an_undelivered_close_is_said_again_next_check`; tests/test_alert_scenarios.py, the exact 10-16 shape
+  (40 new rows 36 empty + 54 older listed with text): `test_d_bestjobs_incident_recovers_once_expired_rows_are_deactivated`
+  (pages 90% of 40; at 12:00 next day (40, 22) → no verdict, as prod; 22 deactivated → recovered DM) and
+  `test_d_bestjobs_incident_without_a_verdict_closes_aloud` (out of the window → no verdict at +25h/+47h → closed
+  DM at +48h).
+- Verify: `.venv/bin/python -m pytest -q tests/test_alerts.py tests/test_alert_scenarios.py tests/test_scrape_health.py
+  tests/test_healthcheck_script.py tests/test_site_watchdog.py tests/test_alert_switch.py tests/api/test_freshness_api.py
+  tests/test_click_report.py tests/test_nudges.py tests/test_deliver.py` → 248 passed; ruff clean on alerts.py and the
+  2 test files.
+
+### (2) Postgres CI job (working tree, uncommitted)
+- `.github/workflows/ci.yml`: new job `backend-postgres` (postgres:16-alpine service, same image as
+  docker-compose.prod.yml; same install list as `backend`; `pytest -q -rs`). `GOSHA_TEST_DB_URL` → db
+  `gosha_test` (whole suite), `GOSHA_TEST_POSTGRES_URL` → db `postgres` (the PG-only tests that drop/recreate
+  tables, kept in their own database). **Not added to deploy's `needs`**, so deploy-on-main is unchanged
+  (`needs: [backend, frontend, images]`); making it gate the deploy is a one-word change for the owner/lead.
+- `tests/conftest.py`: `TEST_DB_URL = os.getenv("GOSHA_TEST_DB_URL") or sqlite memory`, `ON_POSTGRES`, and the
+  SQLite `PRAGMA foreign_keys` listener only on SQLite (replaces the old scratchpad `pg_plugin.py`).
+- Skipped on PG with a reason: `tests/api/test_subscriptions_api.py::test_delete_a_search_that_delivered_a_dm`
+  (rebuilds user_jobs from sqlite_master; tests/api/test_postgres_api.py:63 is its PG twin) and
+  `tests/api/test_auth.py::test_deleted_accounts_cookie_does_not_open_the_next_account` (SQLite id reuse).
+- Files outside my usual ownership, edited on the lead's assignment: ci.yml, tests/conftest.py, the 2 test files.
+- **Verified 2026-10-17 ~12:25 UTC** (offline, on the working tree incl. other agents' uncommitted edits):
+  `/tmp/claude-1001/-home-ubuntu-gosha-agents/1f87794d-46b6-407b-a3fc-2ed02ba1bbee/scratchpad/pg_ci_local.sh`
+  (throwaway `gosha-agents-pgtest` postgres:16-alpine on 127.0.0.1:55432, removed after; the CI-identical venv
+  from the old lead's scratchpad, run with PYTHONDONTWRITEBYTECODE) → **1758 passed, 6 skipped, 0 failed** in
+  4m43s. Skips: the 2 above with their reasons + 4 × "sentence-transformers not installed" (as in CI); the 15
+  PG-only tests ran. SQLite default: `.venv/bin/python -m pytest -q tests/api/test_auth.py
+  tests/api/test_subscriptions_api.py` → 37 passed; ruff clean on the 3 test files; ci.yml parses, deploy
+  `needs` unchanged. Not run: the job on GitHub itself (needs a push).
 
 ## Mission (one paragraph, self-contained)
 User request: "put one agent to check if the jobs are successfully scraped or not, and if they are not send an alert to me @Bogdanila on discord". Later requirement change from the user: **alerts go ONLY as a Discord DM to the owner** (ALERT_DM_USER_IDS, numeric ID). No channel posts, no @mentions, admins are not paged implicitly, and one off switch (`ALERTS_ENABLED=false` or empty `ALERT_DM_USER_IDS`). Detection must cover all-zero cycles, one dead board, yield collapse, empty descriptions, embedding failure, a hung/crashed bot or server down (out of process), and a failing daily smoke workflow, with dedup/cooldown and "recovered" messages.

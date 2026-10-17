@@ -26,8 +26,11 @@ heals. A condition that fails again shortly after its "recovered" (within
 2h for the bot's checks, 1h for the site watchdog) is held back once to
 see whether it is flapping: if it clears again nothing is sent, and if it
 is still failing when that window ends you get "failing again … after
-recovering" at once. A DM that reaches nobody is not counted as said; it
-is retried at the next check. Alert state and yield baselines are kept in `data/alerts_state.json`
+recovering" at once. An open alert never ends in silence: if no check has
+called it failing for 48h (its detector can no longer judge it, e.g. too
+few new postings to rate descriptions), it is closed with a "closed without
+a verdict" DM, and pages afresh if it comes back. A DM that reaches nobody
+is not counted as said; it is retried at the next check. Alert state and yield baselines are kept in `data/alerts_state.json`
 and `data/scrape_health.json`, so a deploy during an outage neither
 re-pages you nor forgets the baselines. Delete those files to re-baseline.
 

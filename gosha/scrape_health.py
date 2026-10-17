@@ -585,7 +585,11 @@ async def check_data_quality(now: datetime | None = None) -> QualityReport:
                 func.sum(case((~is_recent, 1), else_=0)),
                 func.sum(case((~is_recent & empty, 1), else_=0)),
             )
-            .where(Job.first_seen_at >= base_since)
+            # Deactivated postings (expired, dead links) are no longer
+            # matched or shown, so their text no longer matters: 22 expired
+            # BestJobs rows held the 2026-10-16 alert open after the rest
+            # had their text.
+            .where(Job.first_seen_at >= base_since, Job.is_active.is_(True))
             .group_by(Job.source)
         )).all()
 

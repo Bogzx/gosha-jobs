@@ -12,7 +12,9 @@ often*:
   (ALERT_COOLDOWN_MINUTES), not once per cycle, and when the detector
   reports it healthy again the owner gets a "recovered" message. A
   condition the detector cannot judge (no baseline yet, right after a
-  restart) is neither raised nor cleared.
+  restart) is neither raised nor cleared — but an alert never stays open
+  in silence: one no detector has called failing for UNRESOLVED_SECONDS
+  is closed with a message that says there was no verdict.
 * Flapping is not a page per flip. A condition that comes back within a
   short flap window (about two checks of its detector) of its "recovered"
   message is tracked silently at first. If it is still failing once that
@@ -53,6 +55,10 @@ DEFAULT_COOLDOWN_SECONDS = 6 * 3600
 # Two checks of the bot's hourly detectors. The site watchdog (every 30
 # minutes) uses one hour.
 DEFAULT_FLAP_WINDOW_SECONDS = 2 * 3600
+# An open alert no detector has called failing for this long is closed
+# without a verdict. Two runs of the slowest detector (the daily scheduler
+# jobs), so a daily job that keeps failing is never closed between runs.
+DEFAULT_UNRESOLVED_SECONDS = 48 * 3600
 
 
 class AlertSink(Protocol):
@@ -71,6 +77,9 @@ class _Active:
     # that "recovered"), so clearing it again sends nothing.
     announced: bool = True
     flapping: bool = False
+    # When a detector last called it failing; None until the first decide()
+    # after loading a state file written before this field existed.
+    judged: float | None = None
 
 
 @dataclass
@@ -80,12 +89,14 @@ class Dispatch:
     raised: list[str] = field(default_factory=list)
     reminded: list[str] = field(default_factory=list)
     recovered: list[str] = field(default_factory=list)
+    # Open alerts nothing judged for too long, closed without a verdict.
+    closed: list[str] = field(default_factory=list)
     # Keys whose state changed because of a message above: what to roll
     # back if that message is never delivered.
     keys: list[str] = field(default_factory=list)
 
     def __bool__(self) -> bool:
-        return bool(self.raised or self.reminded or self.recovered)
+        return bool(self.raised or self.reminded or self.recovered or self.closed)
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -107,9 +118,11 @@ class Alerter:
         state_path: Path | None = None,
         clock: Callable[[], float] = time.time,
         flap_window_seconds: float = DEFAULT_FLAP_WINDOW_SECONDS,
+        unresolved_seconds: float = DEFAULT_UNRESOLVED_SECONDS,
     ) -> None:
         self.cooldown_seconds = cooldown_seconds
         self.flap_window_seconds = flap_window_seconds
+        self.unresolved_seconds = unresolved_seconds
         self.clock = clock
         self.state_path = state_path
         self.active: dict[str, _Active] = {}
@@ -133,6 +146,7 @@ class Alerter:
                 key: _Active(
                     float(v["since"]), float(v["last_sent"]), str(v.get("text", "")),
                     bool(v.get("announced", True)), bool(v.get("flapping", False)),
+                    None if v.get("judged") is None else float(v["judged"]),
                 )
                 for key, v in raw.get("active", {}).items()
             }
@@ -152,6 +166,7 @@ class Alerter:
                 key: {
                     "since": a.since, "last_sent": a.last_sent, "text": a.text,
                     "announced": a.announced, "flapping": a.flapping,
+                    "judged": a.judged,
                 }
                 for key, a in self.active.items()
             },
@@ -272,6 +287,8 @@ class Alerter:
                 out.keys.append(key)
             else:
                 current.text = text
+        for key in failing:
+            self.active[key].judged = now
         cleared_map = cleared if isinstance(cleared, Mapping) else {k: "" for k in cleared}
         for key, text in cleared_map.items():
             if key in failing:
@@ -290,6 +307,22 @@ class Alerter:
                 f"{message} _(was failing for {_fmt_duration(now - current.since)})_"
             )
             out.keys.append(key)
+        for key, current in list(self.active.items()):
+            if current.judged is None:
+                current.judged = now
+                continue
+            unjudged = now - current.judged
+            if unjudged < self.unresolved_seconds:
+                continue
+            # "Can't tell" for this long: say so instead of staying open
+            # forever. Not a recovery, so it is not kept in `recent`.
+            del self.active[key]
+            if current.announced:
+                out.closed.append(
+                    f"{current.text} _(no verdict for {_fmt_duration(unjudged)}: closed; "
+                    f"it pages again if it comes back)_"
+                )
+                out.keys.append(key)
         self._save()
         return out
 
@@ -323,6 +356,11 @@ def format_dispatch(title: str, dispatch: Dispatch) -> str:
             lines.append("")
         lines.append(f"✅ **GOSHA — {title}: recovered**")
         lines.extend(f"• {r}" for r in dispatch.recovered)
+    if dispatch.closed:
+        if lines:
+            lines.append("")
+        lines.append("❔ **GOSHA — closed without a verdict** (nothing to judge it on)")
+        lines.extend(f"• {c}" for c in dispatch.closed)
     return "\n".join(lines)
 
 

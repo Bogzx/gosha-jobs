@@ -338,6 +338,112 @@ async def test_d_descriptions_present_is_healthy(patched_db, session):
     assert not report.conditions
 
 
+# Prod, BestJobs: 40 postings first seen 2026-10-16 ~17:00, 36 of them
+# empty; the board also listed older postings that kept their text. By
+# 12:00 the next day 18 had their text; the 22 empty ones were expired
+# postings (bestjobs drops expired pages, so no upsert or refresh ever
+# refilled them): 22/40 = 55%, neither failing nor healthy. last_seen_at is when a search last
+# KEPT a posting, and most are kept only in their first cycle, so it
+# cannot tell which postings a board still lists: judging by it would
+# have rated the 54 older ones too (36/94, no alert) or almost none.
+INCIDENT = datetime(2026, 10, 16, 17, 41, tzinfo=timezone.utc)
+
+
+async def _bestjobs_incident(session):
+    from gosha.embeddings import current_model
+    from gosha.models import Job
+
+    def job(url, first_seen, description):
+        return Job(
+            url=url, title="Engineer", company="Acme", source="bestjobs",
+            description=description, first_seen_at=first_seen, last_seen_at=INCIDENT,
+            embedding=b"\x00" * 8, embedding_model=current_model(),
+        )
+
+    old = [job(f"https://bestjobs.test/old/{i}", INCIDENT - timedelta(days=3), LONG)
+           for i in range(54)]
+    new = [job(f"https://bestjobs.test/new/{i}", INCIDENT - timedelta(minutes=40),
+               None if i < 36 else LONG) for i in range(40)]
+    session.add_all(old + new)
+    await session.commit()
+    return old, new
+
+
+@pytest.mark.asyncio
+async def test_d_bestjobs_incident_recovers_once_expired_rows_are_deactivated(
+    patched_db, session,
+):
+    from gosha.alerts import Alerter, sink_for_bot
+
+    old, new = await _bestjobs_incident(session)
+    now = [INCIDENT.timestamp()]
+    alerter = Alerter(clock=lambda: now[0])
+    bot = FakeBot()
+
+    async def check(at):
+        now[0] = at.timestamp()
+        report = await check_data_quality(now=at)
+        await alerter.update(sink_for_bot(bot), report.conditions, report.cleared,
+                             title="Data quality")
+        return report
+
+    # The new postings are judged on their own: the 54 older ones the
+    # board still lists, with their text, do not dilute 36/40 into 36/94.
+    report = await check(INCIDENT)
+    assert "90% of the 40 postings" in report.conditions["data:descriptions:bestjobs"]
+    assert len(bot.dms(OWNER)) == 1
+
+    next_noon = INCIDENT + timedelta(hours=18, minutes=19)
+    for row in new[:14]:  # their detail pages were read next cycle
+        row.description = LONG
+    await session.commit()
+    report = await check(next_noon)
+    assert report.descriptions["bestjobs"][:2] == (40, 22)  # prod at 12:00
+    assert "data:descriptions:bestjobs" not in report.conditions
+    assert "data:descriptions:bestjobs" not in report.cleared
+    assert len(bot.dms(OWNER)) == 1
+
+    # The expired postings are deactivated: they no longer count, the 18
+    # live ones all have text, and the owner hears it is healthy.
+    for row in new[14:36]:
+        row.is_active = False
+    await session.commit()
+    report = await check(next_noon + timedelta(hours=1))
+    assert "data:descriptions:bestjobs" in report.cleared
+    assert len(bot.dms(OWNER)) == 2 and "recovered" in bot.dms(OWNER)[1]
+
+
+@pytest.mark.asyncio
+async def test_d_bestjobs_incident_without_a_verdict_closes_aloud(patched_db, session):
+    """The 40 postings age out of the window and BestJobs adds too few new
+    ones to judge: after 48h without a verdict the owner hears it closed."""
+    from gosha.alerts import Alerter, sink_for_bot
+
+    await _bestjobs_incident(session)
+    now = [INCIDENT.timestamp()]
+    alerter = Alerter(clock=lambda: now[0])
+    bot = FakeBot()
+
+    async def check(at):
+        now[0] = at.timestamp()
+        report = await check_data_quality(now=at)
+        await alerter.update(sink_for_bot(bot), report.conditions, report.cleared,
+                             title="Data quality")
+        return report
+
+    await check(INCIDENT)
+    assert len(bot.dms(OWNER)) == 1
+    for hours in (25, 47):
+        report = await check(INCIDENT + timedelta(hours=hours))
+        assert "data:descriptions:bestjobs" not in report.conditions
+        assert "data:descriptions:bestjobs" not in report.cleared
+    assert len(bot.dms(OWNER)) == 1
+    await check(INCIDENT + timedelta(hours=48))
+    assert len(bot.dms(OWNER)) == 2
+    assert "closed without a verdict" in bot.dms(OWNER)[1]
+    assert "data:descriptions:bestjobs" not in alerter.active
+
+
 @pytest.mark.asyncio
 async def test_e_embedding_backlog_alerts(patched_db, session):
     await _add_jobs(session, "ejobs", 15, age=timedelta(hours=5), description=LONG,

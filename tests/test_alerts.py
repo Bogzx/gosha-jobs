@@ -600,3 +600,88 @@ def test_four_hour_cycle_overrun_pages_once_then_recovers():
     for _ in range(6):  # a day of normal cycles
         clock.t += 4 * 3600
         assert not alerter.decide(*scheduler_event_conditions(ran, jobs))
+
+
+# ── An open alert always ends: no verdict for 48h closes it, aloud ───
+
+
+def test_an_alert_nothing_can_judge_is_closed_with_a_message():
+    """Prod 2026-10-17: BestJobs' description alert sat in "can't tell"
+    with no recovery coming. After 48h without a verdict it is closed and
+    the owner is told, and a later failure pages afresh."""
+    clock = Clock()
+    alerter = Alerter(cooldown_seconds=6 * 3600, clock=clock)
+    alerter.decide({"k": "bestjobs descriptions empty"})
+    for _ in range(47):  # hourly checks that cannot tell
+        clock.t += 3600
+        assert not alerter.decide({}, {})
+    clock.t += 3600
+    closed = alerter.decide({}, {})
+    assert closed.closed == [
+        "bestjobs descriptions empty _(no verdict for 2d0h: closed; it pages again if it "
+        "comes back)_"
+    ]
+    assert closed.keys == ["k"] and "k" not in alerter.active and "k" not in alerter.recent
+    assert "closed without a verdict" in format_dispatch("Data quality", closed)
+    assert not alerter.decide({}, {})
+    assert alerter.decide({"k": "again"}).raised == ["again"]
+
+
+def test_a_failure_judged_once_a_day_is_never_closed():
+    """deadlink_check and cv_retention run every 24h: a job failing at each
+    run stays one open alert while other detectors decide hourly."""
+    clock = Clock()
+    alerter = Alerter(cooldown_seconds=6 * 3600, clock=clock)
+    alerter.decide({"scheduler:deadlink_check": "dead-link check crashed"})
+    for hour in range(1, 24 * 7):
+        clock.t += 3600
+        failing = {"scheduler:deadlink_check": "dead-link check crashed"} if hour % 25 == 0 else {}
+        assert not alerter.decide(failing, {}).closed
+    assert "scheduler:deadlink_check" in alerter.active
+
+
+def test_a_silent_flap_is_closed_silently():
+    clock = Clock()
+    alerter = Alerter(cooldown_seconds=6 * 3600, flap_window_seconds=3600, clock=clock)
+    alerter.decide({"k": "broken"})
+    clock.t += 60
+    alerter.decide({}, {"k": "ok"})
+    clock.t += 60
+    alerter.decide({"k": "broken"})  # back inside the window: tracked silently
+    clock.t += 48 * 3600
+    assert not alerter.decide({}, {})
+    assert "k" not in alerter.active
+
+
+def test_an_old_state_file_starts_the_clock_at_load(tmp_path):
+    """Prod's alerts_state.json predates `judged`: its open alert gets the
+    full 48h from the first check after the deploy, not an instant close."""
+    path = tmp_path / "alerts.json"
+    path.write_text(json.dumps({"active": {"k": {
+        "since": 0.0, "last_sent": 0.0, "text": "old", "announced": True, "flapping": False,
+    }}, "recent": {}}))
+    clock = Clock()
+    alerter = Alerter(state_path=path, clock=clock)
+    assert not alerter.decide({}, {})
+    clock.t += 47 * 3600
+    assert not Alerter(state_path=path, clock=clock).decide({}, {})  # persisted
+    clock.t += 3600
+    assert Alerter(state_path=path, clock=clock).decide({}, {}).closed
+
+
+@pytest.mark.asyncio
+async def test_an_undelivered_close_is_said_again_next_check():
+    bot = FakeBot()
+    clock = Clock()
+    alerter = Alerter(cooldown_seconds=3600, clock=clock)
+    sink = sink_for_bot(bot)
+    await alerter.update(sink, {"k": "broken"})
+    clock.t += 48 * 3600
+    bot.users[OWNER].fail = True
+    await alerter.update(sink, {}, {})
+    assert "k" in alerter.active
+    bot.users[OWNER].fail = False
+    clock.t += 3600
+    await alerter.update(sink, {}, {})
+    assert len(bot.dms(OWNER)) == 2 and "no verdict" in bot.dms(OWNER)[1]
+    assert "k" not in alerter.active
