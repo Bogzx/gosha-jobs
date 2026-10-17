@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from typing import Any
 
 from gosha.filters import fold, normalize_location
@@ -114,12 +115,18 @@ def _without_deferred(jobs: list[RawJob], deferred: set[str]) -> list[RawJob]:
 
 def _apply_details(
     jobs: list[RawJob], details: dict[str, dict[str, Any]],
+    on_expired: Callable[[str], None] | None = None,
 ) -> list[RawJob]:
-    """Fold detail pages into the jobs; drops postings the page calls expired."""
+    """Fold detail pages into the jobs; drops postings the page calls expired
+    and reports them to `on_expired`. The API keeps listing some of them
+    (8311, 8312 on 2026-10-17), so without the report their stored rows
+    stayed active: the page answers 200, which deadlinks takes as alive."""
     kept: list[RawJob] = []
     for job in jobs:
         detail = details.get(job.url) or {}
         if detail.get("expired"):
+            if on_expired is not None:
+                on_expired(job.url)
             continue
         if detail.get("description"):
             job.description = detail["description"]
@@ -230,7 +237,9 @@ class BestJobsScraper:
                 details = await fetch_details(
                     client, wanted, _extract_detail, MAX_DETAIL_FETCHES, deferred,
                 )
-                return _apply_details(_without_deferred(jobs, deferred), details)
+                return _apply_details(
+                    _without_deferred(jobs, deferred), details, query.on_expired,
+                )
         except Exception as exc:
             log.warning("BestJobs scrape failed for %r: %s", query.keyword, exc)
             return []

@@ -454,3 +454,34 @@ def test_same_posting_matches_what_grouping_matches():
     assert dedup.same_posting("Hardware Test Engineer", "Hipo.ro", "Hardware Test Engineer", "AUMOVIO",
                               text_a="Since its spin-off in September 2025 AUMOVIO continues")
     assert not dedup.same_posting("Hardware Test Engineer", "Hipo.ro", "Hardware Test Engineer", "AUMOVIO")
+
+
+_MARSH_TITLE = "Junior Full-Stack Engineer, Generative AI @ Marsh Tech"
+
+
+def test_an_employer_named_in_the_title_is_the_employer():
+    """Prod 7210/8041 (2026-10-16): LinkedIn says Marsh, BestJobs names Marsh
+    McLennan's entity "MMC Corporate"; the title names the unit. One user got
+    both DMs."""
+    assert dedup.normalize_key(_MARSH_TITLE, "Marsh") == dedup.normalize_key(
+        _MARSH_TITLE, "MMC Corporate",
+    )
+    assert dedup.same_posting(_MARSH_TITLE, "Marsh", _MARSH_TITLE, "MMC Corporate")
+    t = "Junior Business Data Analyst @MarshTech"
+    assert dedup.same_posting(t, "Marsh", t, "Mercer")
+    # Without the "@ unit" the employers still decide.
+    assert not dedup.same_posting("Data Analyst", "Marsh", "Data Analyst", "MMC Corporate")
+    # The unit is part of the title: another unit's posting stays apart.
+    assert not dedup.same_posting(_MARSH_TITLE, "Marsh", _MARSH_TITLE.replace(
+        "Marsh Tech", "DARWIN"), "Marsh")
+
+
+async def test_copies_whose_title_names_the_employer_group(patched_db, session):
+    linkedin = Job(url="https://linkedin.com/jobs/view/7210", title=_MARSH_TITLE, company="Marsh",
+                   location="Cluj-Napoca, Cluj, Romania", source="linkedin")
+    bestjobs = Job(url="https://www.bestjobs.eu/ro/loc-de-munca/x", title=_MARSH_TITLE,
+                   company="MMC Corporate", location="Cluj-Napoca, România", source="bestjobs")
+    session.add_all([linkedin, bestjobs])
+    await session.commit()
+    assert await dedup.assign_dedup_groups() == 1
+    assert await _group_ids(session, linkedin, bestjobs) == [linkedin.id, linkedin.id]

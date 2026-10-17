@@ -30,6 +30,14 @@ def fresh_caches(monkeypatch):
     details.clear_cache()
 
 
+@pytest.mark.parametrize("markup", [
+    "<p>Python</p><style>p { color: red; }</style><script>var x = 1;</script><p>SQL</p>",
+    "&lt;p&gt;Python&lt;/p&gt;&lt;style&gt;p { color: red; }&lt;/style&gt;&lt;p&gt;SQL&lt;/p&gt;",
+])
+def test_html_to_text_drops_style_and_script_content(markup):
+    assert html_to_text(markup) == "Python\nSQL"
+
+
 def test_html_to_text_unescapes_and_keeps_paragraphs():
     text = html_to_text("<p><b>Python</b>&nbsp;&amp; Django</p><ul><li>Go</li><li>SQL</li></ul>")
     assert text == "Python & Django\nGo\nSQL"
@@ -51,6 +59,34 @@ def test_hipo_detail_extraction():
     assert "functional specifications" in text
     # Hipo repeats one paragraph across several JobPosting fields.
     assert text.count("You will translate business needs") == 1
+    # The ad's own stylesheet ends up in the JSON-LD text as bare rules
+    # (11 stored Hipo rows on 2026-10-17); it is not part of the ad.
+    assert text.endswith("delivering business results.")
+    assert "#anunt-content" not in text and "!important" not in text
+
+
+# The tail of stored row 8359 (Schaeffler, 2026-10-17): the body read keeps
+# the ad's stylesheet with its line breaks.
+_AD_CSS = """
+#anunt-content p, #anunt-content li, #anunt-content strong {
+font-size:13px !important;
+line-height: 18px !important;
+font-family: Arial !important;
+margin-bottom:5px !important;
+}
+"""
+
+
+@pytest.mark.parametrize("css", [f"<style>{_AD_CSS}</style>", f"<p>{_AD_CSS}</p>"])
+def test_hipo_body_text_leaves_out_the_ads_stylesheet(css):
+    page = fixture("hipo_detail_body.html").replace(
+        "<p style='font-size:15px;'>Additional Information</p>",
+        css + "<p style='font-size:15px;'>Additional Information</p>",
+    )
+    assert css in page
+    text = hipo._extract_detail(page)["description"]
+    assert "Additional Information" in text and "Qualifications" in text
+    assert "#anunt-content" not in text and "!important" not in text
 
 
 @pytest.mark.parametrize("raw", ["\t", "\n", "\r\n"])
@@ -200,6 +236,39 @@ async def test_bestjobs_detail_names_the_employer_of_anonymous_postings():
     )
     jobs = await bestjobs.BestJobsScraper().search(SearchQuery("software engineer", "cluj"))
     assert all(j.company != "Unknown" for j in jobs)
+
+
+def test_bestjobs_expired_page_is_recognised():
+    detail = bestjobs._extract_detail(fixture("bestjobs_expired_detail.html"))
+    assert detail["expired"] is True
+    assert detail["description"].startswith("Job Description: Shopify Web Developer")
+
+
+@respx.mock
+async def test_bestjobs_reports_postings_their_page_calls_expired():
+    """Prod, 2026-10-17: the API still listed 8311 and 8312, their pages said
+    expired, and the adapter dropped them without a word, so the stored rows
+    stayed active and empty (deadlinks sees 200 on such pages)."""
+    payload = _bestjobs_list(2)
+    respx.get(bestjobs.API_URL).mock(return_value=httpx.Response(200, json=payload))
+    respx.get(url__regex=r"https://www\.bestjobs\.eu/ro/loc-de-munca/job-0").mock(
+        return_value=httpx.Response(200, text=fixture("bestjobs_expired_detail.html")),
+    )
+    respx.get(url__regex=r"https://www\.bestjobs\.eu/ro/loc-de-munca/job-1").mock(
+        return_value=httpx.Response(200, text=fixture("bestjobs_detail.html")),
+    )
+    expired: list[str] = []
+    query = SearchQuery("developer", "cluj", on_expired=expired.append)
+    jobs = await bestjobs.BestJobsScraper().search(query)
+    assert [j.url for j in jobs] == [bestjobs.JOB_URL_TEMPLATE.format(slug="job-1")]
+    # The URL exactly as a live sighting stores it (jobs.url), so the
+    # pipeline's UPDATE finds the row.
+    stored_as = bestjobs._parse(payload, query)[0].to_record()["job_url"]
+    assert expired == [stored_as]
+
+    # Without a listener (smoke, eval) the posting is still left out.
+    jobs = await bestjobs.BestJobsScraper().search(SearchQuery("developer", "cluj"))
+    assert [j.url for j in jobs] == [bestjobs.JOB_URL_TEMPLATE.format(slug="job-1")]
 
 
 @respx.mock

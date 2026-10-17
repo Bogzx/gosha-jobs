@@ -127,6 +127,16 @@ _BODY_START_RE = re.compile(r'<div\b[^>]*\bid="anunt-content"[^>]*>', re.IGNOREC
 _DIV_RE = re.compile(r"<div\b|</div\s*>", re.IGNORECASE)
 # A body worth preferring: some text, in more than one block.
 MIN_BODY_CHARS = 200
+# Hipo ads carry their own stylesheet ("#anunt-content p { font-size: 13px
+# !important; }"). The JSON-LD keeps its rules as bare text, and so did 11
+# stored rows on 2026-10-17 (body and JSON-LD reads alike).
+_AD_CSS_RE = re.compile(r"#anunt-content\b[^{}]*\{[^{}]*\}")
+
+
+def _without_ad_css(text: str) -> str:
+    text = re.sub(r"[ \t]{2,}", " ", _AD_CSS_RE.sub(" ", text))
+    text = re.sub(r" *\n *", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def _body_description(page: str) -> str:
@@ -142,7 +152,7 @@ def _body_description(page: str) -> str:
             break
     # Repaired like the JSON-LD text: the captured body was clean, but nothing
     # guarantees another employer's ad is (repair_mojibake leaves good text alone).
-    text = html_to_text(repair_mojibake(page[start.end():end]))
+    text = _without_ad_css(html_to_text(repair_mojibake(page[start.end():end])))
     if len(text) < MIN_BODY_CHARS or "\n" not in text:
         return ""
     return text
@@ -162,7 +172,7 @@ def _extract_detail(page: str) -> dict[str, Any]:
         parts.append(body)
     else:
         for key in _PROSE_FIELDS:
-            text = html_to_text(repair_mojibake(str(posting.get(key) or "")))
+            text = _without_ad_css(html_to_text(repair_mojibake(str(posting.get(key) or ""))))
             if text and text not in parts:
                 parts.append(text)
     detail: dict[str, Any] = {}

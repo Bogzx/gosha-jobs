@@ -86,6 +86,12 @@ _PLACEHOLDER_COMPANIES = frozenset({"", "unknown", "confidential", "na"})
 # Likewise the pipeline's "Unknown Title" (and "Unknown (migrated)" stubs).
 _PLACEHOLDER_TITLE_TOKENS = frozenset({"unknown", "title"})
 
+# "Junior Full-Stack Engineer @ Marsh Tech": the title names the employer
+# (or its unit), whatever entity a board files it under: LinkedIn "Marsh",
+# BestJobs "MMC Corporate", LinkedIn again "Mercer" (prod 7210/8041,
+# 2026-10-16, both DMed to one user).
+_TITLE_EMPLOYER = re.compile(r"(?:^|\s)@\s*([^@]+?)\s*$")
+
 
 def normalize_key(title: str, company: str) -> str | None:
     """Order-insensitive, decoration-insensitive identity for a posting.
@@ -101,7 +107,7 @@ def normalize_key(title: str, company: str) -> str | None:
     board's "Romana" — the same posting, never grouped.
     """
     title_part = _title_part(title)
-    company_part = "".join(company_words(company))
+    company_part = "".join(_employer_words(title, company))
     if title_part is None or company_part in _PLACEHOLDER_COMPANIES:
         return None
     return f"{title_part}::{company_part}"
@@ -130,6 +136,17 @@ def company_words(company: str | None) -> tuple[str, ...]:
     if len(kept) > 1 and kept[0] in _PARENT_BRANDS:
         kept = kept[1:]
     return tuple(kept or words)
+
+
+def _title_employer(title: str | None) -> tuple[str, ...]:
+    """company_words of the employer a title names ("… @ Marsh Tech"), or ()."""
+    match = _TITLE_EMPLOYER.search(title or "")
+    words = company_words(match.group(1)) if match else ()
+    return () if "".join(words) in _PLACEHOLDER_COMPANIES else words
+
+
+def _employer_words(title: str | None, company: str | None) -> tuple[str, ...]:
+    return _title_employer(title) or company_words(company)
 
 
 def same_employer(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
@@ -212,9 +229,11 @@ def same_posting(
     title = _title_part(title_a)
     if title is None or title != _title_part(title_b):
         return False
-    words_a, words_b = company_words(company_a), company_words(company_b)
+    words_a, words_b = _employer_words(title_a, company_a), _employer_words(title_b, company_b)
     if "".join(words_a) in _PLACEHOLDER_COMPANIES or "".join(words_b) in _PLACEHOLDER_COMPANIES:
         return False
+    if _title_employer(title_a) or _title_employer(title_b):
+        return same_employer(words_a, words_b)
     if is_reposter(company_a) and is_reposter(company_b):
         return same_employer(words_a, words_b)
     for reposter, text, other in ((company_a, text_a, words_b), (company_b, text_b, words_a)):
@@ -233,7 +252,7 @@ def _postings(jobs: list[Job], texts: dict[int, str]) -> list[list[Job]]:
     by_title: dict[str, list[Job]] = {}
     for job in jobs:
         title_part = _title_part(job.title)
-        company = "".join(company_words(job.company))
+        company = "".join(_employer_words(job.title, job.company))
         if title_part is None or company in _PLACEHOLDER_COMPANIES:
             continue
         by_title.setdefault(title_part, []).append(job)
@@ -243,10 +262,10 @@ def _postings(jobs: list[Job], texts: dict[int, str]) -> list[list[Job]]:
         employers: list[tuple[tuple[str, ...], list[Job]]] = []
         reposts: list[Job] = []
         for job in sorted(same_title, key=lambda j: j.id):
-            if is_reposter(job.company):
+            if is_reposter(job.company) and not _title_employer(job.title):
                 reposts.append(job)
                 continue
-            words = company_words(job.company)
+            words = _employer_words(job.title, job.company)
             for names, members in employers:
                 if same_employer(words, names):
                     members.append(job)

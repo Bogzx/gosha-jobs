@@ -203,12 +203,19 @@ class SearchQuery:
     postings that will be kept, instead of on "Agent Vanzari" results a
     fuzzy board search returned for "python". It never removes a job from
     the result — filtering stays in the pipeline.
+
+    `on_expired` is told the URL (as stored, RawJob.url) of each listed
+    posting whose own page says it has expired; the adapter leaves those
+    out of the result, and the pipeline deactivates their stored rows.
     """
 
     keyword: str
     location: str
     max_age_days: int = 14
     relevant: Callable[[str, str | None], bool] | None = field(
+        default=None, compare=False, repr=False,
+    )
+    on_expired: Callable[[str], None] | None = field(
         default=None, compare=False, repr=False,
     )
 

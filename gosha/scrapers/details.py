@@ -57,6 +57,8 @@ _budget: dict[str, tuple[float, int]] = {}
 
 _BREAK_RE = re.compile(r"</p>|</div>|</li>|</h\d>|<br\s*/?>", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
+# Elements whose content is code, not text (an ad's own stylesheet).
+_CODE_RE = re.compile(r"<(style|script)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
 # After unescaping, only what is plainly a tag: "R&amp;D &lt;3" stays "R&D <3".
 _DECODED_TAG_RE = re.compile(r"</?[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*)?/?>")
 _ENTITY_RE = re.compile(r"&(?:[a-zA-Z][a-zA-Z0-9]{1,31}|#\d{1,7}|#[xX][0-9a-fA-F]{1,6});")
@@ -70,7 +72,7 @@ def html_to_text(markup: str | None) -> str:
     two more unescapes while entities remain, then any tags that decoded.
     Invisible characters are dropped (base.strip_invisible).
     """
-    text = _BREAK_RE.sub("\n", markup or "")
+    text = _BREAK_RE.sub("\n", _CODE_RE.sub(" ", markup or ""))
     text = _TAG_RE.sub(" ", text)
     text = html_lib.unescape(text)
     for _ in range(2):
@@ -78,7 +80,7 @@ def html_to_text(markup: str | None) -> str:
             break
         text = html_lib.unescape(text)
     if _DECODED_TAG_RE.search(text):
-        text = _DECODED_TAG_RE.sub(" ", _BREAK_RE.sub("\n", text))
+        text = _DECODED_TAG_RE.sub(" ", _BREAK_RE.sub("\n", _CODE_RE.sub(" ", text)))
     # A raw tab or carriage return inside a JSON string (Hipo, Bosch) is
     # whitespace, not something to store or show in a DM.
     text = strip_invisible(text).replace("\xa0", " ").replace("\r\n", "\n")

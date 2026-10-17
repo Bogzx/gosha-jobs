@@ -257,6 +257,41 @@ async def test_scrape_jobs_raw_without_job_level_column(monkeypatch):
     assert "experience_level" not in df.columns or df["experience_level"].isna().all()
 
 
+@pytest.mark.parametrize(
+    ("card_location", "stored"),
+    [
+        ("Romania", "Romania"),
+        ("United States", "USA"),
+        ("European Union", "European Union"),
+        ("Bucharest, Romania", "Bucharest, Romania"),
+        ("Cluj-Napoca, Cluj, Romania", "Cluj-Napoca, Cluj, Romania"),
+    ],
+)
+def test_linkedin_card_location_of_one_name_is_kept(card_location, stored):
+    # python-jobspy 1.1.82 read only "City, ST" and "City, State, Country"
+    # card locations; one name ("Romania") left the search's country,
+    # "worldwide", which display_location drops. 27 LinkedIn rows were stored
+    # with an empty location (6629 Luxoft, 7362 Nagarro, 7615 BRINEL) until
+    # 1.3.0 shipped on 2026-10-12. The scrape filter now drops rows without one.
+    from bs4 import BeautifulSoup
+    from jobspy.linkedin import LinkedIn
+    from jobspy.model import ScraperInput, Site
+
+    card = BeautifulSoup(
+        '<div class="base-search-card">'
+        '<h3 class="base-search-card__title">Junior Test Engineer</h3>'
+        '<h4 class="base-search-card__subtitle"><a href="https://www.linkedin.com/company/x">'
+        "Luxoft</a></h4>"
+        f'<span class="job-search-card__location">{card_location}</span>'
+        '<time datetime="2026-09-30"></time></div>',
+        "html.parser",
+    )
+    linkedin = LinkedIn()
+    linkedin.scraper_input = ScraperInput(site_type=[Site.LINKEDIN], fetch_description=False)
+    job = linkedin._process_job(card, "4473218549")
+    assert job.location.display_location() == stored
+
+
 async def test_a_job_found_by_several_terms_keeps_the_copy_with_a_description(monkeypatch):
     # Prod, 2026-10-17: LinkedIn answered 429 to job 4469313272's page for one
     # term of 'cs entry level' and served it 40 s later for another; the first,

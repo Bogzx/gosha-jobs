@@ -523,11 +523,11 @@ async def test_same_title_in_another_city_or_a_short_title_is_not_a_copy(
     sub.locations = ["cluj", "iasi"]
     await session.commit()
     await _copies(session, user, sub, [
-        # Another city and employer spelling: two postings. (Same employer in
-        # two cities is one posting for gosha.dedup, which ignores cities.)
-        ("Junior Full-Stack Engineer, Generative AI @ Marsh Tech", "MMC Corporate",
-         "Iași, Romania", "bestjobs"),
-        ("Junior Full-Stack Engineer, Generative AI @ Marsh Tech", "Marsh", "Cluj-Napoca", "indeed"),
+        # Another city and another employer: two postings. (Same employer in
+        # two cities is one posting for gosha.dedup, which ignores cities;
+        # "… @ Marsh Tech" at Marsh and at MMC Corporate is one employer.)
+        ("Junior Full-Stack Engineer, Generative AI", "Endava", "Iași, Romania", "bestjobs"),
+        ("Junior Full-Stack Engineer, Generative AI", "Marsh", "Cluj-Napoca", "indeed"),
         ("QA Engineer", "Acme", "Cluj-Napoca", "ejobs"),
         ("QA Engineer", "Beta", "Cluj-Napoca", "bestjobs"),
     ], [0.5, 0.49, 0.48, 0.47])
