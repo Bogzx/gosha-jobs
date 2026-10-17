@@ -190,30 +190,6 @@ async def test_old_matches_age_out_instead_of_being_sent(patched_db, session, mo
 
 
 @pytest.mark.asyncio
-async def test_dms_per_user_are_capped_best_first(patched_db, session, monkeypatch):
-    monkeypatch.setattr(pipeline, "MAX_DMS_PER_USER", 2)
-    _user, _sub, jobs, _rows = await _setup(session, n_jobs=5)
-    calls = _fake_dm(monkeypatch, [])
-    texts: list[str] = []
-
-    async def fake_text(bot, discord_id, text):
-        texts.append(text)
-
-    monkeypatch.setattr(pipeline, "_send_text", fake_text)
-
-    assert await pipeline.deliver_pending(_Bot()) == 2
-    statuses = await _statuses(session)
-    # The rest wait for the next cycle instead of being dropped for good
-    # (production lost 8 good Cluj matches of one user's first batch).
-    assert [statuses[j] for j in jobs] == ["pending", "pending", "pending", "sent", "sent"]
-    assert len(calls) == 2
-    assert texts and "**3** more matches" in texts[0]
-    assert await pipeline.deliver_pending(_Bot()) == 2  # next cycle: the next best
-    statuses = await _statuses(session)
-    assert [statuses[j] for j in jobs] == ["pending", "sent", "sent", "sent", "sent"]
-
-
-@pytest.mark.asyncio
 async def test_a_dm_exception_never_ends_the_loop(patched_db, session, monkeypatch):
     """_dm_user turns anything (an aiohttp error, an OSError) into a retry."""
 
@@ -399,43 +375,31 @@ async def _matches(session, user, sub, specs):
 
 
 @pytest.mark.asyncio
-async def test_a_search_sends_at_most_five_a_cycle_and_defers_the_rest(
+async def test_every_qualifying_match_is_sent_in_the_cycle_that_finds_it(
     patched_db, session, monkeypatch,
 ):
-    user, sub, _jobs, rows = await _setup(session, n_jobs=0)
-    ids = await _matches(session, user, sub, [
-        (ROLES[i], f"Co{i}", 0.40 + i / 100, 0) for i in range(8)
-    ])
-    calls = _fake_dm(monkeypatch, [])
-    monkeypatch.setattr(pipeline, "_send_text", lambda *a: asyncio.sleep(0))
-
-    assert await pipeline.deliver_pending(_Bot()) == 5
-    statuses = await _statuses(session)
-    assert [statuses[j] for j in ids] == ["pending"] * 3 + ["sent"] * 5  # best five
-    assert await pipeline.deliver_pending(_Bot()) == 3
-    assert len(calls) == 8
-
-
-@pytest.mark.asyncio
-async def test_one_company_gets_at_most_three_dms_a_batch(patched_db, session, monkeypatch):
+    """No per-user, per-search or per-company caps (owner, 2026-10-17): a
+    search with 12 matches gets 12 DMs, four from one employer included."""
     user, sub, _jobs, _rows = await _setup(session, n_jobs=0)
     ids = await _matches(session, user, sub, [
-        (ROLES[i], "Endava", 0.50 + i / 100, 0) for i in range(4)
-    ] + [(ROLES[4], "Acme", 0.45, 0)])
-    _fake_dm(monkeypatch, [])
-    monkeypatch.setattr(pipeline, "_send_text", lambda *a: asyncio.sleep(0))
+        (f"Python Developer {i}", "Endava" if i < 4 else f"Co{i}", 0.40 + i / 100, 0)
+        for i in range(12)
+    ])
+    calls = _fake_dm(monkeypatch, [])
 
-    assert await pipeline.deliver_pending(_Bot()) == 4
+    assert await pipeline.deliver_pending(_Bot()) == 12
     statuses = await _statuses(session)
-    assert statuses[ids[0]] == "pending"  # Endava's fourth, the weakest of its four
-    assert statuses[ids[4]] == "sent"
+    assert [statuses[j] for j in ids] == ["sent"] * 12
+    assert len(calls) == 12
+    assert await pipeline.deliver_pending(_Bot()) == 0
 
 
 @pytest.mark.asyncio
-async def test_a_deferred_match_is_rechecked_when_its_turn_comes(
+async def test_a_pending_match_is_rechecked_at_send_time(
     patched_db, session, monkeypatch,
 ):
-    """Deferred, it may have gone stale; the search window still holds."""
+    """Pending a cycle or more (a failed DM), it may have gone stale; the
+    search window still holds."""
     user, sub, _jobs, _rows = await _setup(session, n_jobs=0)
     sub.max_age_days = 7
     await session.commit()
@@ -450,13 +414,16 @@ async def test_a_deferred_match_is_rechecked_when_its_turn_comes(
 @pytest.mark.asyncio
 async def test_unscored_matches_go_after_scored_ones(patched_db, session, monkeypatch):
     user, sub, _jobs, _rows = await _setup(session, n_jobs=0)
-    monkeypatch.setattr(pipeline, "MAX_DMS_PER_SEARCH", 1)
-    ids = await _matches(session, user, sub, [("Python Developer", "A", None, 0), ("Java Developer", "B", 0.3, 0)])
-    _fake_dm(monkeypatch, [])
-    monkeypatch.setattr(pipeline, "_send_text", lambda *a: asyncio.sleep(0))
-    assert await pipeline.deliver_pending(_Bot()) == 1
-    statuses = await _statuses(session)
-    assert statuses[ids[1]] == "sent" and statuses[ids[0]] == "pending"
+    await _matches(session, user, sub, [("Python Developer", "A", None, 0), ("Java Developer", "B", 0.3, 0)])
+    sent: list[str] = []
+
+    async def fake_dm(bot, discord_id, embed, view=None):
+        sent.append(embed.title)
+        return pipeline.DM_SENT
+
+    monkeypatch.setattr(pipeline, "_dm_user", fake_dm)
+    assert await pipeline.deliver_pending(_Bot()) == 2
+    assert sent == ["Java Developer", "Python Developer"]
 
 
 # ── One posting, one DM: copies from two boards (pre-release review) ──

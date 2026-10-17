@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -1159,17 +1158,8 @@ async def _one_per_duplicate_group(
 # Stage 3 — DELIVER: send notifications to users
 # ═══════════════════════════════════════════════════════════════════════
 
-# DMs per user per cycle. A new subscriber's first cycle can match dozens
-# of postings; the best ones go out, the rest wait for the next cycles
-# (and are on the website) and the user is told how many more there are.
-MAX_DMS_PER_USER = 10
-# ... per search per cycle. Production, 30 days, 178 search-cycles: p50 1,
-# p90 4, max 25 (a search matching "kra"/"mun" as substrings); 5 defers
-# rows in 11 of them, none a search's first cycle.
-MAX_DMS_PER_SEARCH = 5
-# ... per company per user per cycle: one employer's ten openings are not
-# ten different chances.
-MAX_DMS_PER_COMPANY = 3
+# No per-user, per-search or per-company caps (owner, 2026-10-17): every
+# DM a search qualifies for goes out in the cycle that first finds it.
 
 
 def _title_words(title: str | None) -> str | None:
@@ -1227,26 +1217,6 @@ def _best_first(row: tuple) -> tuple:
     return (score is None, -(score or 0.0), uj.id)
 
 
-def _within_caps(sendable: list[tuple]) -> list[tuple]:
-    """The best-first rows that fit the per-user, per-search and
-    per-company caps; the others wait."""
-    batch: list[tuple] = []
-    per_search: dict[int, int] = {}
-    per_company: dict[str, int] = {}
-    for row in sendable:
-        _uj, job, _user, sub = row
-        company = fold(job.company or "").strip()
-        if len(batch) >= MAX_DMS_PER_USER:
-            break
-        if per_search.get(sub.id, 0) >= MAX_DMS_PER_SEARCH:
-            continue
-        if company and per_company.get(company, 0) >= MAX_DMS_PER_COMPANY:
-            continue
-        per_search[sub.id] = per_search.get(sub.id, 0) + 1
-        if company:
-            per_company[company] = per_company.get(company, 0) + 1
-        batch.append(row)
-    return batch
 # A match whose DM keeps failing for transient reasons (Discord 5xx, rate
 # limits, a deploy mid-loop) is retried each cycle for this long.
 DM_RETRY_WINDOW = timedelta(days=2)
@@ -1309,9 +1279,9 @@ async def deliver_pending(bot: JobBot) -> int:
             if not sub.notify_discord:
                 statuses[uj.id] = UserJob.DM_SKIPPED
                 continue
-            # Judged again by the current code and data: a match deferred by
-            # the caps waited a cycle or more (still within its search's
-            # window?), and one queued by an older release passed older
+            # Judged again by the current code and data: a match retried
+            # after a failed DM waited a cycle or more (still within its
+            # search's window?), and one queued by an older release passed older
             # gates (49 rows queued before the 2026-10-16 fixes). Every
             # gate of the match stage, not the score. One held back only
             # for want of a description stays pending: it may come.
@@ -1329,15 +1299,8 @@ async def deliver_pending(bot: JobBot) -> int:
             seen_jobs.append(job)
             sendable.append((uj, job, user, sub))
 
-        # The caps defer: what does not fit stays pending for the next
-        # cycle (best first again, among whatever is new by then) until
-        # DM_RETRY_WINDOW. Marking it skipped lost it for good: production
-        # dropped 8 good Cluj matches of one user's first batch.
-        batch = _within_caps(sendable)
-        overflow = len(sendable) - len(batch)
-
         sent_at: dict[int, datetime] = {}
-        for uj, job, user, sub in batch:
+        for uj, job, user, sub in sendable:
             kw_str = ", ".join(map(canonical_keyword, sub.keywords[:3]))[:80]
             loc_str = ", ".join(sub.locations[:2])[:60]
             embed, view = build_job_embed_with_buttons(
@@ -1362,20 +1325,11 @@ async def deliver_pending(bot: JobBot) -> int:
                     pass
             elif outcome == DM_CLOSED:
                 # DMs closed: give up on this user's batch, don't retry.
-                for other, *_ in sendable[:MAX_DMS_PER_USER]:
+                for other, *_ in sendable:
                     statuses.setdefault(other.id, UserJob.DM_FAILED)
                 closed_dms.append(user.discord_user_id)
                 break
             # DM_RETRY: left pending for the next cycle.
-
-        if overflow > 0 and sent_at:
-            site = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-            where = f"<{site}/feed>" if site else "the website"
-            await _send_text(
-                bot, items[0][2].discord_user_id,
-                f"…and **{overflow}** more matches: the best of them come in the "
-                f"next few hours, and all of them are on {where}.",
-            )
 
         # The rest (skipped, failed) once per user; sent ones are already
         # recorded, and writing them again is harmless.
@@ -1633,14 +1587,6 @@ async def _dm_user(
     except Exception as exc:
         log.error("Failed to DM user %d (will retry): %s", discord_id, exc)
         return DM_RETRY
-
-
-async def _send_text(bot: JobBot, discord_id: int, text: str) -> None:
-    try:
-        user = bot.get_user(discord_id) or await bot.fetch_user(discord_id)
-        await (await user.create_dm()).send(text)
-    except Exception as exc:
-        log.warning("Follow-up DM to %d failed: %s", discord_id, exc)
 
 
 # ═══════════════════════════════════════════════════════════════════════

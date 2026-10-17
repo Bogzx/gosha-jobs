@@ -1,3 +1,68 @@
+# DM CAPS REMOVED + 'NOT A JOB' FOR FREE EVENT ACCESS (owner decision + lead, 2026-10-17 ~17:50 UTC) — uncommitted, commit-ready
+
+**Files:** gosha/pipeline.py, gosha/filters.py, tests/test_deliver.py, tests/test_dm_postdeploy.py, plus 3 new fixtures in tests/fixtures/ (`skillbridge_bursa_de_tech_8398.txt`, `bosch_ai_scholarship_8255.txt`, `yonder_trainee_7507.txt`).
+
+**1. Caps removed (owner, 2026-10-17)** — `gosha/pipeline.py:1161`
+- Gone: `MAX_DMS_PER_USER/SEARCH/COMPANY` and `_within_caps`. Every row that passes the send-time checks is sent (`pipeline.py:1303`).
+- Also gone, because only the caps used them: the "…and N more matches" follow-up text, `_send_text`, and `import os`.
+- When a user's DMs are closed, every sendable row is marked failed (`pipeline.py:1328`, previously the first 10).
+- Kept: the send-time recheck, cross-board and already-sent dedup, best-first order, DM_RETRY_WINDOW, and the queue for rows waiting for a description.
+- Tests in `tests/test_deliver.py`:
+  - Removed the three tests that pinned caps: per-user, per-search five, per-company three.
+  - New: `test_every_qualifying_match_is_sent_in_the_cycle_that_finds_it` (line 378). 12 matches, 4 of them from one employer, give 12 DMs in one cycle and nothing left over.
+  - Renamed to `test_a_pending_match_is_rechecked_at_send_time` (line 398).
+  - `test_unscored_matches_go_after_scored_ones` (line 415) now asserts the send order instead of using a cap of 1.
+- `_send_text` monkeypatches dropped (test_deliver, test_dm_postdeploy).
+
+**2. Hipo 8398 "Bursa de Tech" (Fundatia SkillBridge), not a job** — `gosha/filters.py:1004-1032`
+- **Root cause:** `is_not_a_job` knew three cases: a "not a job" statement, a course fee or course sign-up, and a CV drop. 8398 has none of them. It offers free access to conferences: "acces gratuit la conferinte si evenimente", invitations, access codes.
+- **Fix:** a new case in `is_not_a_job`. The text offers free access, entry, tickets, participation or invitations to events, conferences, meetups, hackathons, workshops, courses or a community (EN + RO), AND it names no role, duties or employment (`_NAMES_A_ROLE_RE`: responsibilities, job description, your tasks, employment, contract, salary, full-time, thesis, internship, stagiu, trainee, mentor, …).
+- **Corpus check** (read-only, all 8,270 prod descriptions):
+  - The access phrase alone matches 8: 8398, plus 7 real jobs that list it as a benefit (Qualitest ×3 and QualityAI ×3, "free access to over 3000+ training courses"; Leonardo 3914).
+  - The no-role condition keeps all 7 real jobs. Only 8398 is flagged.
+  - Bosch 8255/7979 and Yonder 7507/3202 do not match the access phrase at all.
+- **Tests** in `tests/test_dm_postdeploy.py`:
+  - `test_free_access_to_events_is_not_a_job` (549): is_not_a_job and prefilter on 8398's full text.
+  - `test_a_programme_that_is_work_is_not_flagged` (565): Bosch 8255, Yonder 7507, the Qualitest benefit, and a Romanian benefit line.
+- The same function gates the website feed (`recommend.py:495`), so 8398 also leaves the feed.
+
+**Verification**
+- Touched tests: `HF_HUB_OFFLINE=1 LD_PRELOAD=… nice -n 15 .venv/bin/pytest -q tests/test_deliver.py tests/test_dm_postdeploy.py tests/test_dm_role_terms.py tests/test_filters_accuracy.py` → 513 passed. ruff is clean on the 4 files.
+- Fail-without: `git archive HEAD` plus only the new tests and fixtures (scratchpad/failwithout.4oJY) → both new tests fail (12-match: `AssertionError` at 390; 8398: `assert False` at 551). The other 186 pass.
+- **Would-send** (scratchpad/nocaps/):
+  - Fresh read-only export at 17:31:29Z, "rewound" to before the 17:08 cycle by dropping that cycle's 61 user_jobs rows.
+  - Match input: `first` = jobs seen since 17:08 (102); `all` = 486 active.
+  - Code: `bb` = git archive bb2dad5; `caps` = bb2dad5 + pipeline.py; `new` = bb2dad5 + pipeline.py + filters.py.
+  - bb2dad5 replay = prod exactly: 61 enqueued, 40 sent, 21 waiting. Same pair sets as prod's 40 sent and 21 pending.
+  - `caps`, first: 61 sent = bb2dad5 sent + deferred (set-equal), 0 waiting, identical scores. all: 72 = 47 + 25, set-equal.
+  - `new`: 55 / 66 sent. The only difference from `caps` is the 6 rows of 8398 (subs 3, 5, 10, 22, 25, 26).
+  - Most DMs to one search in the first cycle with no caps: 8.
+  - Next cycle on the live state (26 pending: 21 deferred at 17:08 + 5 on inactive 8325/8330): bb2dad5 and the result both send the 21. The 5 are never sent.
+  - CSVs: `rw_new_first.csv`, `rw_new_all.csv`, and the bb/caps equivalents.
+
+**For other owners:** `gosha/evaluation.py:561` and `docs/EVAL.md:72` still describe the per-search cap of 5 and MAX_DMS_PER_USER (P@5/P@10 "as sent"). Those are gosha-rank's files; the comments are stale, and the metric's rationale may need a rethink.
+
+# FIRST-CYCLE WOULD-SEND ON bb2dad5 (committed: 6bf53e4 role terms, 2f186f6 label evidence) — gosha-pipe, 2026-10-17 ~15:30 UTC
+
+**Judging CSV for the lead:** `/tmp/claude-1001/-home-ubuntu-gosha-agents/d88b10a3-dacc-4b68-b7c0-4fc2f062a6d3/scratchpad/final_bb2dad5/first_cycle_dms_bb2dad5.csv`
+- 64 rows: every DM the first cycle would send, plus the cap-deferred ones.
+- Columns: Level, description_300, url, outcome under the last2 and all inputs, and empty lead_verdict/lead_note.
+- Code: `git archive bb2dad5`. Export: read-only, 15:17:49Z.
+- No prod cycles since 13:20, so last2 is still the 12:47 + 13:20 cycles (124 jobs).
+
+**Counts:**
+
+| Input | Sent in first cycle | Deferred by the caps |
+|---|---|---|
+| last2 | 39 | 15 |
+| all | 45 | 19 |
+
+- Merged: 35 sent under both inputs, 15 deferred under both, 10 sent only under all, 4 sent under last2 and deferred under all.
+- Caps: at most 5 per search and per user; at most 2 from one company.
+
+**The 5 old queue rows** (8325 × 4, 8330) are never sent: both jobs are inactive now, and deliver_pending reads active jobs only. I dropped them from the CSV.
+- The harness used to label those untouched rows "waits". `final_bb2dad5/run/would_send.py` now reports `never_sent_job_inactive`. Use that copy from now on.
+
 # BOARD 'ENTRY' LABEL NO LONGER EVIDENCE (lead, gosha-pipe, 2026-10-17 ~16:00 UTC) — uncommitted, commit-ready
 
 Summary: `/tmp/claude-1001/-home-ubuntu-gosha-agents/d88b10a3-dacc-4b68-b7c0-4fc2f062a6d3/scratchpad/label/RESULTS.md`

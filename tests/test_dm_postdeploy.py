@@ -11,8 +11,8 @@ E  49 rows queued under the old gates were waiting to be sent as they were.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -377,7 +377,6 @@ async def test_rows_queued_under_old_gates_are_rechecked_at_send_time(
         return pipeline.DM_SENT
 
     monkeypatch.setattr(pipeline, "_dm_user", fake_dm)
-    monkeypatch.setattr(pipeline, "_send_text", lambda *a: asyncio.sleep(0))
 
     assert await pipeline.deliver_pending(_Bot()) == 1
     assert sent == ["Digital Tools & Configuration Developer"]
@@ -536,6 +535,34 @@ def test_not_a_job(title, description):
     ("Junior Developer", None),
 ])
 def test_a_job_is_not_flagged(title, description):
+    assert not is_not_a_job(title, description)
+
+
+# Free access to events, with no role (Hipo 8398, sent to six searches on
+# 2026-10-17), and two company programmes that are work (lead, 2026-10-17).
+FIXTURES = Path(__file__).parent / "fixtures"
+SKILLBRIDGE = (FIXTURES / "skillbridge_bursa_de_tech_8398.txt").read_text()
+BOSCH_SCHOLARSHIP = (FIXTURES / "bosch_ai_scholarship_8255.txt").read_text()
+YONDER_TRAINEE = (FIXTURES / "yonder_trainee_7507.txt").read_text()
+
+
+def test_free_access_to_events_is_not_a_job():
+    title = "Bursa de Tech -  acces gratuit la cele mai mari Evenimente Tech"
+    assert is_not_a_job(title, SKILLBRIDGE)
+    job = _job(title, SKILLBRIDGE, company="Fundatia SkillBridge")
+    assert not pipeline.prefilter(_search(["intern", "junior"]), [job])
+
+
+@pytest.mark.parametrize("title, description", [
+    ("Scholarship in AI for Master Students", BOSCH_SCHOLARSHIP),
+    ("On-the-job Trainee Program, Junior Developer,  Cluj-Napoca", YONDER_TRAINEE),
+    # The same access as a job's benefit (Qualitest, 3617).
+    ("Junior Embedded Engineer", "Job Description: develop and test embedded software. "
+     "Benefits: free access to over 3000+ training courses."),
+    ("Junior Developer", "Responsabilitati: dezvoltare backend. Oferim acces gratuit la "
+     "conferinte si cursuri."),
+])
+def test_a_programme_that_is_work_is_not_flagged(title, description):
     assert not is_not_a_job(title, description)
 
 

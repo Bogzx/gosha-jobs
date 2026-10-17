@@ -992,16 +992,44 @@ _TALENT_TITLE_RE = re.compile(
 _FUTURE_OPENINGS_RE = re.compile(
     r"\bfuture\s+(?:opportunities|openings|roles|positions|vacancies)\b|\boportunitati\s+viitoare\b"
 )
+# A programme whose offer is free access to events, conferences, courses or
+# a community, with no role in it (Hipo 8398, Fundatia SkillBridge "Bursa
+# de Tech": "acces gratuit la conferinte si evenimente de tehnologie" for
+# students, sent to six searches on 2026-10-17). Real jobs give the same
+# as a benefit ("free access to over 3000+ training courses", Qualitest,
+# QualityAI, Leonardo), so the text must also name no role, duties or
+# employment: production, 8270 descriptions, the access phrase in 8 and
+# only 8398 without the second. A company's own scholarship or trainee
+# programme (Bosch's master thesis, Yonder's) names the work.
+_FREE_ACCESS_RE = re.compile(
+    r"\b(?:free|complimentary)\s+(?:access|entry|admission|tickets?|passes?|participation|"
+    r"invitations?|membership)\s+(?:to|at|for|in)\s+(?:\S+\s+){0,4}?"
+    r"(?:events?|conferences?|meetups?|summits?|hackathons?|workshops?|courses?|trainings?|"
+    r"community|communities)\b|"
+    r"\b(?:acces\w*|participar\w*|intrar\w*|bilet\w*|invitati\w*)\s+gratuit\w*\s+(?:la|in)\s+"
+    r"(?:\S+\s+){0,4}?(?:eveniment\w*|conferint\w*|meetup\w*|hackathon\w*|workshop\w*|"
+    r"cursur\w*|curs|training\w*|comunitat\w*)\b"
+)
+_NAMES_A_ROLE_RE = re.compile(
+    r"\b(?:responsibilit\w*|responsabilitat\w*|atributii\w*|sarcini\w*|your\s+tasks|your\s+role|"
+    r"the\s+role|job\s+description|descriere\w*\s+(?:jobului|postului)|employment|angajar\w*|"
+    r"contract\w*|salar\w*|full[\s-]time|part[\s-]time|"
+    r"you\s+will\s+(?:work|be|join|develop|design|build|support)|vei\s+lucra|"
+    r"what\s+you(?:'|\s+wi)ll\s+do|thesis|internship|stagi\w*|traine\w*|mentor\w*)\b"
+)
 
 
 def is_not_a_job(title: str | None, description: str | None) -> bool:
     """The posting says it is not a job: a course or training programme to
-    sign up (or pay) for, or a talent-network/CV-drop page with no role.
+    sign up (or pay) for, a programme of free access to events or courses
+    with no role, or a talent-network/CV-drop page with no role.
     Decided by the description; the title only corroborates a CV drop."""
     if not description:
         return False
     text = " ".join(fold(description).split())
     if _SAYS_NOT_A_JOB_RE.search(text) or _COURSE_FEE_RE.search(text):
+        return True
+    if _FREE_ACCESS_RE.search(text) and not _NAMES_A_ROLE_RE.search(text):
         return True
     if _COURSE_RE.search(text) and _SIGN_UP_RE.search(text):
         return True
