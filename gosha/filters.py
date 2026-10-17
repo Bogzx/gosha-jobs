@@ -1580,7 +1580,13 @@ def lacks_level_evidence(
 # 8+", "Several years of professional experience"). "evidence" since
 # 2026-10-17: see docs/EVAL.md.
 DM_JUNIOR_RULE = "evidence"
-DM_ENTRY_LABEL_IS_EVIDENCE = True
+# The board's "entry" label alone is not evidence (lead, 2026-10-17): with
+# the role-term DM score it let through Banca Transilvania's "Analist data
+# analysis & BI" (7849, experience in BI dashboards, SQL, Tableau/Qlik) and
+# Magna's video-pipeline engineer (8298, "Good experience in Linux/POSIX"),
+# both filed as entry by eJobs/LinkedIn. The right postings it carried say so
+# in their text (a degree in progress, experience or interest).
+DM_ENTRY_LABEL_IS_EVIDENCE = False
 
 _ZERO_YEARS_RE = re.compile(
     r"(?<![\w.,])0\s*(?:\+|-|–|to|la|sau|or)?\s*(?:\d{1,2}\s*)?(?:years?|yrs?|ani|an)\b|"
@@ -1709,6 +1715,15 @@ _ENTRY_TEXT_RE = re.compile(
     r"\b(?:not\s+necessarily|nu\s+(?:cautam|cerem)\s+neaparat)\s+(?:\w+\s+){0,2}?experien\w*|"
     r"\b(?:ai\s+sau\s+nu|cu\s+sau\s+fara|indiferent\s+daca\s+ai)\s+(?:\w+\s+)?experienta\b|"
     r"\b(?:with\s+or\s+without|whether\s+or\s+not\s+you\s+have)\s+(?:\w+\s+)?experience\b|"
+    # Experience as one option: "Experience with or a strong interest in
+    # cloud services" (ATOSS Cloud Ops Engineer, 8301).
+    r"\bexperience\s+(?:\w+\s+){0,2}?or\s+(?:a\s+)?(?:strong\s+|genuine\s+|keen\s+)?interest\s+in\b|"
+    # A degree still in progress or just finished: "Pursuing or recently
+    # completed a degree in Computer Science" (Grab Data Scientist, 8270).
+    r"\b(?:currently\s+)?(?:pursuing|enrolled\s+in)\s+(?:or\s+(?:recently\s+)?\w+\s+)?"
+    r"(?:a|an|your)?\s*(?:\w+\s+){0,3}?(?:degree|bachelor\w*|master\w*|studies)\b|"
+    r"\brecently\s+(?:completed|finished|obtained)\s+(?:a|an|your)\s+(?:\w+\s+){0,2}?"
+    r"(?:degree|bachelor\w*|master\w*|studies)\b|"
     r"\bexperien\w*[^.;]{0,80}?\b(?:avantaj|advantage|a\s+plus|un\s+plus)\b[^.;]{0,30}?"
     r"\b(?:dar|but)\s+(?:it\s+is\s+|is\s+)?(?:nu\s+(?:este|e)\s+(?:obligatori\w*|necesar\w*)|"
     r"not\s+(?:mandatory|required|necessary|a\s+must))|"

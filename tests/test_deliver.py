@@ -366,7 +366,10 @@ async def test_regex_matching_honours_the_board_level(patched_db, session):
     session.add(sub)
     job = Job(url="https://ej.test/qa", title="QA Engineer", company="Acme",
               location="Cluj-Napoca, Romania", source="ejobs", experience_level="entry",
-              description="Manual and automated testing of our web and mobile apps. " * 5)
+              description="Manual and automated testing of our web and mobile apps. " * 5
+              # The DM still needs evidence in the text: the label alone is
+              # not evidence (2026-10-17).
+              + "Students and recent graduates are welcome.")
     session.add(job)
     await session.commit()
 

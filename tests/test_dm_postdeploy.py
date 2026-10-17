@@ -417,7 +417,8 @@ def evidence_rule(monkeypatch):
 def test_the_dm_junior_rule_ships_evidence_based():
     """Fails closed (docs/EVAL.md, 2026-10-17); "default" is the rollback."""
     assert filters.DM_JUNIOR_RULE == "evidence"
-    assert filters.DM_ENTRY_LABEL_IS_EVIDENCE
+    # The board's entry label alone is not evidence (lead, 2026-10-17).
+    assert not filters.DM_ENTRY_LABEL_IS_EVIDENCE
 
 
 @pytest.mark.parametrize("title, sentence", AUDIT_WRONG)
@@ -461,7 +462,8 @@ def test_not_entry_evidence(text):
     assert not has_entry_evidence("Software Engineer", None, text + FILLER)
 
 
-def test_entry_label_needs_the_years_to_agree():
+def test_entry_label_needs_the_years_to_agree(monkeypatch):
+    monkeypatch.setattr(filters, "DM_ENTRY_LABEL_IS_EVIDENCE", True)  # the switch's own rule
     assert has_entry_evidence("QA Engineer", "entry", FILLER)
     assert not has_entry_evidence("QA Engineer", "entry", "* 4+ years of experience." + FILLER)
 
@@ -580,10 +582,10 @@ def test_v3_not_entry_evidence(title, text):
     assert not has_entry_evidence(title, None, text + FILLER)
 
 
-def test_entry_label_evidence_can_be_switched_off(monkeypatch):
-    assert has_entry_evidence("QA Engineer", "entry", FILLER)
-    monkeypatch.setattr(filters, "DM_ENTRY_LABEL_IS_EVIDENCE", False)
+def test_entry_label_evidence_can_be_switched_back_on(monkeypatch):
     assert not has_entry_evidence("QA Engineer", "entry", FILLER)
+    monkeypatch.setattr(filters, "DM_ENTRY_LABEL_IS_EVIDENCE", True)
+    assert has_entry_evidence("QA Engineer", "entry", FILLER)
 
 
 # ── Glued level words ("InternSoftware Engineer", Ascom) ──────────────
@@ -787,3 +789,45 @@ def test_matched_level_names_the_level_the_search_took(levels, level):
 def test_matched_level_for_a_junior_role():
     assert filters.matched_level("Junior Java Developer", ["intern", "junior"], None, FILLER) == "junior"
     assert filters.matched_level("Junior Java Developer", ["intern"], None, FILLER) is None
+
+
+# ── The board's "entry" label alone is not evidence (lead, 2026-10-17) ─────
+# With the role-term DM score, two postings filed as entry by their boards
+# reached junior searches on the label alone, their texts asking for
+# experience. Real requirement lines.
+BT_BI_ANALYST = (
+    "experiență în automatizarea proceselor și dezvoltarea dashboard-urilor BI;\n"
+    "experiență în raportarea datelor;\n"
+    "experiență în utilizarea SQL;\n"
+    "experiență cu cel puțin unul dintre instrumentele Tableau, Qlik Sense sau Power BI;\n"
+)
+MAGNA_VIDEO = (
+    "* Good experience in Linux/POSIX system programming\n"
+    "* Experience with various SoC’s (e.g. Nvidia, Texas Instruments, Qualcomm)\n"
+    "* Experience in board bring-up and developing custom drivers for camera and connectivity "
+    "interfaces (CSI/UART/I2C/Ethernet)\n"
+)
+
+
+@pytest.mark.parametrize("title, text", [
+    ("Analist data analysis & BI retail non-card", BT_BI_ANALYST),  # 7849, eJobs entry
+    ("Software Development Engineer - Video Pipeline Integration (SoCs)", MAGNA_VIDEO),  # 8298
+])
+def test_an_entry_label_with_experience_asked_is_no_evidence(title, text):
+    assert not has_entry_evidence(title, "entry", text + FILLER)
+    assert not filters.dm_junior_ok(title, "entry", text + FILLER)
+
+
+@pytest.mark.parametrize("title, text", [
+    # Grab "Data Scientist" (8270): a degree in progress or just finished.
+    ("Data Scientist", "* Pursuing or recently completed a degree in Computer Science, "
+     "Electrical Engineering, or a related field."),
+    ("Software Engineer", "Currently enrolled in a Bachelor's degree in Computer Science."),
+    ("Software Engineer", "You have recently obtained a master's degree in informatics."),
+    # ATOSS "Cloud Ops Engineer" (8301): experience is one option.
+    ("Cloud Ops Engineer", "* Experience with or a strong interest in cloud services on Azure "
+     "and/or T Cloud Public."),
+])
+def test_what_the_entry_label_carried_is_read_from_the_text(title, text):
+    assert has_entry_evidence(title, "entry", text + FILLER)
+    assert has_entry_evidence(title, None, text + FILLER)
