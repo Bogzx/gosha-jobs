@@ -720,6 +720,22 @@ _INTERN_KEYWORD_RE = re.compile(
 )
 
 
+# A level word glued to the next word by a scraper that dropped the space
+# ("InternSoftware Engineer", Ascom on LinkedIn and Indeed): split where a
+# level word runs into a capitalised word. Case-sensitive on purpose, so
+# "Internal" and "Seniority" stay whole.
+_GLUED_LEVEL_RE = re.compile(
+    r"\b((?:[Ii]ntern(?:ship)?s?|INTERN(?:SHIP)?S?|[Jj]unior|JUNIOR|[Ss]enior|SENIOR|"
+    r"[Tt]rainee|TRAINEE|[Gg]raduate|GRADUATE|[Ss]tudent|STUDENT|[Ss]tagiar|STAGIAR|"
+    r"[Pp]rincipal|PRINCIPAL|[Ll]ead|LEAD))(?=[A-Z][a-z])"
+)
+
+
+def split_glued_level(title: str) -> str:
+    """"InternSoftware Engineer" -> "Intern Software Engineer"."""
+    return _GLUED_LEVEL_RE.sub(r"\1 ", title)
+
+
 def says_senior(title: str) -> bool:
     """A senior title. "Manager" alone is the role, not the level, when the
     title also says junior or intern ("Junior IT Project Manager")."""
@@ -774,7 +790,7 @@ def title_is_relevant(
     """
     if not title or pd.isna(title):
         return False
-    title = str(title)
+    title = split_glued_level(str(title))
     want_entry = keyword_wants_entry_level(keyword)
     want_tech = keyword_wants_tech(keyword)
 
@@ -928,6 +944,70 @@ _GIG_COMPANY_RE = re.compile(
 def is_gig_marketplace(company: str | None) -> bool:
     """The company is an AI-training gig marketplace (Alignerr, Outlier, ...)."""
     return bool(company) and bool(_GIG_COMPANY_RE.search(" ".join(fold(company).split())))
+
+
+# Postings that are not a job (gosha-label's audit, cause E, 2026-10-17):
+# a course or training programme posted as a job ("Curs Consultant ERP
+# ENTERSOFTONE Training Academy": "Acesta nu este un anunț de angajare",
+# "Înscrie-te până la 23 octombrie"), and a talent-network CV drop ("Join
+# Our Talent Network": "If you didnt identify a suitable open position,
+# you can submit your CV here"). Read from the description, never from
+# title words alone: "Academy" and "Talent" also title real internships,
+# and real postings end with "join our talent community" or "use this
+# general application" (Arch, AutoZone), or say an internship pool is "not
+# a job posting for a specific role" (Qualcomm).
+_SAYS_NOT_A_JOB_RE = re.compile(
+    r"\b(?:nu\s+(?:este|e)\s+(?:un\s+)?anunt\s+de\s+angajare|"
+    r"not\s+an?\s+(?:job|employment)\s+(?:offer|posting|ad\w*|opening))\b"
+    r"(?!\s+for\s+(?:a|one)\s+(?:specific|single|particular))"
+)
+_COURSE_FEE_RE = re.compile(
+    r"\b(?:course|tuition|program(?:me)?|enrol?ment|registration|participation)\s+fees?\b|"
+    r"\btaxa\s+de\s+(?:participare|inscriere|curs|scolarizare)\b|"
+    r"\b(?:pretul|costul)\s+(?:cursului|programului)\b"
+)
+# A course and a call to sign up for it, both in the text. Not "enrolled"
+# ("students currently enrolled in a university" is an internship's
+# requirement) nor the courses a job offers as a benefit, which come
+# without a sign-up.
+_COURSE_RE = re.compile(r"\b(?:curs(?:ul|ului|uri|urile)?|courses?|bootcamp)\b")
+_SIGN_UP_RE = re.compile(
+    r"\b(?:enrol(?:l)?\s+(?:now|today|by|before|in\s+(?:the|our|this)\s+"
+    r"(?:course|programme|program|bootcamp))|"
+    r"register\s+(?:now|today|for\s+(?:the|our|this)\s+(?:course|programme|program|bootcamp))|"
+    r"inscrie-te|inscrie\s+te|inscrierile|locuri\s+limitate)\b"
+)
+# A CV drop: the text sends the reader who found no suitable position to
+# leave a CV here, or the title is the talent network and the text asks
+# for a CV for future openings.
+_NO_SUITABLE_ROLE_RE = re.compile(
+    r"\b(?:didn'?t|did\s+not|didnt|don'?t|do\s+not|dont)\s+(?:identify|find|see)\s+"
+    r"(?:a\s+|an\s+)?suitable\s+(?:open\s+)?(?:position|role|job|vacancy)\b"
+)
+_CV_HERE_RE = re.compile(r"\bsubmit\s+your\s+(?:cv|resume|application)\s+here\b")
+_TALENT_TITLE_RE = re.compile(
+    r"\btalent\s+(?:network|community|pool)\b|\b(?:spontaneous|unsolicited)\s+application\b|"
+    r"\bcandidatur\w*\s+spontan\w*"
+)
+_FUTURE_OPENINGS_RE = re.compile(
+    r"\bfuture\s+(?:opportunities|openings|roles|positions|vacancies)\b|\boportunitati\s+viitoare\b"
+)
+
+
+def is_not_a_job(title: str | None, description: str | None) -> bool:
+    """The posting says it is not a job: a course or training programme to
+    sign up (or pay) for, or a talent-network/CV-drop page with no role.
+    Decided by the description; the title only corroborates a CV drop."""
+    if not description:
+        return False
+    text = " ".join(fold(description).split())
+    if _SAYS_NOT_A_JOB_RE.search(text) or _COURSE_FEE_RE.search(text):
+        return True
+    if _COURSE_RE.search(text) and _SIGN_UP_RE.search(text):
+        return True
+    if _NO_SUITABLE_ROLE_RE.search(text) and _CV_HERE_RE.search(text):
+        return True
+    return bool(_TALENT_TITLE_RE.search(fold(title or "")) and _FUTURE_OPENINGS_RE.search(text))
 
 
 def _training_only(keyword: str, levels: list[str] | None) -> bool:
@@ -1403,13 +1483,227 @@ def lacks_level_evidence(
     says (years, "experienced"); with none, "AI/ML Engineer" went to junior
     searches on no evidence. For the DMs only: the scrape stage and the
     feed see postings before their description is fetched."""
-    title = str(title or "")
+    title = split_glued_level(str(title or ""))
     if (
         ENTRY_LEVEL_RE.search(title) or JUNIOR_RE.search(title) or INTERN_RE.search(title)
         or experience_level == "intern"
     ):
         return False
     return len(" ".join((description or "").split())) < MIN_EVIDENCE_CHARS
+
+
+# ── DM junior rule: positive evidence (switchable) ────────────────────
+# Which rule decides whether an unmarked title goes to a junior DM search:
+#   "evidence": only on positive evidence that beginners can apply
+#               (has_entry_evidence). Fails closed: a phrasing it does not
+#               know costs a DM, it never sends a wrong one.
+#   "default":  unless the text says otherwise (years, "experienced"), the
+#               rule the scrape stage and the web feed keep. The one-line
+#               rollback.
+# gosha-label's audit of the 2026-10-17 10:48 prod snapshot: 17 of 96 jobs
+# passing intern/junior searches were wrong, 14 through the default, each
+# through a phrasing no pattern list had ("Strong experience with Java
+# 8+", "Several years of professional experience"). "evidence" since
+# 2026-10-17: see docs/EVAL.md.
+DM_JUNIOR_RULE = "evidence"
+DM_ENTRY_LABEL_IS_EVIDENCE = True
+
+_ZERO_YEARS_RE = re.compile(
+    r"(?<![\w.,])0\s*(?:\+|-|–|to|la|sau|or)?\s*(?:\d{1,2}\s*)?(?:years?|yrs?|ani|an)\b|"
+    r"\b(?:up to|max(?:imum)?\.?|less than|under|sub|pana la|maxim\w*)\s+"
+    r"(?:1|2|one|two|un|doi|doua)\s*(?:years?|yrs?|ani|an)\b"
+)
+_NO_EXPERIENCE_RE = re.compile(
+    r"\bno\s+(?:prior\s+|previous\s+|professional\s+|relevant\s+)?(?:work\s+)?experience\b|"
+    r"\bexperience\s+(?:is\s+)?not\s+(?:required|necessary|mandatory|needed)\b|"
+    r"\bwithout\s+(?:any\s+)?(?:prior\s+|previous\s+)?(?:work\s+)?experience\b|"
+    r"\bfara\s+(?:\w+\s+)?experienta\b|"
+    r"\bnu\s+(?:este|e)\s+(?:necesara|obligatorie)\s+experienta\b|"
+    r"\bexperienta\s+(?:anterioara\s+|profesionala\s+)?nu\s+(?:este|e)\s+"
+    r"(?:necesara|obligatorie)\b"
+)
+# Who the posting is for, or what it starts: graduates, students, a first
+# job, a career start; "we train you", "basic knowledge of", "eager to
+# learn".
+# "Graduate" as who the role is for, not a degree asked for ("University
+# graduate in Computer Science", "graduated from a technical university",
+# "absolvent al unei facultăți tehnice", which postings for experienced
+# people carry too): recent/new graduates, graduates welcome, for
+# graduates, a graduate programme/role; "proaspăt absolvent", "studenți și
+# absolvenți", "pentru absolvenți".
+_GRADUATE_AUDIENCE = (
+    r"\b(?:recent|fresh|new)\s+grad(?:uate)?s?\b|"
+    r"\bgraduates?\s+(?:are\s+|is\s+)?(?:very\s+|more\s+than\s+|also\s+)?"
+    r"(?:welcome|encouraged|invited|eligible)\b|"
+    r"\b(?:for|open\s+to|welcome|welcomes|welcoming|ideal\s+for|suitable\s+for|aimed\s+at|"
+    r"targeted\s+at|applications\s+from)\s+(?:\w+\s+){0,2}?graduates\b|"
+    r"\bgraduate\s+(?:program(?:me)?s?|scheme|role|roles|position|positions|job|jobs|"
+    r"opportunit\w+|trainee\w*|intake)\b|"
+    r"\b(?:students?|interns?)\s+(?:and|or|&)\s+(?:recent\s+)?graduates\b|"
+    r"\bproaspat\w*\s+absolvent\w*|"
+    r"\b(?:studenti|elevi)\s+(?:si|sau)\s+absolvent\w*|\babsolvent\w*\s+(?:si|sau)\s+student\w*|"
+    r"\b(?:pentru|deschis\w*\s+(?:si\s+)?(?:pentru|catre))\s+absolvent\w*|"
+    r"\babsolvent\w*\s+(?:sunt\s+)?(?:bineveniti|incurajati)"
+)
+_ENTRY_AUDIENCE_RE = re.compile(
+    _GRADUATE_AUDIENCE + r"|\bstudent\w*|"
+    r"\bentry[\s-]+level\b|\bjuniors?\b|"
+    r"\bcareer\s+starters?\b|"
+    r"\b(?:start|kick[\s-]*start|launch|begin|jump[\s-]*start)\s+(?:your|their)\s+"
+    r"(?:professional\s+)?career\b|"
+    r"\b(?:first|1st)\s+job\b|\bprimul\s+(?:tau\s+)?(?:loc\s+de\s+munca|job)\b|"
+    r"\b(?:la\s+)?inceput(?:ul)?\s+de\s+cariera\b|\binceputul\s+carierei\b|"
+    r"\bbeginners?\b|\bincepator\w*|\bdebutant\w*|\btrainee\w*|"
+    r"\bwe\s+(?:will\s+)?train\s+you\b|\bte\s+(?:vom\s+)?forma\w*\b|"
+    r"\b(?:basic|fundamental)\s+(?:knowledge|understanding|skills)\b|"
+    r"\bcunostinte\s+de\s+baza\b|\bnotiuni\s+(?:de\s+baza|elementare)\b|"
+    r"\b(?:eager|willing|motivated|keen|dornic\w*)\s+(?:to\s+|sa\s+)?(?:learn|invet\w*)\b|"
+    r"\bdon'?t\s+(?:yet\s+)?meet\s+all\b"
+)
+# Not evidence when the posting is above them ("mentor junior engineers")
+# or turns them away ("students will not be considered").
+_ABOVE_AUDIENCE_RE = re.compile(
+    r"\b(?:mentor\w*|coach\w*|guid\w*|lead\w*|supervis\w*|manag\w*|train\w*|support\w*|"
+    r"onboard\w*|teach\w*|help\w*|grow\w*|develop\w*)\s+(?:\w+\s+){0,2}$"
+)
+# Juniors, students, trainees as the people the role works with, not as
+# who it is for: "work with junior and senior engineers", "alongside
+# juniors", "a team of juniors and seniors", "collaborate with students".
+_PEOPLE_RE = re.compile(r"junior|student|trainee|beginner|incepator|debutant|absolvent|grad")
+_COLLEAGUES_BEFORE_RE = re.compile(
+    r"\b(?:with|alongside|among|amongst|beside|team\s+of|teams\s+of|cu|alaturi\s+de|"
+    r"impreuna\s+cu|echipa\s+de|echipe\s+de)\s+(?:[\w-]+\s+){0,2}$|"
+    r"\b(?:seniors?|mid\w*|experienced)\s+(?:and|or|&|si|sau)\s+$"
+)
+_COLLEAGUES_AFTER_RE = re.compile(
+    r"^\w*\s*(?:,\s*)?(?:(?:and|or|&|si|sau|to)\s+)?(?:mid\w*\s*(?:,\s*)?(?:and\s+|or\s+|si\s+)?)?"
+    r"(?:seniors?|seniori|experienced|principal)\b"
+)
+_TURNED_AWAY_RE = re.compile(
+    r"\bnot\s+(?:be\s+)?(?:considered|eligible|accepted|suitable)\b|\bnu\s+(?:vor|sunt)\b"
+)
+# Titles at the bottom of a ladder that do not say "junior": assistant,
+# clerk, associate, and level one of a numbered ladder ("Technical Analyst
+# I", "Engineer 1", "L1 Service Technician", "Level 1 Support"). The
+# numeral is matched case-sensitively: "I" is not the pronoun.
+_ENTRY_ROLE_TITLE_RE = re.compile(
+    r"(?i)\b(?:assistant|asistent\w*|clerk|associate)\b|"
+    r"(?i:\b(?:analyst|engineer|developer|specialist|consultant|technician|administrator|"
+    r"accountant|tester|scientist|representative|agent))\s+(?:I|1)(?![\w.])|"
+    r"(?i:\b(?:level\s*1|l1|tier\s*1|nivel\s*1))\b"
+)
+# The same level one named in the text: "As a Technical Analyst I", "As a
+# Level 1 Customer Support Consultant". Read on the raw text (case kept).
+_LEVEL_ONE_TEXT_RE = re.compile(
+    r"\b[Aa]s\s+an?\s+(?:[\w&/-]+\s+){0,3}?"
+    r"(?:(?i:analyst|engineer|developer|specialist|consultant|technician|administrator|"
+    r"accountant|tester|scientist)\s+(?:I|1)(?![\w.])|(?i:level|tier)\s*1\b)"
+)
+# Wordings of "beginners welcome" beyond _ENTRY_AUDIENCE_RE, one class each
+# (found on the main eval set's "any" postings, 2026-10-17):
+# - experience not needed, in other words: "nu aveți nevoie de experiență",
+#   "you don't need (prior) experience", "nu căutăm neapărat experiență";
+# - with or without it: "chiar dacă ai sau nu experiență", "with or
+#   without experience", "cu sau fără experiență";
+# - an advantage but not required: "Experiența în sales reprezintă un
+#   avantaj, dar nu este obligatorie";
+# - training that teaches the job: "necessary training will be ensured",
+#   "o perioadă de training în care vei învăța", "te învățăm tot";
+# - a new trade: "te califica într-o nouă meserie", "reconversie
+#   profesională", "career changers";
+# - a school-leaving minimum: "Cerința minimă: diploma de bacalaureat".
+_ENTRY_TEXT_RE = re.compile(
+    r"\bnu\s+(?:ai|aveti|avem|e|este|sunt)\s+(?:nevoie\s+de|necesar\w*\s+)\s*"
+    r"(?:\w+\s+){0,2}?experient\w*|"
+    r"\b(?:you\s+)?(?:don'?t|do\s+not|dont)\s+need\s+(?:any\s+)?(?:prior\s+|previous\s+)?"
+    r"(?:work\s+)?experience\b|"
+    r"\b(?:not\s+necessarily|nu\s+(?:cautam|cerem)\s+neaparat)\s+(?:\w+\s+){0,2}?experien\w*|"
+    r"\b(?:ai\s+sau\s+nu|cu\s+sau\s+fara|indiferent\s+daca\s+ai)\s+(?:\w+\s+)?experienta\b|"
+    r"\b(?:with\s+or\s+without|whether\s+or\s+not\s+you\s+have)\s+(?:\w+\s+)?experience\b|"
+    r"\bexperien\w*[^.;]{0,80}?\b(?:avantaj|advantage|a\s+plus|un\s+plus)\b[^.;]{0,30}?"
+    r"\b(?:dar|but)\s+(?:it\s+is\s+|is\s+)?(?:nu\s+(?:este|e)\s+(?:obligatori\w*|necesar\w*)|"
+    r"not\s+(?:mandatory|required|necessary|a\s+must))|"
+    r"\b(?:necessary|full|complete|all\s+the|initial)\s+training\s+(?:will\s+be\s+|is\s+)?"
+    r"(?:ensured|provided|given|offered)\b|"
+    r"\btraining\s+(?:complet|integral)\b|\b(?:instruire|formare)\s+complet\w*|"
+    r"\bperioad\w*\s+de\s+(?:training|instruire|formare|pregatire)\b|\btraining\s+period\b|"
+    r"\b(?:te|va)\s+(?:vom\s+)?invat(?:am|a)\b|\bwe\s+(?:will\s+)?teach\s+you\b|"
+    r"\b(?:te\s+)?califica\w*\s+(?:intr-o|intr\s+o|in\s+o)\s+(?:noua\s+)?meserie\b|"
+    r"\breconversie\s+profesional\w*|\bcareer\s+chang(?:e|ers?)\b|"
+    r"\b(?:minim\w*|cel\s+putin|at\s+least|minimum)\s+(?:\w+\s+){0,3}?"
+    r"(?:bacalaureat|studii\s+medii|liceu|high[\s-]+school)\b"
+)
+
+
+def has_entry_evidence(
+    title: str | None, experience_level: str | None, description: str | None,
+) -> bool:
+    """Positive evidence that beginners can apply: a training or junior
+    title, the board's entry label with the years agreeing (while
+    DM_ENTRY_LABEL_IS_EVIDENCE), an entry-role or level-one title
+    (assistant, clerk, associate, "Analyst I", "L1"), at most two years
+    asked (even as a wish), "0-2 years", "no experience required" in any
+    of its wordings, or wording for graduates, students, a first job, a
+    new trade, "we train you"."""
+    # Outside the cache: DM_ENTRY_LABEL_IS_EVIDENCE is a switch.
+    if (
+        DM_ENTRY_LABEL_IS_EVIDENCE and experience_level == "entry"
+        and _asks_junior_years(split_glued_level(str(title or "")), description)
+    ):
+        return True
+    return _entry_evidence(title, experience_level == "intern", description)
+
+
+@functools.lru_cache(maxsize=4096)
+def _entry_evidence(title: str | None, intern_label: bool, description: str | None) -> bool:
+    title = split_glued_level(str(title or ""))
+    if (
+        ENTRY_LEVEL_RE.search(title) or JUNIOR_RE.search(title) or INTERN_RE.search(title)
+        or intern_label
+        or _ENTRY_ROLE_TITLE_RE.search(title)
+    ):
+        return True
+    if not description:
+        return False
+    years = required_years(description)
+    if years is not None and years <= JUNIOR_MAX_YEARS:
+        return True
+    if _LEVEL_ONE_TEXT_RE.search(description):
+        return True
+    text = fold(description)
+    # "Minim 1-2 ani reprezintă un avantaj": at most two years, as a wish.
+    wished = required_years(_NICE_TO_HAVE_RE.sub(" ", text))
+    if wished is not None and wished <= JUNIOR_MAX_YEARS:
+        return True
+    for sentence in _sentences(text):
+        if (
+            _ZERO_YEARS_RE.search(sentence) or _NO_EXPERIENCE_RE.search(sentence)
+            or _ENTRY_TEXT_RE.search(sentence)
+        ):
+            return True
+        if _TURNED_AWAY_RE.search(sentence):
+            continue
+        for m in _ENTRY_AUDIENCE_RE.finditer(sentence):
+            before, after = sentence[: m.start()], sentence[m.end() :]
+            if _ABOVE_AUDIENCE_RE.search(before):
+                continue
+            if _PEOPLE_RE.search(m.group(0)) and (
+                _COLLEAGUES_BEFORE_RE.search(before) or _COLLEAGUES_AFTER_RE.match(after)
+            ):
+                continue
+            return True
+    return False
+
+
+def dm_junior_ok(
+    title: str | None, experience_level: str | None, description: str | None,
+) -> bool:
+    """Whether a posting may go to an intern/junior DM search on its level,
+    under DM_JUNIOR_RULE. The one switch for the DM junior rule: the
+    match stage asks this after matches_experience_level has passed."""
+    if DM_JUNIOR_RULE == "default":
+        return True
+    return has_entry_evidence(title, experience_level, description)
 
 
 def entry_level_search(levels: list[str] | None, keywords: list[str] | None) -> bool:
@@ -1444,7 +1738,7 @@ def matches_experience_level(
     wanted = {canonical_level(level) or level.lower() for level in levels or []}
     if not wanted or "any" in wanted:
         return True
-    title_lower = str(title).lower() if title else ""
+    title_lower = split_glued_level(str(title)).lower() if title else ""
 
     if "intern" in wanted:
         # Training positions only: a training title or the board's own

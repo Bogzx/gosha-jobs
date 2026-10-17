@@ -171,6 +171,103 @@ with the CV by `blend_with_user_vector`, feedback by
     ranking) are therefore slightly optimistic. The cosine-only and TF-IDF
     rows do not read seniority and are unaffected.
 
+## Results (2026-10-17): the DM junior rule is evidence-based
+
+**The rule.** For DMs to an intern or junior search, a posting whose
+title carries no level marker now needs **positive evidence** that
+beginners can apply (`filters.has_entry_evidence`, behind
+`filters.dm_junior_ok`). Before, it went out unless its text said
+otherwise (years asked, "experienced" wording). Evidence is any of:
+- a training or junior title;
+- the board's "entry" label, with the years agreeing;
+- an entry-role or level-one title ("Assistant", "Associate", "Analyst I", "L1");
+- at most two years asked, even as a nice-to-have;
+- "no experience needed" in its wordings, including "with or without experience" and "an advantage but not mandatory";
+- wording addressed to graduates, students, a first job, a new trade or a school-leaving minimum;
+- training that teaches the job.
+
+The evidence list was selected on the main set only. The scrape stage and
+the web feed keep the old rule. `DM_JUNIOR_RULE = "default"` is the
+one-line rollback, and `DM_ENTRY_LABEL_IS_EVIDENCE` switches off the
+board label as evidence.
+
+The same change adds two more checks:
+- **Not a job.** `filters.is_not_a_job` (DMs only) drops courses and talent-network CV drops posted as jobs.
+- **Glued level words.** `filters.split_glued_level` splits a level word glued to the next word ("InternSoftware Engineer"). It applies everywhere titles are read for a level.
+
+**Why.** DMs are the product's main feature, and the owner asked for
+junior roles, not unmarked roles. The old rule failed open: every
+demanding phrasing that no pattern knew went out. gosha-label's audit of
+the 2026-10-17 10:48 production snapshot found 17 of the 96 jobs passing
+intern/junior searches wrong. Fourteen of them came through the default,
+each through a phrasing no list had ("Strong experience with Java 8+",
+"Several years of professional experience"). The evidence rule **fails
+closed**: a phrasing it does not know costs a DM, and never sends a wrong
+one.
+
+**Postings counted junior-eligible for a DM** (matches the junior level,
+has a description, passes `dm_junior_ok`):
+
+| Set | Gold counted relevant | Before P / R | After P / R | Mid + senior let through |
+|---|---|---|---|---|
+| main (202) | junior or `any` | 0.950 / 0.905 | 1.000 / 0.429 | 5 → 0 |
+| main | junior only | 0.230 / 1.000 | 0.511 / 1.000 | |
+| held-out (261) | junior or `any` | 0.763 / 0.954 | 0.891 / 0.454 | 29 → 4 |
+| held-out | junior only | 0.319 / 0.956 | 0.673 / 0.822 | |
+
+**Production audit** (a check, never tuned on). The real prefilter ran
+for all 22 entry-level searches on the 10:48 snapshot, against gosha-label's
+hand verdicts:
+- wrong jobs went from 17 to 4;
+- right jobs went from 74 to 72 (lost: a Software Engineer with no level wording, and a posting asking "24 luni", which is not parsed);
+- wrong (search, job) pairs went from 31 to 12.
+
+With the board's "entry" label not counted as evidence, 2 wrong jobs are
+left and 4 right ones are lost.
+
+**DM eval** (`dm_score` @ 0.34; the baselines in `eval/results/` were
+regenerated with this rule):
+
+| Set | Search | Pool before → after | Relevant in pool | P@5 | P@10 | Recall | Starved |
+|---|---|---|---|---|---|---|---|
+| main | generic | 30.0 → 9.3 | 25.3 → 8.7 | 0.900 → 1.000 | 0.915 → 1.000 | 0.189 → 0.128 | 0 → 0 |
+| main | persona keyword | 35.8 → 12.9 | 2.9 → 1.3 | 0.448 → 0.381 | 0.330 → 0.356 | 0.828 → 0.816 | 3 → 3 |
+| held-out | generic | 57.7 → 21.7 | 40.7 → 18.3 | 0.956 → 0.956 | 0.902 → 0.902 | 0.565 → 0.694 | 0 → 0 |
+| held-out | persona keyword | 66.3 → 26.7 | 4.6 → 1.8 | 0.284 → 0.158 | 0.208 → 0.131 | 0.758 → 0.815 | 1 → 2 |
+
+**Gold `any` still counts as relevant to a junior search, so DM recall
+on `any` is low by design until those labels are reviewed.** The levels
+were read from each posting's title and opening lines, and `any` means
+"no level stated", not "open to beginners".
+- Most of the drop above is `any` postings leaving the pool: "relevant in pool" falls by about 60%.
+- The DM eval's recall is measured within the pool, so it can rise while fewer relevant postings are sent.
+
+gosha-label judged the 60 main-set `any` postings the rule drops, reading
+their full (2,000-character) descriptions:
+
+| Verdict | Postings | Notes |
+|---|---|---|
+| Open to beginners | 20 | 15 not computer science; 9 of the 20 came back once their wording was added to the evidence list |
+| Correctly dropped | 16 | |
+| Unclear | 24 | mostly descriptions cut before the requirements |
+
+The 11 real losses left name no beginner wording at all, for example
+customer support that asks only for a language. A labels review should
+re-grade `any` against the full text before the DM recall here is read as
+a loss.
+
+**Baselines.** `eval/results/all-mpnet-base-v2.json` and
+`eval/results/heldout/all-mpnet-base-v2.json` were regenerated on
+2026-10-17, so `--check` guards this rule from now on. Their feed numbers
+also move:
+- main junior: 109 → 100 postings left, nDCG@10 0.719 → 0.701;
+- held-out junior: 140 → 135, 0.633 → 0.613.
+
+That comes from the filter changes of 2026-10-16/17 ("experienced" wording,
+"N years as <role>"), which the old baseline predated, not from this rule:
+the feed does not use it. The 2026-10-16 tables below are kept as they were
+measured.
+
 ## Results (2026-10-16): Discord DMs, the DM score
 
 Every production DM today goes through one path: a saved search, no CV,

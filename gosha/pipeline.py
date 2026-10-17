@@ -30,9 +30,11 @@ from gosha.filters import (
     city_only,
     fold,
     clean_location,
+    dm_junior_ok,
     entry_level_search,
     filter_dataframe,
     is_gig_marketplace,
+    is_not_a_job,
     lacks_level_evidence,
     looks_like_an_ad,
     matches_company_blacklist,
@@ -559,6 +561,9 @@ async def _store_filtered(
     jobs among what it drops (refresh_known_rows). Logs instead of raising."""
     kept = filter_dataframe(df, keywords, levels)
     jobs = await _upsert_safely(kept, what)
+    # Needs a unique index: filter_dataframe masks without resetting it, and
+    # both producers (scrape_jobs_raw, _scrape_extra_sources) concat with
+    # ignore_index=True. A duplicated label would drop its rows here too.
     dropped = df[~df.index.isin(kept.index)]
     if not dropped.empty:
         try:
@@ -685,15 +690,22 @@ def job_matches_subscription(
         return False
     if not search_location_ok(job.location, sub.locations, sub.remote_ok):
         return False
-    if looks_like_an_ad(job.title, job.company) or is_gig_marketplace(job.company):
+    if (
+        looks_like_an_ad(job.title, job.company) or is_gig_marketplace(job.company)
+        or is_not_a_job(job.title, job.description)
+    ):
         return False
     # No evidence of the level: an unmarked title without a description is
     # not sent to an intern/junior search. A later cycle that brings the
     # description matches it again (it has no UserJob row yet).
-    if require_evidence and lacks_level_evidence(
-        job.title, job.experience_level, job.description,
-    ) and entry_level_search(sub.experience_levels, sub.keywords):
-        return False
+    # With a description, an unmarked title needs positive evidence that
+    # beginners can apply (filters.dm_junior_ok, DM_JUNIOR_RULE).
+    if entry_level_search(sub.experience_levels, sub.keywords):
+        if lacks_level_evidence(job.title, job.experience_level, job.description):
+            if require_evidence:
+                return False
+        elif not dm_junior_ok(job.title, job.experience_level, job.description):
+            return False
     if matches_excluded(job.title, job.description, sub.excluded_keywords):
         return False
     return matches_experience_level(

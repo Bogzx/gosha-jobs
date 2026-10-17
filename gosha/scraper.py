@@ -496,10 +496,15 @@ async def scrape_jobs_raw(
 
     merged = pd.concat(all_frames, ignore_index=True)
 
-    # Deduplicate by job URL
+    # Deduplicate by job URL, keeping a copy that has a description: LinkedIn
+    # answers 429 to a job page for one term and serves it for the next
+    # (job 8275 was stored empty that way on 2026-10-17).
     url_col = "job_url" if "job_url" in merged.columns else "link"
     if url_col in merged.columns:
-        merged = merged.drop_duplicates(subset=[url_col], keep="first")
+        if "description" in merged.columns:
+            has_text = merged["description"].map(lambda v: isinstance(v, str) and bool(v.strip()))
+            merged = merged.loc[has_text.sort_values(ascending=False, kind="stable").index]
+        merged = merged.drop_duplicates(subset=[url_col], keep="first").sort_index()
 
     # The native adapters clean their text in RawJob; JobSpy's rows here.
     for column in ("title", "company", "location", "description"):

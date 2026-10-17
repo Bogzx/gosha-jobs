@@ -17,13 +17,17 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import select
 
+import gosha.filters as filters
 import gosha.pipeline as pipeline
 from gosha.filters import (
     asks_experienced,
+    has_entry_evidence,
+    is_not_a_job,
     is_gig_marketplace,
     lacks_level_evidence,
     matches_experience_level,
     required_years,
+    split_glued_level,
     title_is_relevant,
 )
 from gosha.models import Job, Subscription, User, UserJob
@@ -203,7 +207,10 @@ def test_borderline_ntt_qa_stays_junior():
 
 # ── B: no evidence of the level ───────────────────────────────────────
 
-LONG_TEXT = "You will build data pipelines in Python and SQL with our team in Cluj. " * 4
+LONG_TEXT = (
+    "You will build data pipelines in Python and SQL with our team in Cluj. " * 4
+    + "Recent graduates are welcome."
+)
 
 
 def _job(title, description="", company="Bosch Romania", source="hipo", label=None, **kw):
@@ -385,3 +392,216 @@ async def test_rows_queued_under_old_gates_are_rechecked_at_send_time(
     await session.commit()
     assert await pipeline.deliver_pending(_Bot()) == 1
     assert sent[-1] == "AI/ML Engineer"
+
+
+# ── Positive entry evidence for junior DMs (DM_JUNIOR_RULE) ───────────
+# Wrong candidates in gosha-label's audit (prod snapshot 2026-10-17 10:48):
+# demanding text that no years/"experienced" pattern reads.
+AUDIT_WRONG = [
+    ("JAVA Developer with French", "* Strong experience with Java 8+"),
+    ("AI Engineer", "* Several years of professional experience in AI development, solution "
+     "architecture, particularly on Azure, with working knowledge of comparable services on "
+     "AWS and GCP"),
+    ("AI Engineer, Employee Products", "* Have 4–8 years in software, data, or AI/ML "
+     "engineering and have shipped production AI systems, not prototypes."),
+]
+FILLER = " You will work with our team in Cluj on internal tools and services." * 4
+
+
+@pytest.fixture
+def evidence_rule(monkeypatch):
+    """Pins the rule, so these tests hold after a rollback to "default"."""
+    monkeypatch.setattr(filters, "DM_JUNIOR_RULE", "evidence")
+
+
+def test_the_dm_junior_rule_ships_evidence_based():
+    """Fails closed (docs/EVAL.md, 2026-10-17); "default" is the rollback."""
+    assert filters.DM_JUNIOR_RULE == "evidence"
+    assert filters.DM_ENTRY_LABEL_IS_EVIDENCE
+
+
+@pytest.mark.parametrize("title, sentence", AUDIT_WRONG)
+def test_no_entry_evidence_no_junior_dm(title, sentence, evidence_rule, monkeypatch):
+    description = sentence + FILLER
+    job = _job(title, description)
+    assert not has_entry_evidence(title, None, description)
+    assert not pipeline.prefilter(_search(["junior"]), [job])
+    assert not pipeline.prefilter(_search(["intern", "junior"]), [job])
+    # Not an entry-level search: unaffected.
+    assert pipeline.prefilter(_search(["any"]), [job])
+    # The switch restores the old default.
+    monkeypatch.setattr(filters, "DM_JUNIOR_RULE", "default")
+    assert pipeline.prefilter(_search(["junior"]), [job])
+
+
+@pytest.mark.parametrize("title, text", [
+    ("Junior Python Developer", ""),
+    ("Software Engineer Intern", ""),
+    ("Accounting Assistant RO", "Required Skills Basic knowledge of accounting principles."),
+    ("Data Analyst", "* 1-2 years of experience with SQL"),
+    ("HR Specialist", "Experiență anterioară în IT Sourcing (minim 1-2 ani reprezintă un avantaj "
+     "clar)."),
+    ("Data Analyst", "Experience: 0-2 years."),
+    ("Customer Support", "No prior experience required, we will train you."),
+    ("Consultant Vânzări", "Nu este necesară experiență, oferim training."),
+    ("QA Engineer", "Recent graduates are welcome to apply."),
+    ("Customer Support", "A great place to start your career in tech."),
+    ("Embedded Engineer", "Open to students in their final year."),
+])
+def test_entry_evidence(title, text):
+    assert has_entry_evidence(title, None, text + FILLER)
+
+
+@pytest.mark.parametrize("text", [
+    "You will mentor junior engineers and review their code.",
+    "Students will not be considered for this role.",
+    "* 3+ years of experience with Java",
+])
+def test_not_entry_evidence(text):
+    assert not has_entry_evidence("Software Engineer", None, text + FILLER)
+
+
+def test_entry_label_needs_the_years_to_agree():
+    assert has_entry_evidence("QA Engineer", "entry", FILLER)
+    assert not has_entry_evidence("QA Engineer", "entry", "* 4+ years of experience." + FILLER)
+
+
+def test_intern_only_searches_are_unchanged(evidence_rule):
+    job = _job("Software Engineer Intern", FILLER)
+    assert pipeline.prefilter(_search(["intern"]), [job])
+
+
+# ── Not a job: courses and talent-network CV drops (audit cause E) ────
+ENTERSOFTONE = (
+    "Învață una dintre cele mai căutate specializări la intersecția dintre tehnologie și "
+    "business\nAcesta nu este un anunț de angajare, ci un program de training organizat de "
+    "ENTERSOFTONE Training Academy.\nPe parcursul cursului vei învăța cum sunt analizate "
+    "procesele unei companii și cum sunt transpuse într-o soluție ERP.\nÎnscrie-te până la "
+    "23 octombrie 2026"
+)
+SCHAEFFLER_TALENT = (
+    "General informationWe are always on the lookout for exceptional individuals to join our "
+    "team. If you didnt identify a suitable open position, you can submit your CV here and "
+    "well consider you for future opportunities that match your skills and experience."
+)
+# Real internships whose text sounds like the above.
+QUALCOMM = (
+    "By applying here, you are expressing interest in one of our many **2027 Qualcomm IT "
+    "Infrastructure & Cloud internships** . It is important to note that this is not a job "
+    "posting for a specific role. We will review resumes on an ongoing basis, and a recruiter "
+    "may reach out to you."
+)
+ARCH = (
+    "Simply create an account and opt in to receive emails when we have job openings that meet "
+    "your criteria. Join our talent community to share your preferences directly with Arch’s "
+    "Talent Acquisition team."
+)
+AUTOZONE = (
+    "If you are uncertain which department is the best fit, please use this general "
+    "application. * Applications close on Friday, December 4, 2026."
+)
+
+
+@pytest.mark.parametrize("title, description", [
+    ("Curs Consultant ERP ENTERSOFTONE Training Academy", ENTERSOFTONE),
+    ("Join Our Talent Network: Your Electrified Future Starts Here!", SCHAEFFLER_TALENT),
+    ("Data Analytics Bootcamp", "A 12-week bootcamp in SQL and Power BI. Enroll now, seats "
+     "are limited."),
+    ("Python Course", "Course fee: 1,200 RON, paid in two instalments."),
+    ("Curs Java", "Cursul durează 3 luni. Taxa de participare este 2000 lei."),
+    ("Join our Talent Community", "Leave us your details and we will contact you about "
+     "future opportunities."),
+])
+def test_not_a_job(title, description):
+    assert is_not_a_job(title, description)
+    job = _job(title, description + FILLER)
+    assert not pipeline.prefilter(_search(["intern", "junior"]), [job])
+    assert not pipeline.prefilter(_search(["any"]), [job])
+
+
+@pytest.mark.parametrize("title, description", [
+    ("IT Infrastructure & Cloud Engineering Internship – Summer 2027", QUALCOMM),
+    ("Security Operations Intern", ARCH),
+    ("AutoZone 2027 Summer Internship – Data Science", AUTOZONE),
+    # Title words alone do not decide.
+    ("Software Engineering Academy Intern", "You will build internal tools in Java."),
+    ("Talent Acquisition Intern", "Support recruiters in finding candidates for future "
+     "openings."),
+    # A student requirement and courses offered as a benefit.
+    ("Software Engineer Intern", "Students currently enrolled in a Computer Science course. "
+     "We offer language courses and a training budget."),
+    ("Junior Developer", "Oferim cursuri de limba germana si training intern."),
+    ("Junior Developer", None),
+])
+def test_a_job_is_not_flagged(title, description):
+    assert not is_not_a_job(title, description)
+
+
+# ── V3 evidence classes (main eval set's "any" postings, 2026-10-17) ──
+@pytest.mark.parametrize("title, text", [
+    # Experience not needed, in other words.
+    ("Sofer Curier", "nu aveți nevoie de experiență anterioară și nici de cunoștințe de limbi "
+     "străine"),
+    ("Consultant Credite", "Training complet (nu ai nevoie de experiență)"),
+    ("Support Agent", "You don't need prior experience."),
+    # With or without it.
+    ("Appointment Setter", "te învățăm tot ce trebuie să știi ... chiar dacă ai sau nu "
+     "experiență anterioară similară"),
+    ("Agent Vanzari", "Angajăm cu sau fără experiență."),
+    # An advantage but not required.
+    ("Sales Partner", "Experiența în sales reprezintă un avantaj, dar nu este obligatorie"),
+    ("Support Agent", "Experience in customer service is an advantage, but not required."),
+    # Training that teaches the job.
+    ("L1 Service Technician", "Technical college or university is not mandatory as necessary "
+     "training will be ensured"),
+    ("Controlor financiar", "O perioadă de training în care vei învăța tot ce ai nevoie"),
+    # A new trade.
+    ("Site QAIT", "Oportunitatea de a învăța și de te califica intr-o noua meserie"),
+    ("Data Analyst", "We welcome career changers."),
+    # A school-leaving minimum.
+    ("Consultant Credite", "Cerinta minima diploma de bacalaureat"),
+    # Level one of a ladder, in the title or the text.
+    ("Technical Analyst I", ""),
+    ("Application Support / SQL", "As a Technical Analyst I, you will troubleshoot"),
+    ("Customer Support", "As a Level 1 Customer Support Consultant you will"),
+])
+def test_v3_entry_evidence(title, text):
+    assert has_entry_evidence(title, None, text + FILLER)
+
+
+@pytest.mark.parametrize("title, text", [
+    ("Technical Analyst II", ""),
+    ("Software Engineer", "Training will be provided on our internal tools."),
+    ("Software Engineer", "Experience with Kafka is required."),
+    ("Software Engineer", "As a team, I think we build great things."),
+    ("Accountant", "Studii superioare economice."),
+])
+def test_v3_not_entry_evidence(title, text):
+    assert not has_entry_evidence(title, None, text + FILLER)
+
+
+def test_entry_label_evidence_can_be_switched_off(monkeypatch):
+    assert has_entry_evidence("QA Engineer", "entry", FILLER)
+    monkeypatch.setattr(filters, "DM_ENTRY_LABEL_IS_EVIDENCE", False)
+    assert not has_entry_evidence("QA Engineer", "entry", FILLER)
+
+
+# ── Glued level words ("InternSoftware Engineer", Ascom) ──────────────
+@pytest.mark.parametrize("title, split", [
+    ("InternSoftware Engineer", "Intern Software Engineer"),
+    ("JuniorDeveloper", "Junior Developer"),
+    ("SeniorData Engineer", "Senior Data Engineer"),
+    ("Internal Auditor", "Internal Auditor"),
+    ("DevOps Engineer", "DevOps Engineer"),
+    ("JavaScript Developer", "JavaScript Developer"),
+])
+def test_glued_level_words_are_split(title, split):
+    assert split_glued_level(title) == split
+
+
+def test_a_glued_intern_title_is_an_internship():
+    title = "InternSoftware Engineer"
+    assert matches_experience_level(title, ["intern"])
+    assert title_is_relevant(title, "computer science internship", None, FILLER, ["intern"])
+    assert has_entry_evidence(title, None, FILLER)
+    assert not matches_experience_level("SeniorData Engineer", ["junior"])

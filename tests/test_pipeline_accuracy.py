@@ -52,7 +52,8 @@ def make_sub(keyword: str, levels: list[str] | None = None, max_age_days: int = 
 BODY = (
     " You will join a small team in Cluj, write code and tests reviewed by a mentor,"
     " and take part in planning and retrospectives. Onboarding takes a week, with"
-    " training on our tools and a buddy for your first projects."
+    " training on our tools and a buddy for your first projects. Recent graduates"
+    " are welcome."
 )
 
 

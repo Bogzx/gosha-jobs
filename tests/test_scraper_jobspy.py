@@ -257,6 +257,32 @@ async def test_scrape_jobs_raw_without_job_level_column(monkeypatch):
     assert "experience_level" not in df.columns or df["experience_level"].isna().all()
 
 
+async def test_a_job_found_by_several_terms_keeps_the_copy_with_a_description(monkeypatch):
+    # Prod, 2026-10-17: LinkedIn answered 429 to job 4469313272's page for one
+    # term of 'cs entry level' and served it 40 s later for another; the first,
+    # empty copy was kept and the row (8275) was stored without a description.
+    monkeypatch.setattr(scraper, "DELAY_BETWEEN_SEARCHES", 0)
+    calls = [0]
+
+    def fake_scrape_jobs(**kwargs):
+        calls[0] += 1
+        text = None if calls[0] == 1 else "GTM automation with Python"
+        return pd.DataFrame([
+            {"job_url": "https://li/1", "site": "linkedin", "description": text},
+            {"job_url": f"https://li/only-{calls[0]}", "site": "linkedin", "description": None},
+        ])
+
+    monkeypatch.setattr(scraper, "scrape_jobs", fake_scrape_jobs)
+    df = await scraper.scrape_jobs_raw(
+        _Tunnels(), "computer science internship", "cluj", 14, ["linkedin"],
+    )
+    assert calls[0] > 1
+    assert df["job_url"].is_unique
+    assert df.set_index("job_url").loc["https://li/1", "description"] == (
+        "GTM automation with Python"
+    )
+
+
 async def test_linkedin_internship_label_is_stored_on_the_job(patched_db, monkeypatch):
     """End to end: the label reaches Job.experience_level through upsert_jobs."""
     from gosha.pipeline import upsert_jobs

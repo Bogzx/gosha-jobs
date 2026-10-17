@@ -33,6 +33,7 @@ from gosha.filters import (
     MID_TITLE_RE,
     required_years,
     says_senior,
+    split_glued_level,
 )
 
 # Posting levels.
@@ -59,7 +60,7 @@ def posting_level(
     title: str, description: str | None = None, board_level: str | None = None,
 ) -> str:
     """ENTRY, MID, SENIOR or UNKNOWN for one posting."""
-    title = title or ""
+    title = split_glued_level(title or "")
     if INTERN_RE.search(title) or JUNIOR_RE.search(title) or ENTRY_LEVEL_RE.search(title):
         return ENTRY
     if says_senior(title):

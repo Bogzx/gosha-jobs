@@ -33,6 +33,15 @@ def test_title_decides(title, level):
     assert seniority.posting_level(title) == level
 
 
+@pytest.mark.parametrize("title, level", [
+    ("InternSoftware Engineer", ENTRY),     # a scraper dropped the space
+    ("JuniorData Analyst", ENTRY),
+    ("SeniorBackend Developer", SENIOR),
+])
+def test_a_glued_level_word_reads_as_the_filters_read_it(title, level):
+    assert seniority.posting_level(title) == level
+
+
 def test_title_outranks_the_board_label_and_the_label_outranks_the_text():
     assert seniority.posting_level("Senior Dev", None, "entry") == SENIOR
     assert seniority.posting_level("QA Engineer", "5+ years of experience", "entry") == ENTRY
