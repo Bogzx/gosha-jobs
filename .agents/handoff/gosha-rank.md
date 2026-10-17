@@ -979,3 +979,216 @@ gosha-pipe owns the filter call. Rule + threshold fixed before measuring; main +
 - **Ship bar:** on main + judged DMs together, the embedding makes fewer errors than the regex, AND keeps at least the
   regex's gold-CS count minus 1. Then held-out ONCE: errors ≤ the regex's. Otherwise: do not ship; report.
 - Descriptive only (not the decision): margin ≥ 0 vs gold CS over every main posting with a description.
+### Agreed with gosha-pipe (their cs-field-reply-2.md), before anything was encoded
+- Panels: mine, unchanged. Margin: j·(unit mean CS − unit mean other) ≥ CS_FIELD_MARGIN = 0.0.
+- AND, not replace: the word check stays everywhere (scrape filter and match stage), and the margin is one more gate,
+  so the measured rule is the shipped rule. **My pre-registered ship bar is updated accordingly:** compare
+  "word check" vs "word check AND margin ≥ 0" (the gate can only remove). Same bar otherwise.
+- Gate in `pipeline.prefilter(sub, jobs, *, require_evidence=True, field_axis=None)` (gosha-pipe), in scope =
+  `filters.generic_engineering_title(title)` and a tech-keyword search. It is skipped when there is no axis or no
+  current embedding, which is logged.
+  - Callers: match_jobs_for_subscription passes matcher.field_axis(); deliver_pending passes
+    matching.cached_field_axis(); evaluation.dm_pool passes the axis (mine, TODO when their prefilter lands).
+- gosha-pipe runs the measurement once (main + judged DMs, then held-out once, aggregates).
+### My part: DONE (uncommitted)
+- gosha/matching.py: FIELD_PANEL_CS / FIELD_PANEL_OTHER (gosha/field_panel_cs.txt, field_panel_other.txt), CS_FIELD_MARGIN,
+  field_axis(), field_margin() (vectorised), SemanticMatcher.field_axis() (module cache `_field_axes` per model under
+  `_field_lock`), SemanticMatcher.is_cs_field(), cached_field_axis() (never loads the model).
+- tests/test_matching.py TestFieldCheck (5): panels balanced/disjoint/RO share; margin = cosine to the CS centre minus
+  cosine to the other, invariant to panel spread; side decision; encoded once per process and model, shared across
+  matchers and cached_field_axis; no model → None.
+  `pytest -q tests/test_match_*.py tests/test_matching.py` → 53 passed.
+- NEXT: when gosha-pipe pings, evaluation.dm_pool passes the axis. The transient Jobs then need the eval's job
+  vector as `embedding` + the current model id; check how their gate decides "current". Add an eval test, then
+  regenerate the baselines once after their measurement and the lead's go.
+
+### Session 11 CLOSED (2026-10-17): the CS-field gate FAILED its pre-registered bar and was removed (lead)
+- Measured once by gosha-pipe, nothing tuned (script and margins: /tmp/claude-1001/-home-ubuntu-gosha-agents/
+  d88b10a3-dacc-4b68-b7c0-4fc2f062a6d3/scratchpad/csfield/measure.py, dm_margins.txt). Rule as pre-registered above
+  (word check AND margin ≥ 0, my panels).
+  - Eval main: 9 postings in scope, 0 errors before and after (no signal).
+  - Judged DMs, gold = gosha-label "not-CS" (18 in scope): errors 4 → 5. Removed: Tenaris 7861 (right), Bosch 7983
+    "Process Engineering & Digitalization" (OK, so wrong), Renesas 8001 (CS, so wrong). Kept: Vertiv 8261 (margin
+    +0.039, the posting that motivated the check). Lead NONCS gold: 3 → 4. Extra gold-CS lost: 2 (the bar allows 1).
+  - Held-out: NOT run (the bar failed before it).
+  - Why: the non-CS postings (Vertiv, Value Engineering, CertiK) sit at +0.04…+0.06, ABOVE the CS ones (Bosch
+    digitalization, Renesas) at −0.06…−0.07. With build_job_text vectors (title ×2 + company + 1,500 description
+    characters), the role panels separate company/boilerplate tone more than field. One sign threshold cannot work
+    when the classes are inverted; no threshold was tried (lead: no retuning).
+- Reverted (lead): gosha/matching.py and tests/test_matching.py restored to HEAD (`git show HEAD:<file> > <file>`; they
+  were pure additions of mine). Deleted gosha/field_panel_cs.txt and field_panel_other.txt (created by me). The
+  evaluation.py dm_pool/as_job field-axis wiring and its test were removed by hand. All four files are now identical
+  to HEAD 85edd14. `pytest -q tests/test_matching.py tests/test_evaluation.py tests/test_match_*.py` → 93 passed.
+  gosha-pipe reverted their side (pipeline/filters = HEAD, tests/test_cs_field_gate.py deleted).
+- What would make it worth revisiting: field vectors that see the requirements, not the company blurb. For example,
+  embed only the requirements/responsibilities section, or the title + the first sentences of the role, on more than
+  18 judged postings, with a fresh panel and a fresh pre-registered rule. Or labels for the ~490 active prod postings
+  in scope, so a learned boundary has data.
+- Note: my next-release feed/eval work (Session 10b/10c) was committed by the lead in 0dbdf76 (+ handoffs 85edd14).
+
+## CURRENT STATE (2026-10-17): standing by. Nothing of mine is uncommitted except this handoff.
+
+## Session 12 (2026-10-17): DM recall via role terms (owner priority), next release
+Lead task: gosha-pipe found 77 below-threshold misses, 71 of them junior matches. The query encodes a field ("computer
+science internship"), while junior jobs describe a role. Candidate (D): score through the expand_keyword role terms,
+taking the max of the per-term DM scores. Ship bar (lead): no loss in DM precision on judged data. Report once.
+### PRE-REGISTERED (14:01 UTC, before any score was computed by me)
+- **Scope:** a search keyword that `filters.expand_keyword` expands (it returns terms other than the keyword itself;
+  in prod "computer science internship" and "cs entry level"). Any other keyword ("computer science intern",
+  "python developer", ...) keeps exactly today's query and score.
+- **Terms:** the original keyword, plus each expand_keyword term with level words removed by gosha-pipe's
+  counterfactual LEVEL_WORDS regex (internship/intern/stagiu/stagiar/practică/trainee/junior/jr/entry level/graduate/
+  absolvent/(working) student), deduplicated case-insensitively. Terms left empty are dropped.
+- **Score:** for each term t, today's DM query (build_subscription_query([t], the search's places and levels), then
+  SemanticMatcher.dm_query: minus DM_ALPHA × the same panel mean). The pair's DM score = max over terms of
+  job·query_t. With several keywords, the max over all their terms. Including the original keyword makes it
+  monotone: a pair sent today is still sent.
+- **Threshold, primary:** DM_THRESHOLD 0.34 unchanged (as in gosha-pipe's (D) measurement).
+- **Threshold, fallback (only if the primary fails the bar on judged data):** re-pick on eval MAIN ONLY as the smallest
+  t ≥ 0.34 (0.01 grid) at which the main DM eval's generic P@10 and persona-keyword P@5 are both ≥ today's. Then judge
+  that t once on the judged data. No other values are tried.
+- **Judged data and bar:** gosha-label's verdict on each pair, strict precision = right / (right + wrong + borderline).
+  Lenient (borderline = right) is reported too. Two sets:
+  (1) gosha-pipe's 48 h window (missed_dms_104.tsv with gosha-label's verdicts): precision of the pairs the new rule
+  recovers;
+  (2) the 263 judged sent DMs (lead scratchpad alldms/label_judged.tsv), replayed through today's prefilter: precision
+  of the judged pairs that today's rule sends vs the new rule.
+  **Bar:** precision(new) ≥ precision(today) on (2), AND the precision of the recovered pairs in (1) ≥ precision(today)
+  on (2). Strict is primary.
+- **Eval:** DM eval main (dm_score rows: P@5, P@10, sent/search, recall, starved; generic and persona keyword). The
+  eval's generic keywords are the prod ones, so scope applies to "computer science internship" and "cs entry level".
+  Held-out ONCE at the end, aggregates only.
+- Code: a pure helper in gosha/matching.py (role terms + the per-term DM queries, max), used by the eval. gosha-pipe
+  would wire match_jobs_for_subscription if it ships.
+### Item 1 results (role terms), measured as pre-registered; nothing tuned beyond the pre-registered fallback
+Code (uncommitted, mine): gosha/matching.py `dm_role_terms(keyword)`, `dm_scores_over_terms(job_embs, term_queries)`,
+`SemanticMatcher.dm_term_queries(keywords, locations, levels)` (row 0 = today's exact query, all keywords joined, so
+the rule is monotone); gosha/evaluation.py `dm_term_query_vectors`, and evaluate_dm_searches takes per-search (T, D)
+queries. Not wired into run(), and no tests yet (they come with the decision). Scripts and outputs in my scratchpad
+(/tmp/claude-1001/-home-ubuntu-gosha-agents/5c7f0d59-6871-4b37-a122-dda935ef9f5c/scratchpad/): dm_terms_eval.py →
+dm_terms_main.txt / dm_terms_final.txt; dm_terms_judged.py → dm_terms_judged.txt; dm_terms_judged_fallback.py →
+dm_terms_judged_fallback.txt; dm_terms_window_all.py → dm_terms_window_all.txt.
+- A bug of mine, caught and fixed before any conclusion: in part (1) the subs.jsonl lists are JSON strings, and I had
+  passed one raw (today's score was off by up to 0.139). After the fix, today's score reproduces gosha-pipe's column
+  exactly (max |diff| 0.0000).
+- **Primary (terms, threshold 0.34):**
+  - (1) 48 h window, 77 below-threshold pairs: recovers 56, 52 right / 3 borderline / 1 wrong (8298 Magna), strict
+    .929, lenient .982. ✓ (≥ today's .789).
+  - (2) 263 judged sent DMs (119 blocked by today's prefilter, 32 of the CV user skipped): today sends 109, strict .789,
+    lenient .844. New sends 112, strict .777, lenient .839. Added 3: 7398 Network Engineer Junior Consultant (right),
+    7742 SAP IS-U (borderline), 7850 Compliance Engineer Intern (wrong, .317 → .348). ✗: **fails my bar's (2)
+    condition by one wrong pair out of 3.**
+  - Eval main: generic sent 1.1 → 5.3, P@5 1.000 → 1.000, P@10 1.000 → .967, recall .152 → .697, starved 0 → 0.
+    Persona keyword: unchanged (by design).
+  - Held-out (once): generic sent 13.1 → 16.1, P@5 .956 → .956, P@10 .922 → .917, recall .683 → .828, starved 0 → 0.
+    Persona keyword unchanged.
+  - Window, all 150 prefilter pairs: sent 71 → 129. No pair sent today drops (monotone).
+  - The union of all judged data (the lead's wording "no loss on judged data"): today .789 (86/109) vs new .827
+    (139/168) strict. My pre-registered bar was stricter (condition (2) on its own).
+- **Fallback (global threshold 0.39, picked on main by the pre-registered rule: the smallest t with generic P@10 ≥
+  1.000 and persona P@5 ≥ .366):**
+  - (1) recovers 28, all right (1.000). (2) today .789 → .792 strict (adds 2: right + borderline; drops 5: 3 right,
+    2 wrong). Window: 71 → 100 sent, 0 of today's dropped. So it passes the judged bar.
+  - But it raises the threshold for EVERY search. Main: 2 generic searches starved ("computer science intern",
+    intern+junior and junior, which the terms do not touch), persona recall .797 → .634. **Held-out: worse than today
+    on generic recall (.683 → .618) AND P@10 (.922 → .909); persona recall .817 → .505, starved 2 → 9.** Not
+    shippable.
+  - My pre-registration did not say whether the fallback threshold applies to all searches or only to the
+    term-scored ones. I applied the literal reading (all). The scoped reading was NOT measured, to avoid a second
+    look; that is the lead's call.
+- Recommendation (decision for the lead): the primary is the better rule on every set except judged (2), where n = 3.
+  Either accept it under the lead's union wording, or do not ship. Do not ship the fallback.
+
+## Session 12, item 2: embed the role part, not the first 1,500 characters (lead; measured separately from item 1)
+Trigger (gosha-pipe): Betfair 8274 (judged right ×6) scores 0.21, because build_job_text embeds the first 1,500
+description characters, which are company boilerplate. Format discovery only (no scores): 2,250 of 2,434 prod
+descriptions have section headings ("**X**" lines or short "X:" lines). The most frequent are location, what we offer,
+responsibilities, key responsibilities, job description, qualifications, about us, company description, benefits, ...
+### PRE-REGISTERED (14:17 UTC, before any score with the new text was computed)
+- **Sections:** a heading is a line that is wholly "**text**" (3–60 chars) or a short line (≤ 50 chars) ending in ":".
+  The description splits at headings; the text before the first heading is the preamble.
+- **Boilerplate sections (dropped),** by folded, lower-case heading:
+  - company: company, company description, about us, about the company, who we are, introduction, our values,
+    our culture, our story, our mission, and "about <X>" unless X starts with the role / the job / the position /
+    this role / this position / the opportunity / you / the team;
+  - offer: what we offer, benefits, perks, why join (us / our team / ...), what can you expect, compensation, salary;
+  - process: how to apply, before you apply, the selection process, additional information, disclaimer, equal
+    opportunit*, location, employment type, duration;
+  - Romanian: despre noi, despre companie, cine suntem, ce oferim, beneficii, oferim.
+  Every other section is kept, with its heading.
+- **Preamble:** dropped when at least one kept section follows; otherwise kept.
+- **Role text** = the kept parts in their original order. When there is no heading, or nothing is kept: the whole
+  description, as today.
+- **build_job_text** = title, title, "at company", role_text[:1500]. The same function feeds the embeddings and the
+  feed's TF-IDF (recommend._lexical_text), so both move, and both are measured.
+- **Measured** with today's DM query (not item 1's terms) at DM_THRESHOLD 0.34, everything else unchanged.
+- **Bar:**
+  - (a) judged data: the 77 below-threshold window pairs: precision of the newly crossing pairs ≥ today's .789
+    strict;
+  - (b) judged sent DMs (the same replay as item 1, both sides re-scored with their own vectors): strict precision
+    new ≥ today;
+  - (c) eval main: feed production nDCG@10 and DM eval P@5 / P@10 (generic and persona keyword) not below today's
+    by more than 0.02 (the CI gate tolerance), and starved not up.
+  Then held-out once, same (c). Nothing is tuned; a failure is reported as one.
+- **Re-embed estimate:** encode throughput on this server × the prod job count that reembed would touch (read-only
+  count). Note: reembed.py selects rows by model name, so a text change under the same model needs a forced run or
+  a text-version marker in embedding_model.
+### Item 2 results (role text): FAILS its pre-registered bar; reverted
+- **The eval sets cannot measure it:** 0 of 202 main and 0 of 261 held-out descriptions contain a newline (flattened at
+  collection), so role_text changes nothing there. CLI `--check` main: identical output. Bar (c) passes only because
+  nothing changes; held-out would be the same no-op and was not run. A future text change needs eval descriptions
+  with their line structure (re-collection, gosha-label).
+- (a) window, 40 jobs (role text differs for 31): below-threshold pairs now crossing: 10, all right. But of all 150
+  window pairs, sent goes 71 → 66: **15 pairs sent today fall below 0.34** (unjudged; they are DMs users get today).
+- (b) judged sent DMs: today 109 sent, strict .789 → new 96 sent, strict .771 (lenient .844 → .833). Added 1
+  (borderline); dropped 14: 12 right (8041 Junior Full-Stack ×4, 8287 Data Scientist ×3, 8319 Wordpress ×4, 7978),
+  1 borderline, 1 wrong. ✗
+- Betfair 8274 itself: 0.209 → 0.296, still below 0.34. Its role text starts "Role Overview: Flutter's Procurement
+  function governs over $6bn of third-party spend…", so the role section itself is about the business domain.
+- Code: role_text() + _HEADING_RE + _BOILERPLATE_HEADING_RE in build_job_text, **reverted** (build_job_text = HEAD) so
+  that nothing in the shared tree runs a failed change. Copy of that version:
+  /tmp/claude-1001/-home-ubuntu-gosha-agents/5c7f0d59-6871-4b37-a122-dda935ef9f5c/scratchpad/matching_item1_item2.py.
+  Script and output: role_text_judged.py, role_text_judged.txt (same scratchpad).
+- **Re-embed estimate (if any text change ships):** encode 0.55 s/job on this server (4 cores shared, nice 15, batches
+  of 40–104, measured twice: 556 and 554 ms). Prod: 8,380 stored vectors (all), 484 active → about 77 min for all, or
+  about 4.5 min for active only. reembed.py selects by model name, so a text change under the same model needs a forced
+  mode or a text-version marker in embedding_model (one more code change, gosha-pipe/gosha-health's area for the run).
+### Code state at the end of Session 12 (uncommitted, mine)
+- gosha/matching.py: item 1 only (`_LEVEL_WORDS_RE`, `dm_role_terms`, `dm_scores_over_terms`,
+  `SemanticMatcher.dm_term_queries`), plus `import re`. Not called by the product.
+- gosha/evaluation.py: `dm_term_query_vectors`; evaluate_dm_searches accepts per-search (T, D) queries. run() is
+  unchanged, so the baselines are unaffected.
+- tests/test_matching.py: TestDmRoleTerms (4).
+- `pytest -q tests/test_matching.py tests/test_evaluation.py tests/test_match_*.py tests/test_recommend.py` →
+  150 passed (after one test-tolerance fix); ruff clean.
+- If the lead ships item 1 at 0.34: gosha-pipe wires dm_term_queries + dm_scores_over_terms into
+  match_jobs_for_subscription's no-CV branch (row 0 is today's query). I add run()'s "dm_score" row through
+  dm_term_query_vectors and regenerate the baselines once. If not: delete the item 1 additions.
+
+### OWNER DECISION (2026-10-17, via gosha-lead): ship item 1 (role terms) at the primary threshold 0.34
+The primary fails my pre-registered bar on condition (2) alone: judged sent DMs, strict precision .789 → .777, 3 pairs
+added, 1 of them wrong (7850 Compliance Engineer Intern). The owner shipped it anyway on the rest of the evidence:
+56 of 77 window misses recovered at .929 strict; precision over all judged data .789 → .827; held-out generic
+recall .683 → .828 with P@5 equal and P@10 .922 → .917. The fallback (global 0.39) is not shipped.
+My side to finish: evaluation.run() "dm_score" row through dm_term_query_vectors, tests, docs/EVAL.md, baselines
+regenerated once (main + held-out, the CI command), both --check exit 0. gosha-pipe wires match_jobs_for_subscription.
+### Item 1 COMMIT-READY (2026-10-17)
+- gosha/evaluation.py: run()'s "dm_score" row goes through `dm_term_query_vectors` (the "cosine" comparison row is
+  unchanged). Tests: tests/test_evaluation.py `test_a_field_search_is_scored_through_its_role_terms`, and
+  `test_run_scores_the_dm_score_row_through_role_terms` (fails with the old run(): checked by flipping the line).
+  tests/test_matching.py TestDmRoleTerms (4).
+  `pytest -q tests/test_evaluation.py tests/test_matching.py tests/test_match_*.py tests/test_recommend.py` →
+  152 passed; ruff clean.
+- Baselines regenerated ONCE (`--models all-mpnet-base-v2 tfidf --write-results eval/results`, plus held-out into
+  eval/results/heldout), on a tree with gosha-pipe's pipeline.py wiring. Their diff is inside
+  match_jobs_for_subscription after prefilter, so the eval pools are unaffected. All input md5s were the same before
+  and after. Both `--check` (CI form, `--cache-dir ""`) exit 0. Changed: eval/results/all-mpnet-base-v2.json,
+  eval/results/heldout/all-mpnet-base-v2.json; the tfidf files were rewritten with identical content (TF-IDF's DM
+  score sends 0 at 0.34 either way). New baseline: main generic sent 5.3, P@10 .967, recall .697; held-out 16.1 /
+  .917 / .828; feed unchanged (0.755 / 0.604).
+- docs/EVAL.md: new section "Results (2026-10-17): field searches scored through their roles" (problem, rule, bar,
+  table, the one-pair miss, the failed fallback, the owner's call, the failed role-text candidate). "What is measured"
+  covers the role terms.
+- Commit (lead): gosha/matching.py, gosha/evaluation.py, tests/test_matching.py, tests/test_evaluation.py,
+  eval/results/all-mpnet-base-v2.json, eval/results/heldout/all-mpnet-base-v2.json, docs/EVAL.md + gosha-pipe's
+  pipeline.py and tests/test_dm_role_terms.py. gosha-pipe was told my side is final.

@@ -386,3 +386,33 @@ was scanned too. No ranker output looked at.
   (`test_graduate_rule_relabels_are_junior[main|heldout]`; heldout case fails on HEAD's file).
 - Verified: `.venv/bin/python -m pytest -q tests/test_heldout.py tests/test_evaluation.py` → 58 passed;
   `ruff check tests/test_heldout.py eval/heldout` clean.
+
+## Missed-DM judgement (2026-10-17, owner task via gosha-lead) — REPORT FOR gosha-lead
+Input: gosha-pipe's /tmp/claude-1001/-home-ubuntu-gosha-agents/d88b10a3-dacc-4b68-b7c0-4fc2f062a6d3/scratchpad/recall/missed_dms_104.tsv
+(104 search x job pairs passing the hard filters on 85edd14 with no user_jobs row; export 13:55Z).
+Output (pipe's columns + label_verdict/label_note filled): same dir, `missed_dms_104_label.tsv`.
+Copy + script: /tmp/claude-1001/-home-ubuntu-gosha-agents/029ed740-ffcb-41fe-b820-efdb1fbb8781/scratchpad/missed/
+(fill.py holds the per-job verdicts; jobs read from full prod descriptions via one BEGIN READ ONLY SELECT, no user data).
+Same rules as the all-DM judgement (2-year rule, range rule, graduate rule, CS relevance, intern-only = training only).
+
+- 77 below threshold: **59 right, 17 borderline, 1 wrong**. Pairs flagged role_terms_max_would_send (56):
+  52 right, 3 borderline, 1 wrong (8298) → precision 93% strict, 98% counting borderline as ok.
+  Unflagged (21): 7 right, 14 borderline.
+- 27 duplicate rows (19 cross-board copy, 8 under the user's other search): all marked wrong = "no second DM";
+  the user already got that posting, so not sending is correct.
+- Right but not sent (59 pairs = 58 DMs; 8289 is a copy of 8288):
+  - s3, s5, s25, s26 (intern+junior, Cluj; 9 each): 8258 Vertiv, 8270 Grab DS, 8392 AspenTech TSE I,
+    8276 Deloitte SAP Analytics, 8377 FanDuel Assoc Data Ops, 8280 Riverbed SWE, 8269 Perficient QA,
+    8277 Deloitte SAP Data Migration, 8274 Betfair Data Engineer.
+  - s10 (junior, Cluj, 'computer science internship'; 8): 8287 Accenture DS, 8270, 8280, 8276, 8392, 8269, 8277, 8274.
+  - s11 (junior, Cluj, 'cs entry level'; 8): 8392, 8269, 8287, 8276, 8277, 8280, 8270, 8274.
+  - s17 (intern, Bucuresti; 1): 8288 NXP SW Safety Engineer Student (8289 same posting).
+  - s22 (intern+junior, Timisoara; 5): 8292 OEDIV Linux support (German B2), 8294 Access SWE,
+    8296 Deloitte SAP Analytics, 8297 Deloitte SAP Data Migration, 8301 ATOSS Cloud Ops.
+- Borderline: 8281 Windchill (needs prior Windchill dev experience), 8285 SAC Planning (finance consultant),
+  8011 AUMOVIO HW test intern, 8053/8385/8386 Autoliv mechatronics intern (3 copies of one posting),
+  8358 Schaeffler student HW electronics (stored level junior but it is a student post → DM would name the wrong level).
+- Wrong: 8298 Magna video-pipeline SDE (s22): experienced role ("Good experience", "Hands-on expertise",
+  Vulkan/CUDA, board bring-up), board says 'entry'. role_terms_max would send it.
+- Pattern (observation, cause not verified): 75 of 77 below-threshold pairs are junior-level postings, and
+  6 of the 8 searches involved have the query "computer science internship".

@@ -1,3 +1,85 @@
+# BOARD 'ENTRY' LABEL NO LONGER EVIDENCE (lead, gosha-pipe, 2026-10-17 ~16:00 UTC) — uncommitted, commit-ready
+
+Summary: `/tmp/claude-1001/-home-ubuntu-gosha-agents/d88b10a3-dacc-4b68-b7c0-4fc2f062a6d3/scratchpad/label/RESULTS.md`
+
+**Label off alone fails the lead's bar.** About 7 right lost (Grab 8270, ATOSS 8301) for 6 wrong removed. Both right postings carry evidence in their text that the rules did not read.
+
+**Applied in gosha/filters.py:**
+- `DM_ENTRY_LABEL_IS_EVIDENCE = False`.
+- `_ENTRY_TEXT_RE` gains a degree in progress or just finished ("pursuing / enrolled in … degree", "recently completed/obtained a … degree").
+- `_ENTRY_TEXT_RE` gains experience as one option ("experience with or a strong interest in").
+
+**Measured before vs after**, on the deploy would-send, the missed-DM table, the 263 sent DMs and all prod pairs:
+- 0 right lost and 0 added.
+- 7 wrong removed: BT 7849 × 5, Magna 8298 × 2 rows (one posting).
+- 15 borderline removed: Accenture Windchill × 6, DELGAZ × 5, Teletrans × 4.
+- Prod 597 → 564. Unjudged removals: Zynk QA 7745 × 6 (borderline at most) and Atlante help desk (asks for previous experience, so right to remove).
+
+**Tests:** see RESULTS.md. 753 passed in the related suites; ruff clean; eval `--check` main and held-out both exit 0.
+
+# ROLE-TERM DM SCORING WIRED + FIRST-CYCLE WOULD-SEND (owner decision, gosha-pipe, 2026-10-17 ~15:20 UTC)
+
+**Wiring (uncommitted, commit-ready):**
+- `gosha/pipeline.py` `match_jobs_for_subscription`, no-CV path: `getattr(matcher, "dm_term_queries")` gives (T, D) term queries. Each row is scored with `score_jobs_against_query_async`, and the element-wise max is kept (the same as `matching.dm_scores_over_terms`).
+- Fallback to `dm_query` for matchers without the method (test fakes).
+- The CV path is unchanged. Send time does not re-score (it uses the stored relevance_score), so there is nothing else to wire.
+
+**Tests:** new `tests/test_dm_role_terms.py` and fixture `tests/fixtures/riverbed_netim_8280.txt` (the Riverbed posting text).
+
+**Would-send summary:** `/tmp/claude-1001/-home-ubuntu-gosha-agents/d88b10a3-dacc-4b68-b7c0-4fc2f062a6d3/scratchpad/deploy/RESULTS.md`
+- First cycle after deploy: 33–39 DMs on realistic inputs (45 upper bound) vs 0 on main.
+- No flooding: at most 5 per search and per user. 20–25 rows are deferred and drain over the next 1–2 cycles.
+- Of the first-cycle DMs on the last2 input: 31 right, 1 borderline, 7 unjudged. 1 wrong (Magna 8298) is deferred, not sent first.
+
+# DM RECALL: missed DMs (owner task via the lead, gosha-pipe, 2026-10-17 ~14:20 UTC)
+
+Scratchpad: `/tmp/claude-1001/-home-ubuntu-gosha-agents/d88b10a3-dacc-4b68-b7c0-4fc2f062a6d3/scratchpad/recall/`
+- Code: git archive of 85edd14.
+- Export: read-only, 13:55:49Z.
+- Scripts: `run/recall.py` (diagnosis) and `run/counterfactual.py`.
+- Table: `missed_dms_104.tsv`, with empty label_verdict/label_note columns for gosha-label. The path was sent to them.
+
+**Reproduced the lead's numbers.** 138 active jobs first seen in the last 48 h × 22 searches. 150 pairs pass prefilter; 46 have a row and 104 do not.
+
+**Reasons for the 104** (checked in this order; every pair got a reason):
+
+| Reason | Pairs | Note |
+|---|---|---|
+| DM score below threshold | 77 | All no-CV users: DM score against 0.34 |
+| Cross-board duplicate of a DM already sent to that user | 19 | Every duplicate's original has status `sent` |
+| Row under the user's other search | 8 | One delivery per user and job |
+
+- Not the reason for any pair: freshness (it passes now, so it passed earlier), the per-search cap (a deferral leaves a pending row), "not in a cycle's input" (no pair is above the threshold without a row).
+- So the duplicates and other-search rows are not misses from the user's side. The real misses are the 77 below the threshold.
+
+**The key question: is it the word "internship"? No.**
+- 71 of the 77 below-threshold pairs are junior-level matches (51 for intern+junior searches, 20 for junior-only searches 10 and 11).
+- Medians: intern pairs that pass 0.429; junior pairs that pass 0.373; junior pairs below 0.310. 39 of the junior misses are in 0.30–0.35.
+- Counterfactuals, fixed before measuring, with the same panel and threshold:
+
+| Query | Junior misses recovered (of 73) | Passing pairs lost | Notes |
+|---|---|---|---|
+| Level words stripped from the keyword ("computer science") | 3 | 3 intern | Junior mean delta +0.002: the word is not the cause |
+| (C) mean of the expanded role terms | 5 | 16 | Worse |
+| (D) max over per-term DM scores (role terms from `expand_keyword`, level words stripped) | 55 | 0 | Also +3 intern |
+
+- With (D), still below: 18 junior pairs, for example Betfair "Data Engineer" 8274 at 0.21 under every query.
+- **Root cause:** the query encodes a field ("Job role: computer science internship"). Internship postings say "computer science students"; real junior CS jobs describe a role (Data Scientist, QA Engineer, Support Engineer) without the field words, so they score lower.
+- **Proposed root fix:** score a field keyword through the roles it stands for, i.e. the same `expand_keyword` terms the scraper already searches, as the max of per-term DM scores.
+  - Owner: gosha-rank (`matching.py`, the query and the DM threshold).
+  - Before any decision: gosha-label's precision judgement on the newly admitted pairs, then a pre-registered eval run (main + judged DMs, held-out once). The max over ~19 terms is a looser scale, so the threshold may need re-picking on eval, not here.
+
+**gosha-label's verdicts** (`recall/missed_dms_104_label.tsv`, all 104 rows judged):
+
+| Rows | Right | Borderline | Wrong |
+|---|---|---|---|
+| All 104 | 59 | 17 | 28 (every duplicate/other-search row) |
+| 77 below threshold | 59 (57 junior) | 17 | 1 |
+
+- **(D) role-term max would send 56:** 52 right, 3 borderline (8011 hardware test internship, 8285 Deloitte SAC Planning × 2), 1 wrong (8298 Magna, which asks for experience). It recovers 52 of the 59 right misses.
+- **Still missed under (D): 21** (7 right, 14 borderline). The 7 right are Betfair "Data Engineer" 8274 × 6 and Riverbed 8280 for sub 11.
+- **Second cause, 8274.** Its stored vector is current (cos 1.0 with a fresh encoding), but `matching.build_job_text` embeds the title twice plus the first 1500 description chars, and those are entirely Betfair/Flutter company boilerplate (iGaming, FanDuel, PokerStars). The role text is never seen. This is a separate finding for gosha-rank: job text from the role part (responsibilities/requirements), not the head.
+
 # V3 RELEASE CHECK + QUEUE (gosha-pipe, 2026-10-17 ~12:50 UTC)
 
 The new lead set this priority (2026-10-17): (1) release checks, (2) the expired-BestJobs pipeline part, (3) a location check in the scrape filter.
@@ -36,6 +118,89 @@ V3 was committed by the lead as 9b0f28a (+ 038581d PG CI). Items 2–5 below are
 - Tests: appended to tests/test_dm_postdeploy.py.
 
 Before/after code copies for the fail-without checks are in my scratchpad (filters_before_months.py, filters_before_grade.py, filters_before_weak.py, filters_before_levels.py, pipeline_expired.py); expired-copy/ is the scratch tree used to run them.
+
+## Release check on 85edd14 + the 0-DM cycle (2026-10-17 ~13:30)
+
+Summary: `/tmp/claude-1001/-home-ubuntu-gosha-agents/d88b10a3-dacc-4b68-b7c0-4fc2f062a6d3/scratchpad/ws3/RESULTS.md`.
+
+**Cause of the 0 DMs: a gap in the tool, not a product bug.**
+- Prod's match stage scores only the jobs its own cycle scraped (121); the tool scored every active job.
+- The 4 jobs behind the 10 predicted DMs were not scraped this cycle.
+- With the cycle's own input (last_seen ≥ 12:47:19), the tool reproduces prod: 0 new matches, 4 Snyk skipped, 5 left pending. Prod's rows show the same.
+
+**The would-send tool** (`ws3/run/would_send.py`) now takes an optional 4th argument, a "since" time: the match stage sees only jobs seen since then. Always report two numbers:
+- (a) with the last cycle's input;
+- (b) over all active jobs, an upper bound: these match only if a board returns them again.
+
+**85edd14 vs main 038581d:**
+- Would-send: identical in both modes.
+- Gate diff: main-only 30 and tree-only 7, as before.
+
+**CS-field gate: REMOVED.**
+- Lead's decision, 2026-10-17: it failed its pre-registered bar, and there will be no retuning.
+- My gosha/pipeline.py and gosha/filters.py were written back from HEAD 85edd14 with `git show HEAD:<path> > <path>`, after checking that their diff held only my gate code. tests/test_cs_field_gate.py is deleted.
+- Check after the revert: tests/test_pipeline_accuracy.py, test_deliver.py, test_dm_postdeploy.py, test_filters_accuracy.py, test_scrape_location.py and test_expired_rows.py give 540 passed.
+- gosha-rank has been asked to revert matching.py, test_matching.py, the field_panel files, and evaluation.py/test_evaluation.py if those hold field-axis work.
+- Status: standing by.
+
+The design and numbers are kept below for reference.
+
+**CS-field gate: FAILS the pre-registered ship bar. Do not ship, do not commit.** Measured once, with nothing tuned.
+- Script: `scratchpad/csfield/measure.py`. Output: `csfield/main_and_dms.txt` and `csfield/dm_margins.txt`.
+- Eval main: 9 postings in scope. The word check already makes 0 errors, and the gate changes nothing.
+- Judged DMs, gold = label_judged "not-CS", 18 in scope: errors 4 (word check) → 5 (word AND margin).
+  - The gate removes Tenaris 7861 (right), Bosch 7983 "Process Engineering & Digitalization" (lead OK) and Renesas 8001 (CS).
+  - It keeps Vertiv 8261: margin +0.039.
+- With the lead's NONCS as gold: 3 → 4.
+- Ship bar: errors 4 vs 5, and 2 extra gold-CS postings lost (the limit is 1). **FAIL.** Held-out was not run: it is only run after a pass.
+- Margins (descriptive): non-CS Vertiv +0.039, Value Engineering +0.042 and CertiK compliance +0.061 sit above judged-OK/CS Bosch digitalization −0.069 and Renesas −0.061. The panels' field axis does not separate these postings. No threshold would.
+- Code state (uncommitted, shared tree):
+  - pipeline.py: `prefilter(field_axis=)`, `_in_cs_field`, and the wiring in match_jobs_for_subscription and deliver_pending. It is ACTIVE if committed.
+  - filters.py: `generic_engineering_title`, a harmless refactor.
+  - tests/test_cs_field_gate.py.
+  - gosha-rank's matching.py and panel files.
+  - The lead decides: remove it, or keep it unwired.
+
+**CS-field gate history:** I started it in the shared tree after gosha-rank's part landed (uncommitted, next release).
+- pipeline.py: `prefilter(..., field_axis=None)`, `_in_cs_field`. match_jobs_for_subscription passes `semantic_matcher.field_axis()` via getattr; deliver_pending uses `cached_field_axis(current_model())`.
+- filters.py: `generic_engineering_title` (factored out of `_engineering_not_cs`).
+- `_title_relevant_for_any_keyword` is no longer used by prefilter. One test still calls it (tests/test_pipeline_accuracy.py:457); I left it in place.
+- Related tests: 577 passed.
+- TODO: unit tests for the gate (synthetic vectors), ping gosha-rank for evaluation.dm_pool, then the one measurement.
+
+## Release would-send + next-release CS-field check (2026-10-17 ~13:15)
+
+**Lead decisions (2026-10-17):**
+- (3): the root fix (ii), an embedding field check built with gosha-rank, for the NEXT release.
+- (A): keep the rule as is. An internship title that requires a completed degree is junior; the lead tells the owner about 7760/8167.
+
+**Release would-send:** done. Summary: `/tmp/claude-1001/-home-ubuntu-gosha-agents/d88b10a3-dacc-4b68-b7c0-4fc2f062a6d3/scratchpad/ws2/RESULTS.md`
+- Read-only export at 12:59:01Z: 489 active jobs; 0 new-code DMs since 12:44.
+- The tree and main 038581d send identical lists:
+  - 10 new matches;
+  - 5 queue rows wait;
+  - 4 Snyk queue rows dropped by both;
+  - 0 dropped vs main.
+- The Level column comes from matched_level.
+- Gate diff: main-only 30 and tree-only 7, all intended.
+
+**CS-field check:** design agreed with gosha-rank, nothing measured yet.
+- Files:
+  - my proposal: `scratchpad/cs-field-proposal.md`;
+  - their changes: `/tmp/claude-1001/-home-ubuntu-gosha-agents/5c7f0d59-6871-4b37-a122-dda935ef9f5c/scratchpad/cs-field-reply.md`;
+  - my acceptance: `scratchpad/cs-field-reply-2.md`.
+- Agreed rule:
+  - gosha-rank's panels: gosha/field_panel_cs.txt and field_panel_other.txt.
+  - axis = unit(mean CS) − unit(mean other); margin = job · axis ≥ 0.
+- Scope: tech-keyword search AND a generic engineering title (`filters.generic_engineering_title`, mine). The margin is checked IN ADDITION to the existing word check (AND), not instead of it.
+- Placement: `pipeline.prefilter(..., field_axis=None)`. The gate is skipped without an axis or without a current job embedding.
+  - match_jobs_for_subscription passes matcher.field_axis().
+  - deliver_pending passes `matching.cached_field_axis()` (theirs; it never loads the model).
+  - evaluation.dm_pool passes the same axis (theirs).
+- Ship bar (pre-registered, gosha-rank's):
+  - On main + the judged DMs (gold: label_judged "not-CS", with the lead's NONCS as the second check): fewer errors than the word check alone, and at most one more gold-CS posting lost.
+  - Then held-out once, aggregates only, with errors ≤ the word check's.
+- **Next:** wait for gosha-rank's `field_margin` + `cached_field_axis` + unit tests. Then I add the gate, real-posting tests (8261, 7861, Bosch 7980/7982 out; 7983 and Intel/NXP generic-title CS internships stay) and run the measurement once.
 
 ## Leak round (lead, 2026-10-17 ~13:00, after hand-judging all 263 sent DMs) — items 1–3 and A–D
 

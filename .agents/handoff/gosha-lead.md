@@ -219,3 +219,13 @@ Deploy checklist update: step 4 → SCRAPE_BROWSER_FALLBACK is ON by owner decis
 - Owner decisions 2026-10-17: graduate programmes / new-grad / Global Trainee needing a finished degree = JUNIOR;
   every DM shows 'Level: Internship' / 'Level: Junior'. Workers report only when their whole list is done or blocked.
 - Full DM review (all 263 sent DMs, lead + label independently, 233/263 agree): lead scratchpad alldms/ (session ba90e926).
+- 2026-10-17 ~13:30 UTC: 85edd14 pushed to main (owner go-ahead; gate passed: gate-85edd14.log; CI 39035732514).
+  DM watermark still user_jobs.id > 4545 (the 12:47 cycle on 038581d sent 0). Contents: intern/junior exclusive levels,
+  finished degree = junior, DM 'Level' field, expired BestJobs deactivation, scrape-filter location check, months,
+  graduate-grade evidence, 'basic understanding' not evidence alone, Hipo CSS, '@ employer' dedup, feed hard gates.
+- CS-field embedding gate: failed its pre-registered bar → removed (design + numbers in pipe/rank handoffs). Open leak
+  class: non-CS engineering titles (Vertiv thermal 8261). Would-send tool now models the cycle input (pipe ws3).
+- 2026-10-17 ~15:30 UTC: recall round. Missed-DM audit (pipe + label): of 77 below-threshold pairs in 48 h, 59 right
+  (57 junior). Role-term DM scoring (rank) missed its pre-registered bar by one pair; OWNER decided to ship it.
+  Board 'entry' label no longer counts as entry evidence alone (pipe; 7 wrong + 15 borderline removed, 0 right lost on
+  all judged data). Role-text embedding (item 2) failed its bar, reverted.
