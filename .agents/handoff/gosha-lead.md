@@ -186,3 +186,36 @@ Deploy checklist update: step 4 → SCRAPE_BROWSER_FALLBACK is ON by owner decis
 - Pre-release would-send lists (would_send*.csv, scratchpad) were reviewed by hand at each step (48 → 46 → 51/30 → v3b).
 - KEEP DOING after each change to matching: export fresh prod data read-only, produce a would-send list with the
   exact commit, judge every row, then gate (scratchpad release_gate.sh) and deploy.
+
+## Lead session 3 (2026-10-17 ~12:10 UTC) — V3 release in progress
+- Lead pane runs from /home/ubuntu/gosha-jobs (herdr w5:p1, renamed gosha-lead); workers in /home/ubuntu/gosha-agents,
+  started by lead scratchpad launch.sh (session ba90e926) with per-agent assignments, not resume.sh's generic prompt.
+- Prod = main = d4158c7 (deployed ~11:30). 11:52 cycle sent 4 DMs, all one job: 8316 Hipo Bosch "Agentic AI Engineer"
+  → subs 3/5/25/26 (intern+junior). Judged WRONG (experienced-developer requirements, no entry evidence). The rule on
+  main passes it (dm_junior_ok default=True); the uncommitted V3 tree blocks it (evidence=False).
+- d2b3ab3's commit message still says "WIP … unreviewed"; gosha-pipe reviewed and approved it. It is on main.
+- Uncommitted V3 tree verified by the lead: pytest 1745 passed / 9 skipped (LD_PRELOAD), ruff clean.
+- Plan: pipe → eval --check + would-send list (fresh snapshot) + dropped list; label judges every row; lead spot-judges;
+  commit on WIP; release_gate.sh on the commit; owner go-ahead before pushing main (auto-deploys).
+- Parallel: scrape (empty BestJobs/Hipo/LinkedIn rows after deploy), rank (close classifier, V3 eval check, feed dedup),
+  health (today's alerts, Postgres CI job).
+- 9 pending user_jobs (8325, 8330 BestJobs; 8275 LinkedIn; empty descriptions) — decision pending.
+- ~12:50 UTC: committed 9b0f28a (V3 + scrape's LinkedIn description-keeping dedup + rank's seniority split_glued_level)
+  and 038581d (health's Postgres CI job, not gating deploy). Gate: lead scratchpad (ba90e926) release_gate.sh (PG step
+  uses GOSHA_TEST_DB_URL now, no pg_plugin) → gate-038581d.log.
+- Would-send (pipe, export 12:15:48Z): next cycle identical for main and V3 (10 sends, 9 queued wait). V3 value is in the
+  gate flips: 33 main-only (15 already sent by main, 18 would be sent later: Timisoara sub 22 ×12, SOFTONE course ×2…),
+  8 tree-only (Ascom "InternSoftware Engineer"). gosha-label judging. Known recall loss: 8319 Wordpress "min. 24 luni"
+  (months not parsed) → pipe next round.
+- Not in the release (uncommitted, in progress): pipe expired-BestJobs pipeline part + scrape-filter location check +
+  months; scrape expired adapter part; rank feed dedup + feed = DM gates; health stuck-alert fix; label desc-cap plan.
+- Owner decisions bundled: deploy go-ahead; deactivate 53 empty unlisted rows (scrape's id list) + 299 foreign rows
+  from the 2026-10-16 16:56 burst; GitHub secrets (site watchdog OFF without them); off-box backups.
+- 2026-10-17 12:41 UTC: 038581d pushed to main (owner go-ahead; CI 39033520470). WIP branch pushed (c773e6b).
+  DM watermark: user_jobs.id > 4545 are DMs from the new code. Next: judge every DM of the first cycles by hand.
+- 2026-10-17 ~12:50 UTC, owner-approved prod write: 357 jobs set is_active=false (52 empty unlisted BestJobs/LinkedIn
+  rows from scrape's list + 27 LinkedIn empty-location rows + the 299-row 2026-10-16 16:56 foreign burst; overlap 21).
+  Active jobs 846 → 489. Rollback ids: /home/ubuntu/backups/gosha/ROLLBACK_reactivate_these_ids_20261017.txt.
+- Owner decisions 2026-10-17: graduate programmes / new-grad / Global Trainee needing a finished degree = JUNIOR;
+  every DM shows 'Level: Internship' / 'Level: Junior'. Workers report only when their whole list is done or blocked.
+- Full DM review (all 263 sent DMs, lead + label independently, 233/263 agree): lead scratchpad alldms/ (session ba90e926).

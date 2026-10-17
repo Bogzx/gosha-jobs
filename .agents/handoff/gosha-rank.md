@@ -679,3 +679,303 @@ Key numbers (provisional):
   2. Places in the eval sets (needs board fetches = lead OK; gosha-label owns the data).
   3. Feed dedup by title+company with gosha-scrape's normalize_key.
   4. Note to gosha-label: its option 3 (score only what the product shows) is what the DM and scoped-feed evals now do.
+
+## History rewritten (2026-10-17): use the NEW hashes
+3b150ad→247931e, d76c467→5ef26de (= main, deployed), WIP c3085b7→d2b3ab3 (HEAD of wip/agents-2026-10-16).
+Old hashes above (Sessions ≤8: fe6bb17, 1fe6243, …) predate the rewrite. Owner: git was frozen, then resumed; workers
+never commit; no commit/PR ever carries Co-Authored-By: Claude / Claude-Session: / "Generated with Claude Code".
+
+## Session 9 (2026-10-17): SENIORITY CLASSIFIER PROTOTYPE (owner: root fix, not more regexes) — CLOSED, not shipped (conclusion at the end)
+Task (lead): classifier over title+description, "open to 0-2 yrs / training" (gold intern/junior/any) vs "experienced"
+(mid/senior). Train + select ONLY on eval/postings.jsonl (+ gosha-label's prod audit in the jobs-session scratchpad
+audit-label/ once it lands; NOT landed at 10:40 UTC). Confirm ONCE on held-out, aggregates only. Compare with the rules
+at 5ef26de: posting-level precision/recall of junior-eligible and the DM eval. Recommend replace / AND-gate / keep.
+- What is swapped: filters._asks_junior_years (required_years + asks_experienced = the growing regex list). Title-word
+  checks (JUNIOR_RE, says_senior, MID_TITLE_RE, INTERN_RE) stay in every mode. Patched via a context manager, so
+  matches_experience_level, title_is_relevant and pipeline.prefilter all see it.
+- Scripts (scratchpad): sen_common.py, sen_select.py (protocol in its docstring: 6 feature sets × C grid, 10×5 CV,
+  AUC picks the model, threshold per mode = max precision with recall ≥ rules recall − 0.03; writes sen_frozen.json),
+  sen_confirm.py (one held-out run, aggregates only).
+- RESULTS (11:30 UTC). Snapshots: scratchpad tree5ef26de (git archive 5ef26de) and tree_evidence (5ef26de + gosha-pipe's
+  working-tree filters.py/pipeline.py as of 11:12, md5 69c82424…/2c91151f). Eligibility = job_matches_subscription for an
+  intern+junior search, no keyword (sen_common.dm_eligible). Model (main CV, AUC): LR on stored job embedding, C=10,
+  OOF AUC .813 (held-out AUC .822). Thresholds on main OOF: replace .38, AND .32, evidence-OR .32.
+  Posting level P/R (leaks, missed):
+    main (rules in-sample): rules .953/.910 (5,10); replace .831/.883 (20,13); AND .961/.883 (4,13);
+      evidence 1.000/.369 (0,70); evidence-OR .961/.892 (4,12).
+    held-out (ONCE): rules .807/.968 (29,4); replace .745/.912 (39,11); AND .842/.936 (22,8);
+      pipe default .805/.960 (29,5); evidence .938/.488 (4,64); evidence-OR .841/.928 (22,9).
+    audit (96 jobs all passing 5ef26de; kept right/74, wrong/17): rules 74,17; replace 69,13; AND 71,14;
+      pipe default 74,15 (is_not_a_job); evidence 72,4; evidence-OR 74,14 (classifier re-admits 10 of the 13 caught).
+      Caveat: the evidence rule was designed from this audit's leak list → in-sample for it.
+  DM eval (DM score @ .34): held-out generic sent/search, P@10, leak share: rules 25.2 .902 .159; AND 23.6 .925 .118;
+    evidence 14.3 .902 .023; ev-OR 23.6 .925 .118; replace 26.0 .902 .214. Held-out specific P@5: rules .284, AND .278,
+    evidence .158 (starved 2 vs 1), ev-OR .278, replace .224 (starved 5). Main generic sent: rules 5.2, evidence 1.1
+    (pool 30.0→8.7), AND/ev-OR 5.2.
+  Evidence's recall loss = gold "any" (main 60/60, held-out 51 of 59): definitional (labels: no level + no years = open).
+  Outputs: scratchpad sen_select.log, sen_main_*.txt, sen_held_tree*.txt, sen_audit_tree*.txt.
+
+### Session 9 conclusion (2026-10-17, lead decision: V3 "evidence" ships, the classifier does not)
+- **Not shipped.** Nothing of the prototype is in the repo; scripts and outputs stay machine-local in
+  /tmp/claude-1001/-home-ubuntu-gosha-agents/5ab8ad8e-f0fd-4b42-bf22-373f67c524bd/scratchpad/sen_* (numbers above).
+- Why, from the numbers above: the classifier (LR on the stored job embedding, OOF AUC .813, held-out AUC .822) is not
+  good enough to replace the rules (replace: held-out precision .745 vs rules .807, 39 leaks vs 29, 5 starved specific
+  searches). As an AND gate it adds little (held-out precision .807 → .842, recall .968 → .936). V3 evidence fails closed
+  and cuts audit leaks 17 → 4 (in-sample for evidence) and held-out leaks 29 → 4. Its recall loss is gold "any" postings,
+  which is a definitional effect. Evidence-OR-classifier re-admits 10 of the 13 leaks evidence catches, so the classifier
+  hurts as a re-admit path too.
+- **Revisit when** (any one):
+  1. there is a real-DM level-labelled set of at least ~500 postings (gosha-label's audit grown from the prod stream),
+     so a model can be trained and tested on prod's distribution and not on 202 main postings;
+  2. evidence's fail-closed recall shows up in prod: intern/junior searches starved (0 DMs in a week while the feed
+     has in-scope grade-2-like postings), or users reporting missed openings. A classifier would then be a
+     re-admit signal for postings evidence rejects, and it ships only if it keeps audit leaks at or below evidence's;
+  3. the evidence regex list keeps growing every cycle (a maintenance signal; the owner's "root fix" goal);
+  4. a held-out AUC of about 0.9 or more, e.g. from a fine-tuned encoder or a title+requirements-section feature.
+
+## Session 10 (2026-10-17, new lead): V3 check, glued titles, feed dedup — uncommitted, ready for the lead
+### V3 eval check (tree = d4158c7 + gosha-pipe's V3 filters.py/pipeline.py + their regenerated baselines)
+- `scripts/eval_ranking.py --check eval/results/all-mpnet-base-v2.json` → exit 0; held-out (`--postings eval/heldout/
+  postings.jsonl --personas eval/heldout/personas.jsonl --check eval/results/heldout/all-mpnet-base-v2.json`) → exit 0.
+  Feed: main production 0.759 (0.651–0.858) / cosine 0.549; held-out 0.604 (0.458–0.711) / 0.535. DM score generic:
+  main pool 8.7 relevant 8.7 sent 1.1 P@10 1.000 recall .128; held-out pool 21.7 sent 14.3 P@10 .902 recall .694,
+  starved 0. Re-run after my seniority change below: output identical apart from model-load timings.
+- Do my files use the same filters functions under V3? Yes, they do:
+  - evaluation.dm_pool calls pipeline.prefilter → job_matches_subscription → dm_junior_ok / is_not_a_job, so the DM eval
+    measures V3.
+  - recommend.in_search_scope (feed scope; evaluation.scoped_feed_pool uses it) calls filters.matches_experience_level
+    and search_location_ok, and matches_experience_level now splits glued titles itself.
+  - **Gap fixed:** seniority.posting_level read raw titles: "InternSoftware Engineer" → UNKNOWN while the filters say
+    intern. It now calls `filters.split_glued_level` first (gosha/seniority.py:63, import :36). Test
+    tests/test_seniority.py `test_a_glued_level_word_reads_as_the_filters_read_it` (3 cases fail without the fix).
+    **Depends on gosha-pipe's uncommitted split_glued_level: commit together.** Eval sets have 0 glued titles, so no
+    baseline change.
+  - **Decision for the lead (not changed):** V3 evidence (dm_junior_ok, lacks_level_evidence) and is_not_a_job are
+    DM-only. The feed's "matching your active searches" scope does not apply them, so under a junior search the feed
+    still shows unmarked postings and courses that DMs would not send. Applying them in in_search_scope is a few
+    lines in my file (same deferred-description caching as the level verdict) if the lead wants feed = DM gates.
+### Feed dedup by title+company (TODO 3): DONE, uncommitted
+- Prod window measured (read-only SELECT of id/title/company/location/source, active, canonical, 30 days): 671 rows,
+  10 normalize_key pairs left after cross-board dedup, **all different-city copies** that gosha/dedup.py keeps apart on
+  purpose (Accenture Graphics Engineer Cluj/Timișoara, Deloitte SAP ×2, Alignerr ×2, EY intern, Capgemini, ...).
+- gosha/recommend.py: `_posting_key(job)` = `dedup.normalize_key(title, company)` (lru_cached, ~16 µs uncached);
+  `_first_copies(jobs)` keeps the first copy per key, never collapses a None key (no real employer).
+  - `_order` collapses after ranking (best-ranked copy stands; percentiles and total over what is shown); the demo
+    (rank_candidates) gets it too.
+  - The newest-first path collapses after sorting.
+  - get_feed_page: a rated/applied posting hides its other copies (keys of excluded window jobs).
+  - The scope filter runs before the collapse, so a Timișoara search still gets the Timișoara copy.
+  - The keyword-IDF window is untouched.
+- Tests (tests/test_recommend.py, end of file): best-ranked copy + total + percentiles; scope picks the in-scope copy;
+  rated copy hides the twin; newest-first; Unknown employer never collapsed; demo ranking. 4 of the 6 fail
+  without the code; the other 2 are guards (recommend.py:638 rated twins, :695 newest-first, :766-790 helpers, :860 _order). make_job's default title is now unique ("Dev N"), because seven "Dev"/"Acme" rows are one posting now.
+- Eval: not modelled. Scratch measure (/tmp/claude-1001/-home-ubuntu-gosha-agents/5c7f0d59-6871-4b37-a122-dda935ef9f5c/scratchpad/dedup_eval_impact.py, machine-local): main has 2 duplicate keys (3 extra rows),
+  held-out 1; collapsing moves main production nDCG@10 0.7591 → 0.7551 (3/14 personas), cosine 0.5494 → 0.5577,
+  held-out 0 change. Noise, so the baselines stay as gosha-pipe regenerated them. If the eval should model it later:
+  feed_metrics would take posting keys and collapse in ranked order, then regenerate.
+- Verify: `LD_PRELOAD=... .venv/bin/python -m pytest -q tests/test_recommend.py tests/test_seniority.py tests/api
+  tests/test_evaluation.py` → 288 passed, 6 skipped; `ruff check` on my 4 touched files clean.
+- Files for the commit: gosha/recommend.py, gosha/seniority.py, tests/test_recommend.py, tests/test_seniority.py,
+  this handoff. Not done: a live check of the feed (needs the API running against a DB copy, lead's call).
+
+
+## Session 10b (2026-10-17): lead review → feed = DM gates, eval models dedup — uncommitted, NEXT release (not today)
+Lead: seniority.py split_glued_level approved for the V3 release commit (gosha/seniority.py + tests/test_seniority.py
+only). Feed dedup + feed gates: next release. Report numbers before anything is regenerated. **Nothing regenerated.**
+- **What "0.759 → 0.755" meant:** the eval feed path did NOT dedup. 0.755 was a scratch measure. It now does:
+  evaluation.as_shown() collapses copies via recommend.first_copies in feed_metrics (full feed, per-language, scoped
+  feed), and simulate_feedback shows the collapsed order and hides a rated posting's twins (_unrated), as
+  get_feed_page does. Vectors.postings carries the postings. (renamed: recommend._first_copies/_posting_key → public
+  first_copies/posting_key.)
+- **Kept copy vs the viewer's location:** the collapse runs after the scope filter, on that viewer's candidates, so a kept
+  copy always passed in_search_scope (location AND gates of the same search) for one of the viewer's own searches. With
+  searches in both cities: the best-ranked copy, which is in one of them. With scope "all" / no active search: there is
+  no location to satisfy. A rated copy hides its twins whatever the city. Test
+  `test_a_kept_copy_is_in_one_of_the_viewers_searches` (two cities, one city each way, + in_search_scope on every item).
+  Note: the DM path's `_same_posting_for_dm` is broader (dedup.same_posting with reposters, same 3+ word title in the
+  same city); the feed uses normalize_key only. The DM eval does not model delivery dedup (_one_per_duplicate_group)
+  either: same principle, open.
+- **Feed gates = DM gates (lead decision):** recommend._posting_gates = looks_like_an_ad / is_gig_marketplace /
+  is_not_a_job, then for entry searches (filters.entry_level_search(levels, keywords)) lacks_level_evidence → out and
+  dm_junior_ok, then matches_experience_level. SearchScope gained `keywords` (scope_of(sub)). Verdict cached per
+  (*_level_key, levels, entry) like before; descriptions read only for candidates in a search's place
+  (_needs_text_for_scopes now takes the location memo; is_not_a_job applies to every scoped search, so every in-place
+  candidate is read once per text change). Freshness / salary / exclusions stay the feed's own.
+  Tests: `test_feed_scope_takes_what_the_dm_match_stage_takes` (6 searches × 10 postings, oracle =
+  pipeline.job_matches_subscription; 5 of 6 fail with the old level-only gate),
+  `test_feed_scope_hides_courses_and_postings_without_entry_evidence`; tests/test_evaluation.py
+  `test_scoped_feed_applies_the_dm_posting_gates`, `test_feed_metrics_count_one_copy_of_a_posting`,
+  `test_a_rated_copy_hides_its_twin_in_the_feedback_simulation`. `test_level_scope_reads_each_description_once`
+  fixtures now ≥200 chars (the short "graduate" text lacks evidence now, as in DMs).
+- **Numbers** (CLI `--check`, both exit 0; outputs: /tmp/claude-1001/-home-ubuntu-gosha-agents/5c7f0d59-6871-4b37-a122-dda935ef9f5c/scratchpad/
+  gates_main.md, gates_heldout.md vs check_main.md, check_heldout.md):
+  | | baseline (V3 tree) | gates + dedup |
+  |---|---|---|
+  | main full feed production / cosine | 0.759 / 0.549 | 0.755 / 0.558 (dedup only) |
+  | held-out full feed production / cosine | 0.604 / 0.535 | 0.604 / 0.535 |
+  | main scoped intern+junior: n, nDCG prod, P@10, personas w/o relevant | 106, .701, .321, 0 | 51, .761, .210, 4 |
+  | main scoped junior | 100, .701, .314, 0 | 45, .780, .180, 4 |
+  | held-out scoped intern+junior | 150, .571, .320, 0 | 68, .548, .140, 0 |
+  | held-out scoped junior | 135, .613, .320, 0 | 53, .635, .133, 1 |
+  | intern-only scoped (both sets) | unchanged | unchanged |
+  | feedback 0.3/0.3 1 round main (before/after) | .352/.407 | .336/.429 |
+  Pool composition, mean per persona (scratchpad scope_gates_pool.py), intern+junior: main grade-2 4.6 → 2.0, grade-0
+  91.6 → 45.3; held-out grade-2 8.4 → 3.1, grade-0 125.0 → 57.7. Removed by gold level: main any 50, senior 4, mid 1;
+  held-out any 49, mid 19, junior 7, senior 6, intern 1. nDCG on a smaller pool is not comparable; the cost is that
+  the scoped feed loses ~55–63% of its relevant postings (mostly gold "any", evidence's known fail-closed loss), for
+  removing ~half the off-target ones. Lead's call whether the feed (browse) should fail closed like DMs.
+- Verify: `LD_PRELOAD=... .venv/bin/python -m pytest -q tests/test_recommend.py tests/test_seniority.py
+  tests/test_evaluation.py tests/api tests/test_match_cv.py` → 311 passed, 6 skipped; ruff clean on my 6 files.
+- Next-release commit (with regenerated baselines once the lead approves): gosha/recommend.py, gosha/evaluation.py,
+  tests/test_recommend.py, tests/test_evaluation.py, eval/results/{,heldout/}all-mpnet-base-v2.json, docs/EVAL.md text.
+
+## Session 10c (2026-10-17): feed fails open + evidence as a ranking signal; DM eval models delivery dedup
+Lead decision (revising "one rule set" on the 10b numbers): the browse feed does not fail closed.
+### Demotion rule, FIXED BEFORE MEASURING (written 12:32 UTC, no numbers seen yet)
+- Hard scope gates (remove): location, looks_like_an_ad, is_gig_marketplace, is_not_a_job, matches_experience_level.
+- Demoted (kept, ranked lower): a posting in scope where EVERY active search that takes it is an entry search
+  (filters.entry_level_search) and the posting fails the DM evidence check (lacks_level_evidence, or not dm_junior_ok).
+- Amount: D = seniority.level_penalty(STUDENT, MID) = 0.25 z-units, subtracted from the hybrid score, on top of any
+  seniority penalty (a posting with no sign beginners can apply is treated like a mid-level one for a student).
+  Ranked path only (CV or 👍). Newest-first (no signal) has no score scale: order unchanged, flagged to the lead.
+- Eval: the scoped feed's production ranking gets the same demotion; the cosine row stays plain cosine.
+- Report per level set: pool, grade-2/grade-0 per persona in the pool, P@10, grade-0 share of the top 10, nDCG@10;
+  rows: levels only (committed baseline), hard gates, hard gates + demotion. Main first, held-out once. D is not tuned.
+### Results (measured after the rule above; nothing regenerated, nothing committed)
+**Tree:** gosha-pipe edited gosha/filters.py and pipeline.py (uncommitted: has_entry_evidence, _is_junior, years, scrape
+location) DURING my first held-out run. So everything below is from a pinned snapshot: git archive HEAD 9b0f28a (V3
+released) + my working-tree recommend.py/evaluation.py/tests, at /tmp/claude-1001/-home-ubuntu-gosha-agents/5c7f0d59-6871-4b37-a122-dda935ef9f5c/scratchpad/tree_head.3NzH.
+Its filters.py md5 4bb3efae… equals the tree of Sessions 10/10b. Tests there: 99 passed. Held-out was run twice for
+this reason (moving tree, then pinned), with the same config both times. The demoted count moved 79 → 81, the metrics
+did not, and D was not touched.
+Scoped feed, production ranking, feed dedup on (scratchpad scoped_demotion.py → pin_scoped_{main,heldout}.txt):
+| set / levels | config | pool | demoted | g2/g0 per persona | P@10 | grade-0 share top 10 | nDCG@10 | no relevant |
+|---|---|---|---|---|---|---|---|---|
+| main intern+junior | A levels only | 106 | 0 | 4.6/91.6 | .321 | .414 | .701 | 0/14 |
+| | B hard gates | 106 | 0 | 4.6/91.6 | .321 | .414 | .701 | 0/14 |
+| | **C hard + demote** | 106 | 55 | 4.6/91.6 | .321 | .414 | .700 | 0/14 |
+| | F fail-closed (ref) | 51 | 0 | 2.0/45.3 | .210 | .640 | .761 | 4/14 |
+| main junior | A / B | 100 | 0 | 4.3/85.9 | .314 | .414 | .701 | 0/14 |
+| | **C** | 100 | 55 | | .321 | .414 | .704 | 0/14 |
+| held-out intern+junior | A | 150 | 0 | 8.4/125.0 | .320 | .390 | .571 | 0/10 |
+| | B | 149 | 0 | 8.4/124.2 | .320 | .390 | .571 | 0/10 |
+| | **C** | 149 | 81 | | .270 | .420 | .548 | 0/10 |
+| | F | 68 | 0 | 3.1/57.7 | .140 | .560 | .548 | 0/10 |
+| held-out junior | A / B | 135 / 134 | 0 | 7.7/112.8 | .320 | .420 | .613 | 0/10 |
+| | **C** | 134 | 81 | | .300 | .450 | .586 | 0/10 |
+| intern only, both sets | all configs identical (nothing demoted: intern titles/labels carry their own evidence) |
+Paired C − B per persona (scoped_demotion_ci.py → pin_scoped_ci.txt), mean (95% CI), personas worse/better:
+- main intern+junior: P@10 0.000 (−.021…+.021) 1/1; nDCG −0.000 (−.020…+.023) 10/3. Junior: P@10 +.007, nDCG +.002.
+- held-out intern+junior: **P@10 −0.050 (−.080…−.020) 5/0**; nDCG −0.024 (−.050…+.002) 7/2.
+  Junior: P@10 −0.020 (−.050…0) 2/0; **nDCG −0.027 (−.042…−.013) 7/1**.
+**Reading:** hard gates (ad, gig, not-a-job) cost nothing: main 0 postings removed, held-out 1 (grade 0). The demotion
+at the pre-registered 0.25 is neutral on main and worse beyond noise on held-out, so held-out does NOT confirm it. Why:
+on these labels "no entry evidence" is not a precision signal. Gold "any" postings (no level, no years) are relevant
+for students, and they are most of what gets demoted. Grade-2 share is about the same among demoted and kept postings
+(main 10b: 4.7% vs 3.9%).
+**Recommendation:** ship B (hard gates, no demotion) unless the lead holds that gold "any" is mislabelled for the feed.
+D is not tuned; a smaller D would only move toward B. The code is ready for both: `NO_ENTRY_EVIDENCE_PENALTY = 0`
+gives B (one line). Tests then need test_feed_scope_drops_courses_and_ranks_postings_without_entry_evidence_lower
+changed.
+### DM eval models delivery dedup
+- evaluation.one_dm_per_posting: the pool best-first, a copy that pipeline._same_posting_for_dm matches with a kept one
+  is skipped (deliver_pending's rule; the match stage's group check keeps the best copy too, since matches are sorted
+  by score and the group rule is within it). dm_search_metrics(models=...) applies it to the pool and so to sent,
+  recall and starved. Test test_dm_metrics_count_a_postings_copies_once.
+- **Deltas: 0.000 on every DM row, main and held-out** (pin_cli_*.md vs check_*.md, same filters.py). Checked
+  (dm_dedup_count.py): both sets have same-posting pairs (main: Senior Java Developer ×2, Solvd Test Automation ×3;
+  held-out: Levi9 Senior Python ×2), but each is senior/mid or fails the junior/evidence gates, so no DM pool holds two
+  copies. 0 copies dropped across 51 + 39 search pools.
+- Not modelled, FYI: the delivery caps (MAX_DMS_PER_SEARCH 5, MAX_DMS_PER_COMPANY 3, MAX_DMS_PER_USER 10 per cycle).
+  The eval's P@5/P@10 read the first k sent and treat it as one batch.
+### Other CLI deltas (pin_cli vs baseline, both --check exit 0)
+- Full feed: main production 0.759 → 0.755, cosine 0.549 → 0.558; held-out unchanged (feed dedup). Feedback 0.3/0.3,
+  1 round, main: before/after .352/.407 → .336/.429; held-out unchanged.
+### Issue for gosha-scrape (not my file)
+dedup.normalize_key drops parentheticals, so Solvd "Test Automation Engineer (Android)" and "(iOS)" share a key and
+are one posting to feed dedup and DM dedup. They are two jobs. Same shape for any "(Java)"/"(Python)" variants.
+### Verify
+`LD_PRELOAD=... .venv/bin/python -m pytest -q tests/test_recommend.py tests/test_evaluation.py tests/test_seniority.py
+tests/api tests/test_match_cv.py` → 313 passed, 6 skipped; ruff clean on recommend.py, evaluation.py and both test
+files.
+Next-release files: gosha/recommend.py, gosha/evaluation.py, tests/test_recommend.py, tests/test_evaluation.py. Then
+regenerate eval/results/{,heldout/}all-mpnet-base-v2.json and update docs/EVAL.md after the lead decides B vs C.
+
+### Lead decision (2026-10-17): NO demotion; feed = hard gates only. Applied in code, uncommitted, next release
+- The pre-registered demotion failed its held-out check; no other weights are to be tried (lead).
+- gosha/recommend.py: `_posting_gates(job, scope, description) -> bool` = not (ad / gig marketplace / is_not_a_job)
+  and matches_experience_level; the docstring says why the entry evidence is left out. Removed:
+  NO_ENTRY_EVIDENCE_PENALTY, lacks_entry_evidence, `_order(..., demote)`, SearchScope.keywords, `_is_entry`.
+  `scope_of(sub)` stays. `_needs_text_for_scopes` keeps the location memo, so only in-place candidates are read.
+- gosha/evaluation.py: scoped_feed_demotion, `feed_scores(..., demote)` and "demoted" removed. Kept: feed dedup
+  (as_shown, `_unrated`, Vectors.postings) and the DM delivery dedup (one_dm_per_posting).
+- Tests: the oracle test is now in_search_scope == job_matches_subscription(require_evidence=False,
+  DM_JUNIOR_RULE "default") over 6 searches × 10 postings.
+  `test_feed_scope_drops_courses_but_keeps_postings_without_entry_evidence` (course, gig and ad out; bare, graduates,
+  silent and intern in). The "lifts the demotion" test was removed. The eval test was renamed to
+  `..._drops_courses_but_not_postings_without_entry_evidence`. Fail-without check: patching _posting_gates to
+  levels-only fails 6 of the 7 gate tests.
+  `.venv/bin/python -m pytest -q tests/test_recommend.py tests/test_evaluation.py` → 98 passed; ruff clean.
+- Hard gates alone = config B above: main scoped unchanged (0 removed); held-out −1 posting (grade 0).
+### (superseded below: baselines REGENERATED) regenerate once after gosha-pipe's graduate-rule code (lead)
+- gosha-label's graduate relabel (1 held-out posting, heldout-ejobs-069 intern → junior) is in the tree, uncommitted.
+- gosha-pipe's graduate-rule code (filters `_graduate_hire`, `_COMPLETED_DEGREE_RE`, INTERN_RE without "graduate
+  programme") was in the tree at ~13:10 UTC while gosha-pipe was still working, and is not yet reported in their handoff.
+- When final: check `git status --short eval/` and the md5s of filters.py and pipeline.py before and after the run, then
+  `.venv/bin/python scripts/eval_ranking.py --write-results eval/results` (mpnet; the CI command) and the same with
+  `--postings eval/heldout/postings.jsonl --personas eval/heldout/personas.jsonl --write-results eval/results/heldout`,
+  then both `--check` runs. docs/EVAL.md: feed dedup, feed hard gates (B numbers), DM delivery dedup (0 delta), and the
+  failed demotion (held-out numbers). Then one message to the lead.
+
+### Baselines REGENERATED once (2026-10-17 ~13:00 UTC) — ready for the lead's next-release commit
+- Gate: gosha-pipe was idle and its graduate rule (A) is in the tree (filters md5 33fbcf55…, pipeline 8bf53a20…).
+  Their open sub-decision (keep internship titles that ask for a finished degree as intern: one line) flips 0
+  postings in either eval set (checked with their _OPEN_TO_STUDENTS_RE / _FINISHED_DEGREE_RE / INTERN_RE), so it
+  cannot move these baselines. **Their proposal (i) (ambiguous engineering terms) would lose bestjobs-045 on main:
+  if the lead approves it, the baselines need one more regeneration.**
+- Before: my test files on this tree → 321 passed, 6 skipped. Commands: `scripts/eval_ranking.py --models
+  all-mpnet-base-v2 tfidf --write-results eval/results` and the held-out equivalent into eval/results/heldout. The
+  md5 of every input (filters, pipeline, recommend, evaluation, seniority, matching, both postings files) was the same
+  before and after. Both `--check` runs → exit 0. Outputs: scratchpad regen_{main,heldout}.md and
+  regen_check_{main,heldout}.md.
+- Files: eval/results/{all-mpnet-base-v2,tfidf}.json, eval/results/heldout/{all-mpnet-base-v2,tfidf}.json (tfidf
+  regenerated too; it was stale since before V3).
+- Numbers: main feed 0.755 (0.640–0.857) / cosine 0.558 / tfidf 0.638; held-out 0.604 / 0.535 / 0.508. DM score:
+  main generic pool 8.0, sent 1.1, P@10 1.000, recall .152; persona P@5 .366, starved 3. Held-out generic pool 19.3,
+  sent 13.1, P@10 .922, recall .683; persona P@5 .151, starved 2. Scoped production intern+junior: main 106 / .701;
+  held-out 149 / .571; junior held-out 132 / .613. Feedback main +.093 (CI +.005…+.182).
+- docs/EVAL.md: new section "Results (2026-10-17): the feed's search scope, one copy per posting" (gates, dedup, the
+  failed demotion with held-out CIs, regeneration deltas and their causes). "What is measured" now covers the gates
+  and one copy per posting, for the feed and the DMs.
+- **Correction to the gosha-scrape issue above:** every main-set collapse is a FALSE merge. normalize_key drops
+  parentheses: Solvd "Test Automation Engineer" (Android) / (iOS) / (Web) and "Senior Java Developer" vs "Senior
+  Java Developer (Integration & Azure)". Production's assign_dedup_groups uses the same _title_part, so prod already
+  hides these as duplicates in browse and the feed. That is the whole main 0.759 → 0.755. Fix belongs in
+  gosha/dedup.py (gosha-scrape); when it lands, the baselines move again.
+- **README (not my file), for the lead:** L93 "nDCG@10 0.759 on the main set, against 0.549" → "0.755 … against
+  0.558". The held-out part is unchanged.
+- Commit (next release, the lead's call): gosha/recommend.py, gosha/evaluation.py, tests/test_recommend.py,
+  tests/test_evaluation.py, docs/EVAL.md, the 4 result files. Together with gosha-pipe's filters/pipeline changes and
+  gosha-label's eval/heldout relabel, which the baselines were computed on.
+
+
+## Session 11 (2026-10-17): CS-field check for generic engineering titles (joint with gosha-pipe), next release
+Lead: an embedding check (CS panel vs non-CS engineering panel) like the DM panel. I own the panel/vector side and
+gosha-pipe owns the filter call. Rule + threshold fixed before measuring; main + judged DMs; held-out once. Report once.
+### PRE-REGISTERED (13:00 UTC, before any vector was computed or any in-scope posting was read)
+- Panels: gosha/field_panel_cs.txt and gosha/field_panel_other.txt, 26 roles each (6 Romanian each), written by hand
+  from general categories. Disclosure: I had seen gosha-pipe's prod examples (structural, MEP, industrial, value
+  engineering, RF design, GE Vernova, VOIS support) and Vertiv/Tenaris. I avoided their phrasings and left hardware/RF
+  and PLC out of both panels.
+- Score: margin(j) = j·ĉ − j·ô, where j is the posting's stored embedding (build_job_text, unit) and ĉ, ô are the
+  unit-normalised means of the encoded panels (same model). **CS iff margin ≥ 0.** No tuning.
+- Scope (where gosha-pipe would call it, = today's _engineering_not_cs preconditions): a description is present, the
+  title's TECH_RE words are all in _GENERIC_TECH_WORDS, and there is no STRONG_CS_RE in the title. The embedding
+  verdict replaces today's description-regex verdict (_CS_TEXT_RE / "IT") there only.
+- Gold: eval sets: CS iff the posting's families meet evaluation.CS_FAMILIES. Judged DMs (lead scratchpad alldms/,
+  gosha-label's label_judged.tsv): a job is non-CS iff any of its rows has cause "not-CS"; the lead's
+  lead_judged.tsv NONCS is a second check.
+- Metrics on in-scope postings: CS kept / CS dropped / non-CS dropped / non-CS kept, for the regex and the embedding.
+- **Ship bar:** on main + judged DMs together, the embedding makes fewer errors than the regex, AND keeps at least the
+  regex's gold-CS count minus 1. Then held-out ONCE: errors ≤ the regex's. Otherwise: do not ship; report.
+- Descriptive only (not the decision): margin ≥ 0 vs gold CS over every main posting with a description.

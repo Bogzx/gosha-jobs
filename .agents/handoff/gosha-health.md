@@ -1,6 +1,6 @@
 # Handoff: gosha-health — scrape-failure alerting (DM-only to the owner)
 
-Updated: 2026-10-17 ~12:30 UTC · Branch: wip/agents-2026-10-16 · Earlier work committed and released (main = d4158c7). **Latest assignment (alert review + PG CI job) is uncommitted in the working tree: see "Assignment 2026-10-17" below.** Status: (1b) commit-ready, reported to the lead; standing by.
+Updated: 2026-10-17 ~12:30 UTC · Branch: wip/agents-2026-10-16 · Earlier work committed and released (main = d4158c7). **Latest assignment (alert review + PG CI job) is uncommitted in the working tree: see "Assignment 2026-10-17" below.** Status: all assignments done and commit-ready ((1b) alerts, #3 DM level); standing by.
 
 ## Current state (read this first)
 - **Live in production**: owner-DM-only ops alerts (bot, heartbeat watchdog, site watchdog, scraper smoke); site-watchdog stale limit follows the 4h schedule; DM Apply-click tracking (`/api/v1/r/<token>`); weekly owner click report (Monday 08:00 UTC, default ON); monthly empty-search nudge (default OFF); `apply_clicks` + `search_nudges` in the GDPR export and account deletion; privacy notice covers both; scraper smoke treats 403/429-on-every-probe as "blocked from CI (advisory)" and runs with SCRAPE_BROWSER_FALLBACK=true. Working tree clean.
@@ -13,6 +13,31 @@ Updated: 2026-10-17 ~12:30 UTC · Branch: wip/agents-2026-10-16 · Earlier work 
 - **Notes for others**: if gosha-pipe's `baseline_combos(cycle)` ever rotates its searches, those must stay out of `searches_by_source`, or collapse detection goes blind. DM clicks deliberately create no Application row (lead decision).
 - No production contact, no real Discord messages, no commits by me.
 - **Git is NOT frozen any more** (lead, 2026-10-17 ~12:30 UTC): commits resumed; the lead commits, not me. Never add `Co-Authored-By: Claude`, `Claude-Session:` or 'Generated with Claude Code' lines.
+
+## Assignment 2026-10-17 #3: DM shows the level (owner decision) — DONE, COMMIT-READY (with pipe's part)
+- Owner decision (2026-10-17, via lead): every DM shows "Level: Internship" or "Level: Junior" so internship and
+  junior are clearly different; omitted when unclear / not an entry-level search.
+- Agreed with gosha-pipe (pane w5:p2): `filters.matched_level(title, levels, board_level, description) ->
+  "intern" | "junior" | None`. Same branches as matches_experience_level: "intern" when the search wants intern and
+  the posting is a training position (so an intern+junior search gets "intern" for an internship), else "junior"
+  when the search wants junior and `_is_junior` holds, else None. **gosha-pipe adds matched_level AND the
+  `levels=sub.experience_levels` kwarg on deliver_pending's build_job_embed_with_buttons call (pipeline.py, theirs)
+  and pings me when it lands.** gosha/delivery.py is unused by the pipeline: untouched.
+- Done by me (uncommitted): `gosha/views.py` (pipe's file; the lead assigned me this function, pipe agreed):
+  `build_job_embed_with_buttons(..., levels=None)`; `_matched_level(job, levels)` (lazy import of
+  filters.matched_level, None without levels); `_LEVEL_NAMES = {"intern": "Internship", "junior": "Junior"}`;
+  the "Level" field is the FIRST inline field, omitted on None. New `tests/test_dm_level.py`: the embed alone
+  (intern-only → Internship, junior-only → Junior, intern+junior → the posting's level; no field for
+  None/[]/["any"]) and at send time through the real `pipeline.deliver_pending` (fake `_dm_user` capturing embeds;
+  same 3 cases). Real matched_level, no stubs in the committed tests.
+- gosha-pipe landed `filters.matched_level` (end of gosha/filters.py; rule: one level each, a training position
+  open to students = intern, a graduate hire = junior) and `levels=sub.experience_levels` on deliver_pending's call
+  (pipeline.py:1323). My views.py change + tests/test_dm_level.py commit together with that.
+- **Verified** 2026-10-17 (offline): `.venv/bin/python -m pytest -q tests/test_dm_level.py tests/test_dm_embed.py
+  tests/test_match_cv.py tests/test_deliver.py tests/test_outbox.py` → 72 passed (test_dm_level.py 10/10, real
+  matched_level, no stubs); ruff clean on views.py and test_dm_level.py. Not run: full suite, PG, a live DM.
+- Commit set (mine): gosha/views.py, tests/test_dm_level.py. Suggested message: "DMs show the job's level:
+  Internship or Junior".
 
 ## Assignment 2026-10-17 (new lead): alert review + Postgres CI job
 ### (1) Ops alerts since 2026-10-16 17:00 UTC (read-only, checked 12:15 UTC 2026-10-17)

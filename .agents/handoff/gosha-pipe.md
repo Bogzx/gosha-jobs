@@ -1,16 +1,179 @@
-# 22:08-CYCLE FIX (gosha-pipe, 2026-10-17) — committed by the lead in 3b150ad
+# V3 RELEASE CHECK + QUEUE (gosha-pipe, 2026-10-17 ~12:50 UTC)
 
-The 22:08 UTC cycle (2026-10-16, main 1fe6243) sent 17 DMs. 8 were wrong: Meteocontrol "Database & DevOps Engineer" (job 8382) and NTT DATA "AI Engineer (Python)" (job 8381), ×4 intern+junior searches (subs 3/5/25/26). Fix in gosha/filters.py:
+The new lead set this priority (2026-10-17): (1) release checks, (2) the expired-BestJobs pipeline part, (3) a location check in the scrape filter.
+
+**(1) Done.** The summary is in `/tmp/claude-1001/-home-ubuntu-gosha-agents/d88b10a3-dacc-4b68-b7c0-4fc2f062a6d3/scratchpad/ws/RESULTS.md`.
+- Eval `--check`: main exit 0, held-out exit 0.
+- Would-send on a read-only export (12:15:48Z): tree = main. 10 new matches are sent, 9 queue rows wait, and 0 are dropped.
+- Gate diff, every active job × active search: main-only 33 (15 of them already DMed by main at 11:52: 8315/8316/8319…), tree-only 8 (Ascom "InternSoftware Engineer" × subs 1 and 2).
+- 8316 is blocked by dm_junior_ok, even under require_evidence=False.
+- The 9 pending rows stay pending in both versions: no description, so no evidence yet. They age out at 2026-10-18 17:34 UTC.
+
+V3 was committed by the lead as 9b0f28a (+ 038581d PG CI). Items 2–5 below are in the tree, uncommitted, each reported separately to the lead.
+
+**(2) Expired BestJobs (gosha-scrape's design, their side in scrapers/base.py + bestjobs.py).**
+- pipeline.py: `_scrape_extra_sources` passes `on_expired=expired.add` per scraper × combo, then calls `_deactivate_expired(source, expired − this batch's live URLs)`.
+- `_deactivate_expired` does is_active=False by source + url + active; no delete. It emits job.expired per row and never raises.
+- Test: tests/test_expired_rows.py (new).
+
+**(3) Scrape-filter location check (lead approved, commit-ready from the lead's side).**
+- `filter_dataframe(..., locations=, remote_ok=)` applies `search_location_ok`.
+- `_store_filtered(..., location=None, remote_ok=False)` gets the combo location; `_remote_groups(all_subs)` gives each group's remote_ok.
+- A missing location is dropped, the same as at the DM stage. The 39 empty-location rows are LinkedIn and Glassdoor only, none from the native boards.
+- The 409 foreign active rows age out; there will be no prod deactivation (lead).
+- Test: tests/test_scrape_location.py (new, 7 tests).
+
+**(4) Months in required_years.**
+- `_YEARS_RE` has a named unit group with months/luni/luna, and `_is_months` reads it. Months become years rounded up: 24 → 2, 30 → 3.
+- In titles, months are ignored (they're a duration there).
+- Flips: only 8319 Wordpress (dm_junior_ok False→True); eval main 0.
+- Tests: appended to tests/test_dm_postdeploy.py.
+
+**(5) Graduate hire by grade (8294 The Access Group, from the label judgement).**
+- `_GRADE_REQUIRED_RE` (graduation/degree/licență/absolvire grade, GPA, "media de absolvire") counts as entry evidence only when `required_years` is None.
+- A degree alone does not count.
+- Flips: only 8294 on prod; eval main 0.
+- Tests: appended to tests/test_dm_postdeploy.py.
+
+Before/after code copies for the fail-without checks are in my scratchpad (filters_before_months.py, filters_before_grade.py, filters_before_weak.py, filters_before_levels.py, pipeline_expired.py); expired-copy/ is the scratch tree used to run them.
+
+## Leak round (lead, 2026-10-17 ~13:00, after hand-judging all 263 sent DMs) — items 1–3 and A–D
+
+Scratchpad below = `/tmp/claude-1001/-home-ubuntu-gosha-agents/d88b10a3-dacc-4b68-b7c0-4fc2f062a6d3/scratchpad`.
+
+**Replay of the lead's judged DMs on the final tree** (lead's replay.py; today's searches; freshness off; output `final/replay_tree_final.tsv`):
+
+| verdict | pass | blocked |
+|---|---|---|
+| OK | 108 | 6 |
+| BORDER | 11 | 11 |
+| DUP | 6 | 0 |
+| NONCS | 4 | 26 |
+| EXP | 0 | 29 |
+| LOC | 0 | 35 |
+| US | 0 | 16 |
+| GIG | 0 | 7 |
+| AGG | 0 | 4 |
+
+- Of the 121 wrong pairs that are not duplicates, 4 still pass: Vertiv 8261 × 4. That needs a decision; see (3).
+- Changes against the lead's run of the tree:
+  - Newly blocked: 8266 (EXP), Tenaris 7861 (NONCS), 8272 × 5 and 8380 × 5 (BORDER).
+  - 7760 "IT Intern - 6 months FTC" → sub 19 (judged OK) is now blocked. It is the only new OK loss, and it needs a decision; see A.
+
+**(1) 8266 Siemens SRM and (D) 8380 NTT QA: what counted as evidence.**
+- The only evidence in each was `_ENTRY_AUDIENCE_RE`'s "basic understanding". Its siblings "basic/fundamental knowledge/skills", "cunoștințe/noțiuni de bază" and "eager/willing to learn" are the same kind.
+- Measured as the only evidence:
+
+  | set | right | not right |
+  |---|---|---|
+  | sent DMs | 0 | 12 (10 borderline, 2 wrong) |
+  | gosha-label audit | 1 ok | 6 (3 borderline, 3 wrong) |
+  | eval main | 1 junior | 5 ("any" or senior) |
+
+- **Fix:** those alternatives are removed from `_ENTRY_AUDIENCE_RE`. They still sit beside real evidence in many postings, but no longer count alone.
+- "don't meet all" is kept: it was never the only evidence anywhere.
+- Prod: 12 active postings lose evidence, including 8263/8380/8387 NTT QA, 8266, 8272 Yardi, 8308, 8362 and 8361.
+- Tests: `test_basic_knowledge_is_not_entry_evidence` (4 cases, using the real 8266 and 8380 requirement lines) fails on the old code; a positive control is included.
+
+**(2) Duplicates: no fix needed in delivery.**
+- Today's `_same_posting_for_dm` returns True for all 5 pairs:
+  - 7210/8041 via the title+city rule;
+  - the others via `dedup.same_posting`.
+- All 5 were sent before the 2026-10-16 17:11 deploy: 10-12 13:15, 10-15 17:06, and the 10-16 17:07 old-code cycle (lead handoff: watermark user_jobs.id > 4418).
+- Across every per-user pair of sent DMs with the same title, 12 pairs: today's rule merges 11. The 12th is Airbus vs AstraZeneca "IT intern" in Brașov vs Bucharest, which are really different.
+- Gap I did not close: an employer-name variant with a city-less location, where neither side is a reposter and the title has no "@".
+  - It was not observed in the data.
+  - Matching on description text was rejected: two different Bending Spoons intern postings share 0.77 5-gram Jaccard through company boilerplate.
+- gosha-scrape added "@ <unit>" as the employer in dedup.py. It flipped my `test_same_title_in_another_city_or_a_short_title_is_not_a_copy`. I chose option (b): the test pair is now Endava/Marsh. Same employer + same title in two cities stays one DM.
+- `test_a_copy_of_a_posting_already_dmed_is_not_sent` already covers the MARSH pair.
+
+**(3) Non-CS roles (8261 Vertiv, 7861 Tenaris).**
+- Full path today (prefilter, then DM score; DM threshold 0.34; no CV for these users):
+  - Vertiv: 0.364 × subs 3/5/25/26 → would be sent.
+  - Tenaris: 0.385 × sub 8 → would be sent. It is now blocked by A (a graduate hire is not an internship).
+- Root cause: `_engineering_not_cs` accepts any one `_CS_TEXT_RE` word anywhere in the text. For Vertiv it was "networks" in company boilerplate; for Tenaris, "Automation" in an electrical/metallurgy degree list.
+- **Proposal, not implemented; the lead decides:**
+  - **(i) Short term.** Ambiguous terms (automation, network(s), software, web, cloud, IT, api) do not count alone for a generic engineering title. A specific term must appear: programming/coding, a language, a CS degree, data science/ML, embedded/firmware, devops/linux/cyber, developer.
+    - Measured: judged DMs block 3 (both NONCS plus a LOC) and lose 0 OK.
+    - Prod: 15 postings go, mostly non-CS (structural, MEP, industrial, value engineering, RF design, GE Vernova, VOIS 1st-line support).
+    - Eval main loses 1: bestjobs-045 Axelera AI, embedded, level any. It fails only because "AI" is not a CS term, and adding "AI" would let Vertiv's "generative AI" boilerplate back in. Word lists hit their limit here.
+  - **(ii) The root fix.** A field check with the embedding model, built the same way as the DM panel (gosha-rank's `dm_query_vector`): is the posting closer to CS panel queries than to non-CS engineering ones (mechanical, electrical, industrial, civil, thermal, sales engineering)? This needs gosha-rank and an eval run.
+
+**(A) Internship vs junior (owner, 2026-10-17).**
+- **Rule.** `is_training_position(title, board_level, description)` holds for a training title or the board's intern label, when the title is not senior and the posting is not a `_graduate_hire`.
+- **`_graduate_hire`** is never true when the text is open to students (student, undergraduate, enrolled, studying, pursuing, final year, masterand, "anul II"). Otherwise it is true when either:
+  - the text asks for a finished degree ("completed/finished/obtained a degree", "have graduated", "diploma de licență", "studii finalizate"); or
+  - the title is a trainee/academy title (not an internship title) and the text is written for recent graduates ("recent/new/fresh graduates", "proaspăt absolvent").
+- INTERN_RE loses "graduate programme/scheme", which now reaches junior through JUNIOR_RE "graduate".
+- The levels are exclusive: `_is_junior` returns False for a training position, so "Graduate Intern" and "Trainee/Junior Consultant" no longer also reach junior-only searches.
+- The `title_is_relevant` training-only branch also rejects a graduate hire, so the scrape filter agrees.
+- Flips:
+  - eval main 0;
+  - judged DMs 5: 7861 → junior only; 7507, 7769, 7949 → intern only; 7760 → junior;
+  - prod 17.
+- **Needs a decision:** 7760 "IT Intern - 6 months FTC" and 8167 "Front End Angular Intern" require a completed degree, so they are now junior. 7760 was a judged-OK internship DM (sub 19). If internship titles should always stay intern, the change is one line: skip the finished-degree branch for internship titles.
+- Tests: `test_intern_and_junior_are_different_levels` (real Tenaris, Intel, Yonder and 7760 sentences, plus the Vodafone Discover title) and `test_an_intern_only_search_does_not_get_a_graduate_trainee_programme`.
+- `tests/test_filters_accuracy.py`: "Graduate Programme IT" moves from the TRAINING list to the JUNIOR list (the owner's rule).
+- gosha-label checks the eval labels.
+
+**(B) `matched_level(title, levels, board_level, description) -> "intern" | "junior" | None`** (end of filters.py).
+- It returns "intern" first when the search wants interns and the posting is a training position; then "junior" when the search wants junior and `_is_junior` holds; otherwise None.
+- Agreed with gosha-health, who wired views.py. deliver_pending passes `levels=sub.experience_levels`.
+- Tests: `test_matched_level_*`; test_deliver, test_dm_embed and test_outbox give 52 passed.
+
+**(C) Stale DMs: no fix needed.**
+- `is_fresh_enough` replayed with now = each DM's sent time (`final/`, inline script) returns False for every pair the lead listed: 7081/11, 7446/8, 7619/10, 7626/8+16, 7746 × 4.
+- The pairs it passes really were in their window: 7446/16 at 4 d against 7; 7619/5 and 7619/26 at 13 d against 14.
+- Freshness is part of `job_matches_subscription` (pipeline.py:735), so `deliver_pending` rechecks it at send time. All of these came from old-code cycles. The lead's replay had freshness turned off.
+
+**Verification**
+- `pytest tests/test_dm_postdeploy.py tests/test_filters_accuracy.py tests/test_pipeline_accuracy.py tests/test_filters.py tests/test_browse_accuracy.py tests/test_search_input.py tests/test_scrape_location.py tests/test_deliver.py` → 635 passed. Plus `tests/test_dm_embed.py tests/test_outbox.py tests/test_expired_rows.py`.
+- ruff check is clean.
+- Eval `--check` on the shared tree crashed in held-out with an ImportError, `NO_ENTRY_EVIDENCE_PENALTY` (someone's in-progress evaluation.py/recommend.py edit, not mine). I reran both checks on an isolated tree: HEAD c773e6b at the time plus my filters.py/pipeline.py plus scrapers/base.py, in `iso/`. **Both exit 0** (main and held-out; aggregates only, no held-out postings read).
+
+**Waiting on the lead:** decision on (3) (i) or (ii), and on 7760/8167 internship titles under A. Everything else above is commit-ready: gosha/filters.py, gosha/pipeline.py, tests/test_dm_postdeploy.py, tests/test_filters_accuracy.py, tests/test_deliver.py, plus new tests/test_expired_rows.py and tests/test_scrape_location.py.
+
+# DM JUNIOR RULE V3 SHIPS AS DEFAULT ("evidence") + NOT-A-JOB + GLUED TITLES (gosha-pipe, 2026-10-17 ~11:50 UTC) — UNCOMMITTED, ready for the lead's gate
+
+The lead's direction: the evidence rule is the root design because it fails closed. The lead picks when to flip it.
+
+- **Lead's decision 2026-10-17: ship V3.** The default is now `DM_JUNIOR_RULE = "evidence"`; "default" is the one-line rollback. The eval baselines are regenerated (main and held-out, the CI command with --write-results), and both `--check` runs pass against them. A dated section is in docs/EVAL.md and the README sentence is updated. gosha-scrape's unique-index comment is in pipeline.py. eval/results/tfidf.json is not regenerated (no --check reads it).
+- **Switches** (gosha/filters.py):
+  - `DM_JUNIOR_RULE` takes "default" or "evidence". **The tree is at "evidence".**
+  - `DM_ENTRY_LABEL_IS_EVIDENCE` defaults to True.
+  - `dm_junior_ok` is the single function `pipeline.job_matches_subscription` asks, for intern/junior searches, when the posting has a description.
+  - `has_entry_evidence` holds the label check outside the cache; `_entry_evidence` is the cached part.
+- **V3 evidence:** V1 plus the main-set gaps, each generalised to its class: experience not needed in other words; with or without experience; "an advantage but not mandatory"; training that teaches the job; a new trade; a bacalaureat/high-school minimum; level one in the title (Analyst I / L1) or the text ("As a Technical Analyst I").
+- **is_not_a_job(title, description)** (audit cause E), in job_matches_subscription and active under both rules. It catches a text saying it is not a job (except "not a job posting for a specific role", Qualcomm), a course fee, a course plus a sign-up, or a CV drop.
+- **split_glued_level:** "InternSoftware Engineer" → "Intern Software Engineer". It is case-sensitive and applies in title_is_relevant, matches_experience_level, lacks_level_evidence and has_entry_evidence, so the scrape filter and feed get it too.
+- **Numbers:** the lead's scratchpad, dm_junior_evidence_RESULTS.md (V1 and V3 sections).
+  - V3, main: junior+any R 0.333→0.429 (V1→V3); 9 of gosha-label's 20 real losses are recovered and 0 of the 16 correct drops come back.
+  - Audit: wrong jobs 17→4 with the label as evidence, 17→2 without it; right jobs lost 2 or 4 of 74.
+  - DM eval --check: passes at "default", fails under V3 because the eval counts "any" as relevant.
+- **Files:**
+  - gosha/filters.py;
+  - gosha/pipeline.py (job_matches_subscription, plus gosha-scrape's comment);
+  - docs/EVAL.md;
+  - README.md;
+  - eval/results/all-mpnet-base-v2.json and eval/results/heldout/all-mpnet-base-v2.json;
+  - tests/test_dm_postdeploy.py (evidence, V3, not-a-job and glued-title tests; LONG_TEXT gains "Recent graduates are welcome.");
+  - tests/test_pipeline_accuracy.py (BODY gains the same sentence).
+- **Suite** 1745 passed, 9 skipped; ruff clean. One flaky timing test, tests/api/test_demo.py::test_demo_is_rate_limited_even_when_cached, failed once under load, then passed 3 of 3 alone and on the full re-run.
+- **Also done:** reviewed and approved gosha-scrape's refresh_known_rows (d2b3ab3), noting that it assumes a unique index.
+
+# 22:08-CYCLE FIX (gosha-pipe, 2026-10-17) — committed by the lead in 247931e
+
+The 22:08 UTC cycle (2026-10-16, main 106f74f) sent 17 DMs. 8 were wrong: Meteocontrol "Database & DevOps Engineer" (job 8382) and NTT DATA "AI Engineer (Python)" (job 8381), ×4 intern+junior searches (subs 3/5/25/26). Fix in gosha/filters.py:
 - **"N years as <role>"** counts as required experience (`_ROLE_WORD` branch in `_YEARS_THEN_EXPERIENCE_RE`): "3+ years as DevOps/Database engineer" → 3. Role nouns: engineer, developer, programmer, analyst, tester, administrator, architect, consultant, designer, specialist, scientist, accountant, and the RO forms (inginer, programator, dezvoltator, analist, contabil). "2 years as part of the rotation", "as a student assistant" and "Bonus: 3 years as …" do not count.
 - **`asks_experienced`** also catches "looking for / seeking / hiring … experts" (up to 4 words between, none of to/who/that/and/or/future/young/aspiring/become) and "proven <up to 3 words> track record" ("Proven expert-level track record").
 - NTT DATA "QA Engineer with SQL/Database Testing" (8380, borderline) is unchanged and still junior. The one narrow candidate rule, "requires strong … experience", cannot catch it, because the sentence says "ideally with Playwright" and the whole-sentence wish check skips it. Catching it would mean scoping wishes per clause, which isn't narrow, so I reverted that rule.
-- Tests (tests/test_dm_postdeploy.py): the exact sentences from 8382, 8381 and 8380, plus negatives. 7 of the new tests fail on 1fe6243 and all pass now.
+- Tests (tests/test_dm_postdeploy.py): the exact sentences from 8382, 8381 and 8380, plus negatives. 7 of the new tests fail on 106f74f and all pass now.
 - Replay of the 17 sent DMs through `job_matches_subscription`: the 8 wrong ones are blocked; Vertiv ×4 and NTT QA ×5 are still sent.
-- Flips, 1fe6243 → now (required_years / asks_experienced / _is_junior): eval main set 0; prod snapshot (845 active jobs at 17:38 on 2026-10-16) 2. One is the same NTT AI Engineer posting under an earlier id (8264); the other is NTT "AI Engineer/Agentic Workflow Platform" ("Minimum 3-6+ years as a Platform Engineer" → 3). Both are right.
-- Eval `--check` (DM score, feed, delivery tables), main and held-out: exit 0, and the output is identical to the 1fe6243 run. Precision and recall deltas are 0.000 everywhere. I ran only the aggregate check on held-out and read no postings.
+- Flips, 106f74f → now (required_years / asks_experienced / _is_junior): eval main set 0; prod snapshot (845 active jobs at 17:38 on 2026-10-16) 2. One is the same NTT AI Engineer posting under an earlier id (8264); the other is NTT "AI Engineer/Agentic Workflow Platform" ("Minimum 3-6+ years as a Platform Engineer" → 3). Both are right.
+- Eval `--check` (DM score, feed, delivery tables), main and held-out: exit 0, and the output is identical to the 106f74f run. Precision and recall deltas are 0.000 everywhere. I ran only the aggregate check on held-out and read no postings.
 - **Commit-ready:** gosha/filters.py, tests/test_dm_postdeploy.py. **Suite: 1655 passed, 9 skipped; ruff clean.**
 
-# POST-DEPLOY FIX (gosha-pipe, 2026-10-16 ~18:00 UTC) — RELEASED: committed in 1fe6243, main deployed 18:05 UTC; the lead verified the first cycle's 20 DMs by hand, all relevant
+# POST-DEPLOY FIX (gosha-pipe, 2026-10-16 ~18:00 UTC) — RELEASED: committed in 106f74f, main deployed 18:05 UTC; the lead verified the first cycle's 20 DMs by hand, all relevant
 
 The lead judged the 65 DMs of the first 03e5314 cycle (17:35): 51 right, 14 wrong. Fixes, each tested on the real titles and text (tests/test_dm_postdeploy.py):
 - **A, "experienced" wording → not junior** (`filters.asks_experienced`, applied in `_asks_junior_years`, so for the junior level, the board's "entry" label and title_is_relevant alike). Patterns: "looking for / seeking / hiring an experienced", "experienced and motivated <role>" (not "… team/colleagues"), "proven … experience as/in <role>", "proven track record", "căutăm un … experimentat". Skipped when the sentence is a nice-to-have (either side, "Preferred qualifications: …") or negated. "Proven experience working with Excel" (tools) does not count. Also `_YEARS_RE` reads "4y+ of experience" (NTT DATA's Java posting).
@@ -286,12 +449,12 @@ Each item has tests with the real prod titles:
 - Before the rule I also ran old-vs-new aggregate level splits on eval/heldout, which printed the titles of postings whose years changed (the two above). From now on, only eval/postings.jsonl.
 
 ## In progress (exact state)
-Nothing of mine in progress; all my work is committed (last: 3b150ad, the 22:08-cycle fix). Suite 1655 passed, 9 skipped; ruff clean.
+In progress: V3 shipped as the default, with is_not_a_job, glued titles, regenerated baselines and docs (top section). Uncommitted, waiting for the lead's gate. Everything earlier is committed (last: 247931e). Suite 1745 passed, 9 skipped; ruff clean.
 **gosha-scrape is editing gosha/pipeline.py with my OK (2026-10-17).** The change: `_refresh_known_rows` at both scrape call sites. Rows that filter_dataframe dropped but whose URL is already stored get a field refresh, so BestJobs/Hipo rows stored before their detail page was read stop staying empty. My conditions:
 - one shared helper with the existing-row branch of upsert_jobs;
 - no last_seen_at bump or is_active=True on those rows, so deadlinks ages them out;
 - a test that a pending UserJob for such a row is skipped at send time.
-Re-read their diff when they report.
+Their change is in d2b3ab3 (pipeline.py, tests/test_pipeline_refresh.py); I reviewed and approved it 2026-10-17. (History rewritten 2026-10-17: old hashes 1fe6243→106f74f, 0e80e02→a73b5d6, 3b150ad→247931e, d76c467→5ef26de = main.)
 Watch after release: rows held back for want of a description stay pending until it arrives or DM_RETRY_WINDOW (2 days) ends. Flagged, not changed: months are not parsed as years ("min. 24 luni").
 
 ## Remaining TODO (prioritized)

@@ -289,3 +289,100 @@ On the main postings, the main set is already thin today (java 2, dotnet 2, py 3
 | h-dotnet | 5 → 3 | heldout-ejobs-047, heldout-bestjobs-023 | heldout-ejobs-015, heldout-ejobs-016, heldout-ejobs-023, heldout-ejobs-039, heldout-ejobs-042, heldout-ejobs-046, heldout-bestjobs-001, heldout-bestjobs-010, heldout-bestjobs-012, heldout-bestjobs-021, heldout-hipo-017, heldout-jobicy-006 |
 | h-java | 7 → 3 | heldout-ejobs-015, heldout-ejobs-023, heldout-hipo-017, heldout-jobicy-006 | heldout-ejobs-016, heldout-ejobs-039, heldout-ejobs-042, heldout-ejobs-046, heldout-ejobs-047, heldout-bestjobs-001, heldout-bestjobs-010, heldout-bestjobs-012, heldout-bestjobs-021, heldout-bestjobs-023 |
 | h-cs-ro | 20 → 19 | heldout-ejobs-028 | heldout-ejobs-010, heldout-ejobs-044, heldout-bestjobs-085, heldout-bestjobs-090 |
+
+## DM level-precision audit (lead's task, 2026-10-17), done, reported
+- **Code:** main 5ef26de (formerly d76c467; same `gosha/` tree).
+- **Snapshot:** one read-only SELECT, taken after the 10:29 UTC cycle finished: 844 active jobs and 22 active searches, all entry-level. No user ids were selected.
+- **Run:** `prefilter()` offline on the snapshot.
+- **Result:** 96 jobs / 347 pairs pass. Hand-judged: 74 right, **17 wrong**, 5 borderline.
+- **Causes:**
+  - 8 jobs: experience demanded with no years and no "experienced".
+  - 3 jobs: Hipo text flattened into one sentence.
+  - 3 jobs: years phrasing missed.
+  - 2 non-jobs.
+  - 1 posting where seniority is only in the duties.
+- No leaks came from missing descriptions or board labels.
+- **Suggested root fix (not applied):** unmarked titles need positive entry evidence.
+- Results, the judged list and the scripts are in the lead's scratchpad `audit-label/` (see SUMMARY.md there). The raw snapshot stays in my scratchpad.
+- Nothing patched, no live requests, no prod writes. Status: standing by.
+
+## Eval check of the 'evidence' junior rule (lead's question, 2026-10-17 ~11:10 UTC), done, reported
+- **Scope:** main set only, read-only, on a scratch copy of the tree.
+- **Drop set:** 60 postings are junior-eligible under `DM_JUNIOR_RULE='default'` and not under `'evidence'`. All 60 are gold `any`; none are gold `junior`.
+- **Hand-judged on the stored description:** 20 yes (open to 0-2 years), 16 no (asks experience), 24 unclear. 15 of the unclear are cut off before their requirements: eval descriptions are capped at 2000 chars, and 109 of 202 hit the cap.
+- **Evidence-rule phrasing gaps:** 9 of the 20 yes would pass if the rule knew their wording.
+- **Missing board labels:** eval rows have no board label, so the "entry label" evidence path never fires there.
+- **Labels unchanged.** The judged list is in the lead's scratchpad: `audit-label/eval_any_drops_judged.tsv`.
+
+## Release judge (new lead session, 2026-10-17 ~14:00 UTC), waiting for the list
+- **Assignment:** judge by hand EVERY row of gosha-pipe's would-send list (and its dropped list),
+  forwarded by gosha-lead, on the stored description against the owner's rules (intern-only searches:
+  training positions only; junior only where junior was chosen; never mid/senior; 2-year and range
+  rules). Report right/wrong/borderline counts, one-line reasons per wrong/borderline row, and right
+  jobs the tree drops. Previous lead's scratchpad (read-only reference):
+  `/tmp/claude-1001/-home-ubuntu-gosha-jobs/3f714841-0998-4735-a06e-3fd5c1335b14/scratchpad`.
+- **Done re-checked:** held-out load 261/10 with the grade-2 counts above; `pytest -q tests/test_heldout.py`
+  11 passed (main d4158c7, 2026-10-17).
+- **Description-cap plan written** (no board requests; one read-only SELECT of url/length only):
+  `/tmp/claude-1001/-home-ubuntu-gosha-agents/029ed740-ffcb-41fe-b820-efdb1fbb8781/scratchpad/desc_cap_plan.md`
+  (+ `dbcheck.csv`). Key facts: the cap is the collector's (`scripts/eval_collect.py:48,96`, copied in
+  `eval/heldout/collect.py:44,88`), not the adapters (20,000). Main 109/202 cut (85 at 2000 + 24 at
+  1990-1999), held-out 217/261. `scrub()` also removes all newlines, which `filters._SENTENCE_SPLIT_RE`
+  uses. Ranking reads only 1,500 chars, so the cut matters for level-filter checks, not nDCG.
+  Fix: 0 requests for 12 main + 31 held-out rows recoverable from prod's DB; then 94 detail GETs for
+  the rest of main, 164 for held-out native + ~8 feed requests for Jobicy/RemoteOK (~258 total).
+  Not applied; needs the lead's decision (and OK for any request).
+- **Lead decision on the cap plan (gosha-lead, 2026-10-17): NOT now**, because changing eval data moves
+  the baselines V3 is released against. After the V3 release:
+  (a) collector cap 20000 and keep newlines (scrub must not destroy the sentence boundaries filters uses);
+  (b) DB backfill of the 43 rows (12 main, 31 held-out);
+  (c) main-set refetch (94 GETs, paced) only with the lead's explicit OK at that time, never during a
+  prod cycle. Held-out refetch later and separately. Until then: no eval data changes; stay ready as judge.
+- **Release judgement done (2026-10-17), reported to gosha-lead.** Inputs: gosha-pipe's
+  `.../d88b10a3-.../scratchpad/ws/` (export 12:15:48Z). Judged list:
+  `/tmp/claude-1001/-home-ubuntu-gosha-agents/029ed740-ffcb-41fe-b820-efdb1fbb8781/scratchpad/judge/release_judged.tsv`.
+  - (A) would-send: 10/10 new sends right (7981 x7, 7423, 7384, 7506); 9 waiting rows (empty
+    descriptions) right to wait.
+  - (B) gate flips, 24 distinct (job, search level) = 41 pairs: 21 right (17 blocks, 4 Ascom admits),
+    **2 wrong** (8319 Wordpress at intern+junior and junior, 6 pairs: 'min. 24 luni' = 2 years = junior;
+    `required_years` reads no months, confirmed on the tree: None, while 'min. 2 ani' gives 2),
+    1 borderline (8294 Access 'Software Engineer', graduate grade 9/10, lean admit).
+  - Side finding: 11 Hipo descriptions in the export end with inline CSS (`#anunt-content p {...}`)
+    after d4158c7's page-body read (for gosha-scrape).
+- **All sent DMs judged by hand (owner request via gosha-lead, 2026-10-17), reported.** Input: the lead's
+  `.../ba90e926-.../scratchpad/alldms/sent.jsonl` (263 DMs, 104 jobs). Output written there as
+  `label_judged.tsv` + `label_summary.md` (copies and `judge.py` in my scratchpad `alldms/`). Did not open the
+  lead's own file. Result: 107 right / 132 wrong / 24 borderline; 25 of 104 jobs right everywhere.
+  Wrong by primary cause: location 42 (s24 abroad/US 23, s16 non-Cluj 15, s19 US-only 6), not-CS 37,
+  level-experienced 35 (13 jobs, nearly all sent 10-16/17), stale 8, cross-board duplicate 6, not-a-job 4.
+  24 "right" DMs rest on the owner's 2-year/range rules (8319, 8287, 8314, 8273, 8041).
+
+## Graduate rule applied (owner's decision 2026-10-17), uncommitted — REPORT FOR gosha-lead
+Rule: graduate programmes / new-grad / "Global Trainee" roles that need a FINISHED degree are `junior`;
+training positions open to enrolled students stay `intern`. Every `intern` posting in both sets
+(main 7, held-out 17) was re-read for who may apply; graduate/trainee wording in non-intern postings
+was scanned too. No ranker output looked at.
+- **Changed: 1 posting.** `heldout-ejobs-069` (SANEX "Internship R&D": "Ești proaspăt absolvent",
+  "Studii superioare in Chimie...") intern → junior, note "level: finished-degree graduate rule
+  (owner 2026-10-17)". Main set: 0 changes.
+- Left `intern` (students may apply): main `ejobs-028` Viking ("Student or recent graduate"),
+  `bestjobs-079` ENF (students); held-out `heldout-ejobs-068` EY ("degree or currently studying"),
+  `heldout-bestjobs-098` Arcanna ("ongoing or graduated"), and the working-student/student postings.
+- Left `intern` for lack of evidence (eligibility falls after the 2,000-char cap): main `ejobs-042/044/046`
+  (Emerson), `bestjobs-107`; held-out `heldout-ejobs-009`, `heldout-bestjobs-094/-095/-097/-101`.
+  Would be decidable after the post-V3 description backfill.
+- Graduate programmes already `junior`, unchanged: `heldout-hipo-009` (Vodafone Discover Graduate),
+  `heldout-ejobs-020` (SAP Trainee/Junior Consultant); `ejobs-027`, `heldout-ejobs-055/-070` are junior jobs.
+- **Grades: 0 of 11,112 cells change** (24 personas × both sets, computed before/after). 069 is family
+  `other` (grade 0 for every persona), so no DM-eval relevance changes either. Counts: held-out intern
+  17 → 16, junior 45 → 46 (ro row 2/22 → 1/23).
+- **Baselines:** the held-out `postings_sha256` changes, so `eval/results/heldout/*` must be regenerated
+  by gosha-rank (metrics should not move). Not regenerated by me.
+- Side flag for the owner (outside this rule, not changed): main `bestjobs-107` "Domain Trainee"
+  (BrightClaim/Genpact R2R) is gold `intern` but its text asks "Experienced Accounting Knowledge (With
+  Closing & reporting experience)".
+- Files: `eval/heldout/postings.jsonl` (1 line), `eval/heldout/README.md` (intern rule, counts,
+  "Graduate rule applied" section), `docs/EVAL.md` (Graduate rule paragraph), `tests/test_heldout.py`
+  (`test_graduate_rule_relabels_are_junior[main|heldout]`; heldout case fails on HEAD's file).
+- Verified: `.venv/bin/python -m pytest -q tests/test_heldout.py tests/test_evaluation.py` → 58 passed;
+  `ruff check tests/test_heldout.py eval/heldout` clean.

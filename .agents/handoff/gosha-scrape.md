@@ -2,7 +2,7 @@
 
 Written: 2026-10-16 ~12:05 UTC · Branch: wip/agents-2026-10-16 · Base commit: 5490d6a
 
-## Current state (2026-10-17 ~11:10 UTC) — read this first
+## Current state (2026-10-17 ~11:10 UTC; post-deploy check at the end of this file) — read this first
 - Hashes after the 2026-10-17 history rewrite (attribution removed): main = **5ef26de** (deployed 10:26 UTC; our
   deferral fix, was d76c467), branch HEAD = **d2b3ab3** (lead's WIP commit with our pipeline refresh, was c3085b7).
   **Git is frozen** (owner): no commits by anyone; workers never commit; no Co-Authored-By/Claude-Session/
@@ -767,3 +767,167 @@ lists exactly which of the 36 remain empty.
 and the deferral means pages over a cap are never stored empty, so a deploy cannot produce the burst any more. What still
 produces empty rows (failed fetches, pages that parse empty) is what it should alert on. The current alert clears when the
 36 rows heal or leave the window (~17:33 UTC 2026-10-17).
+
+## Post-deploy check of d4158c7 (2026-10-17 ~12:15–12:45 UTC; read-only SELECTs, bot logs, a copy of the prod detail cache; no board requests)
+One cycle ran since the 11:30 deploy: 11:33:16–11:52:59 (cache "persisted at /app/data/scrape_cache.sqlite3"; deferrals
+BestJobs 3/25/12, Hipo 9; refresh lines up to 43 rows). Next cycle 15:33 UTC. Cache read from a copy
+(`cp /home/ubuntu/gosha/data/scrape_cache.sqlite3` to the scratchpad, opened `mode=ro`): bestjobs 94, hipo 42, ejobs 19,
+linkedin 228 entries.
+**Hipo: healed.** 0 active Hipo rows without a description (36 active). The 6 Bosch rows have text and dates (8316 5538
+chars, 8315 5919, 8309 4957, 8310 4118, 8365 8733, 8372 9680). All 7 stale Hipo rows from 2026-10-16 17:3x have text now.
+**BestJobs: 31 active rows without a description**, two groups:
+- 22 of the 36 stale rows from 2026-10-16 17:3x (14 healed): 8311 8312 8324-8331 8341 8346-8356, all last seen
+  2026-10-16 18:25-18:26, never since. Only 8311/8312 had their page fetched this cycle (11:50:29, 200), and the cached page
+  says `expired: true` (with description, company, level entry). **Cause (code):** `bestjobs._apply_details` drops a posting
+  whose page says expired, so it reaches neither the upsert nor refresh_known_rows, and the dead-link check sees 200 (no
+  BestJobs soft-dead marker in deadlinks.py). The other 20 pages were not fetched (not listed for any search, or a title not
+  wanted at entry level, or deferred); none can heal except by a new sighting.
+- 9 old rows first seen 2026-06-10..09-25 (before detail pages): 3372 6420 6557 6575 6595 6597 6600 6614 6618, last seen
+  2026-09-22..10-12, last_checked_at 2026-10-17 11:11 (dead-link check said alive: BestJobs answers 200). They age out at
+  last_seen+30 d (10-22 .. 11-11). user_jobs rows exist for 5 of them (no DM status).
+**LinkedIn 8275 'GTM Automation Engineer' (Snyk, job 4469313272): cause found and fixed (ours).** LinkedIn answered 429 to
+its page at 11:38:40 for one term of 'cs entry level' Cluj and served it at 11:39:19 for a later term (it is in the cache,
+7747 chars). `scrape_jobs_raw` deduped by URL with keep="first", so the empty copy was upserted at 11:40:35. Same for 8394
+(job 4476676068: 429 11:41:41, cached 11:41:50, upserted 11:42:19). Fix: `gosha/scraper.py` dedup keeps a copy with a
+description (stable sort by has-text, then drop_duplicates, then sort_index). Test
+`tests/test_scraper_jobspy.py::test_a_job_found_by_several_terms_keeps_the_copy_with_a_description` (failed before: None).
+`pytest -q tests/test_scraper_jobspy.py tests/scrapers tests/test_dedup.py`: 259 passed; ruff clean. Uncommitted.
+8275 and 8394 heal on their next sighting anyway (cache hit for 24 h; the upsert writes a non-empty description).
+**Class size:** 28 active LinkedIn rows empty (of 487): 5 seen today (8394 8393 8275 8390 8257: 2 = the dedup bug, 3 = page
+429/502 for every term, retried next cycle since failures are not cached), 2 Romanian older (8302 last seen 10-16, 7906
+10-14), and **21 foreign** (India, China, Canada, Australia, ...) from one burst first seen 2026-10-16 16:56 and never again.
+That burst has **160 active LinkedIn rows, 0 in Romania** (the other 139 have descriptions) — a lead/owner call like the
+1,201 US rows. Cycle 11:33: 72 job-page 429s, 43 search 429s, 10 502s from LinkedIn.
+**Proposal (lead decides; nothing written):** deactivate the 31 BestJobs + 21 foreign empty LinkedIn rows. Reversible by
+design: upsert_jobs sets is_active=True and bumps last_seen_at on the next sighting. Keep the 7 Romanian LinkedIn rows.
+Pending user_jobs on candidates: 8325 (4), 8330 (1); on 8275 (4, heals). For gosha-pipe: a BestJobs expired page should
+deactivate the stored row (adapter flag + pipeline, or a deadlinks soft-dead marker; the exact page text of an expired
+posting needs one approved GET of 8311's URL in the prod image, the fixture has no `expired` key).
+
+## Lead round 2026-10-17 ~12:20–12:50 UTC
+Lead: the scrape_jobs_raw dedup fix is approved for the V3 release commit. The deactivations and the 160 foreign rows go to
+the owner as one decision with the deploy (no prod writes by us).
+**Live request used (lead-approved, exactly one):** 2026-10-17 12:19:37 UTC, prod image (CPython 3.11.17, OpenSSL 3.5.7),
+GET https://www.bestjobs.eu/loc-de-munca/shopify-web-developer-landing-page-specialist (8311, the final URL, so no
+redirect hop), redirects off: **200**, 405,764 bytes. Its __NEXT_DATA__ job has "expired":true, "state":"passive",
+"active":false, and still has a description and careerLevels. Script and raw output: /tmp/claude-1001/-home-ubuntu-gosha-agents/d4e40c93-a285-4069-b83b-d734c19ef436/scratchpad/probe/.
+**Expired BestJobs pages, my side (uncommitted, NOT for today's release):**
+- `gosha/scrapers/base.py` SearchQuery.on_expired (Callable[[str], None] | None, compare=False, like `relevant`).
+- `gosha/scrapers/bestjobs.py` _apply_details(jobs, details, on_expired) reports each expired posting's RawJob.url
+  (== to_record()["job_url"], the stored form) and still leaves it out of the result. search() passes query.on_expired.
+  Smoke and eval pass nothing, so their counts are unchanged.
+- Fixture `tests/scrapers/fixtures/bestjobs_expired_detail.html` (trimmed from the capture). Tests in
+  tests/scrapers/test_details.py: test_bestjobs_expired_page_is_recognised, and
+  test_bestjobs_reports_postings_their_page_calls_expired, which failed before with TypeError (no on_expired) and asserts
+  the reported URL == _parse(...)[0].to_record()["job_url"].
+- `pytest -q tests/scrapers tests/test_scraper_jobspy.py tests/test_dedup.py`: 261 passed. Ruff clean on gosha/scrapers,
+  gosha/scraper.py and the touched tests.
+- gosha-pipe OK'd the design with 4 changes, all on its side except (1): (1) report the stored URL form (done above);
+  (2) UPDATE scoped by source = scraper.name; (3) skip URLs this cycle also upserted as live; (4) emit job.expired per
+  row; its test also checks that a pending user_job is not sent (deliver_pending requires Job.is_active). Waiting on pipe's
+  ~15 lines in pipeline._scrape_extra_sources.
+- Hipo and eJobs: no equivalent silent drop. Hipo's not_a_job is a job-type filter, and its dead pages are caught by the
+  deadlinks soft marker.
+**Root cause of the 2026-10-16 16:56 LinkedIn burst (read-only):**
+- One upsert batch at 2026-10-16 16:56:54.990898 UTC holds 299 rows, **0 in Romania**: 160 new LinkedIn (India 47,
+  Canada 19, France 12, ...), 99 previously stored LinkedIn (**90 USA**: the lead's 1,201 deactivated US rows, which this
+  sighting reactivated, since upsert sets is_active=True), 21 Indeed (all USA) and 19 Glassdoor (USA or empty).
+- The code running then was still the 2026-10-12 deploy (CI 12:15 UTC 10-12, 5490d6a = d5aef85 after the rewrite). The
+  next deploy finished at 17:12:33 UTC on 10-16 (03e5314).
+- Search: subscription 19, "computer science internship" in "remote" (boards indeed, linkedin, glassdoor, intern, 7 d).
+  It is the only active "remote" subscription.
+- Mechanism in d5aef85: JobSpy got location "remote" on all three boards. indeed_country("remote") → None, so JobSpy
+  used its default "usa" (indeed.com), and Glassdoor did the same. LinkedIn treats "Remote" as worldwide. The scrape
+  filter (filters.filter_dataframe) checked only title relevance, and intern titles are relevant, so all 299 rows were kept.
+  The match step's location check stopped DMs, but the rows were stored and shown in the feed.
+- It is the same mechanism as the 1,201 US rows, not a new one: one more cycle of the old code (16:56) after the
+  deactivation at ~14:10 and before the 17:12 deploy.
+- Fixed since 17:12 on 10-16: jobspy_boards_for("remote") == [] ("europe" goes to LinkedIn only). Since then the
+  JobSpy boards stored 73 new rows (linkedin 54, indeed 17, glassdoor 2), and every one is Romanian (9 say
+  "Cluj-Napoca/Timisoara Metropolitan Area").
+- Still exposed: the scrape filter has no location check, so any future JobSpy path that leaks a foreign location would
+  be stored again. A defensive check belongs in filters.filter_dataframe (gosha-pipe's file); proposed, not requested.
+- Active now from that batch: linkedin 259, indeed 21, glassdoor 19 (= 299). Active non-Romanian JobSpy rows overall
+  (rough regex, counts "Metropolitan Area" as non-RO): linkedin 329/487, indeed 35/57, glassdoor 71/78.
+
+## Hipo ad CSS in descriptions (lead, 2026-10-17 ~13:00; offline, stored text + fixtures, no requests; uncommitted)
+**Cause:** Hipo ads carry their own stylesheet (`#anunt-content p { font-size:13px !important; }`). It reaches the text
+two ways:
+- The JSON-LD prose keeps the rules as bare text, with no tag around them. The real 2026-09-30 fixture hipo_detail.html
+  (Emerson) has them, so this predates d4158c7. The stored rows from this path are flattened onto one line: 6596, 6610,
+  6611, 7244, 7798, 7799, 8358.
+- The page-body read (d4158c7) keeps their line breaks: 8357, 8359, 8360, 8361 (Schaeffler).
+- There was no `<style>` handling anywhere. No captured page shows whether the body wraps the rules in `<style>`, so the
+  fix covers both shapes.
+**Fix:**
+- `gosha/scrapers/details.py` html_to_text drops `<style>`/`<script>` elements with their content, raw and after
+  unescaping. This applies to every adapter.
+- `gosha/scrapers/hipo.py` `_without_ad_css` strips `#anunt-content … { … }` rule text from the body text (before the
+  MIN_BODY_CHARS check) and from each JSON-LD prose field.
+**Tests** (tests/scrapers/test_details.py), 5 of which failed before the fix:
+- test_hipo_detail_extraction now asserts the real fixture ends with the ad's last sentence and has no CSS.
+- test_hipo_body_text_leaves_out_the_ads_stylesheet, with the rules from stored row 8359 inside `<style>` or as bare
+  text in a `<p>` of the real AUMOVIO body.
+- test_html_to_text_drops_style_and_script_content, raw and escaped.
+- `pytest -q tests/scrapers tests/test_scraper_jobspy.py tests/test_dedup.py`: 265 passed. Ruff clean.
+**On deploy:** the detail-cache namespace hashes details.py and base.py, so every board re-reads its pages once (a cold
+start; the deferral keeps it from storing empty rows).
+**Healing:** rows heal on the next sighting with a fetched page, because the upsert overwrites a differing non-empty
+description. Five were seen today (8357-8361). 7244 was last seen 10-12, so the 14-day catalog expiry takes it on 10-26
+if Hipo no longer lists it.
+
+## LinkedIn rows with an empty location (lead, 2026-10-17 ~13:20; read-only + offline; uncommitted test only)
+List: gosha-pipe's /tmp/.../d88b10a3-.../scratchpad/ws/empty_location_active.csv. It has 27 active LinkedIn rows plus 12
+Glassdoor rows from the 10-16 16:56 burst; those Glassdoor rows are part of the 299-row cleanup.
+**Cause: python-jobspy 1.1.82, not our mapping, and already fixed by the upgrade to 1.3.0 (deployed 2026-10-12 12:24).**
+- 1.1.82 `LinkedIn._get_location` read only 2- and 3-part card locations. A one-name card ("Romania", "United States")
+  kept `Location(country=Country.from_string(self.country))` with self.country = "worldwide", and `display_location()`
+  drops WORLDWIDE, so the stored location was "".
+- Reproduced offline on the uv-cached 1.1.82 (~/.cache/uv/archive-v0/y3KYt2DxelDKvLAM, with its tls_client import
+  stubbed): "Romania" -> '', "United States" -> '', "Bucharest, Romania" -> unchanged.
+- 1.3.0 `parse_location` keeps one name as a country, or failing that as a city.
+- Prod: empty-location LinkedIn rows by first_seen day: 09-30 6, 10-01 2, 10-02 4, 10-03 1, 10-05 2, 10-06 4, 10-07 3,
+  10-08 1, 10-12 1, and 0 after that. Of the 997 LinkedIn rows seen since 10-12 12:30, 0 have an empty location. All 27
+  rows were last seen 09-17..10-12 11:32 and never since, so nothing heals them.
+- No job-page location read is needed: no row arrives empty under 1.3.0, and it would cost nothing to add but would
+  fix nothing.
+**Guard test:** tests/test_scraper_jobspy.py::test_linkedin_card_location_of_one_name_is_kept runs a real card shape
+through the pinned jobspy's `_process_job` and checks the stored location for "Romania" / "United States" ("USA") /
+"European Union" / "Bucharest, Romania" / "Cluj-Napoca, Cluj, Romania". It protects against a jobspy change that brings
+the bug back. `pytest -q tests/test_scraper_jobspy.py tests/scrapers tests/test_dedup.py`: 270 passed. Ruff clean.
+**Stored rows (lead/owner):**
+- The real locations are probably one country each, but cannot be recovered without the card.
+- Likely Romanian, by title/company: 6629 Luxoft, 7362 Nagarro, 7615 BRINEL, 7312 (Bucharest in the title), 6513
+  Undelucram.ro. The rest look US/Canada (Xcel CO/MN, F5 Seattle, Atlassian Canada, ...).
+- The 30-day unseen expiry takes all 27 by 2026-11-11 (6513 by 10-17/18).
+- Proposal: add the 27 to the owner cleanup (deactivate; reversible on the next sighting).
+
+## Duplicate-DM pairs vs dedup.py (lead, 2026-10-17 ~13:40; read-only + offline; uncommitted)
+Lead's pairs (from lead_judged.tsv). Each row: prod dedup_group_id / normalize_key equal / same_posting / when DMed.
+- 7621/7622 Continental Anvelope vs Continental: 7621 both / no / yes / 10-12 13:15.
+- 7623/7625 FORVIA HELLA vs HELLA: 7623 both / yes / yes / 10-12 13:15.
+- 7626/7628 DRÄXLMAIER Group vs DRÄXLMAIER ('Romania'): 7624 both / yes / yes / 10-12 13:15.
+- 7997/7998 SocGen GSC Romania vs Société Générale: 7997 both / yes / yes / 10-15 17:06.
+- 7210/8041 Marsh vs MMC Corporate (BestJobs): 7210 and NULL / no / **no**. 8041 was DMed 10-16 05:04 to subs 3, 5,
+  10 and 26; sub 25 got both copies at 17:07.
+The first four were all sent before the 2026-10-16 17:12 deploy (fdddaf9 + a84ba70). gosha-pipe's
+_same_posting_for_dm has been deployed since then and catches all 5 pairs (its 3rd rule, same 3+ word title in the same
+city, covers Marsh/MMC: _city gives 'cluj napoca' for both). Sub 25's double came from the old code.
+**dedup.py gap fixed (mine):** a title ending in "@ <name>" names the employer.
+- `_TITLE_EMPLOYER`, `_title_employer`, `_employer_words`, used in normalize_key, same_posting and _postings. A reposter
+  row whose title names the employer is grouped by the title, not by its text.
+- Prod "@" titles (since 08-01) always name an employer or unit: MarshTech (Marsh/Mercer/MMC Corporate), DARWIN
+  (Mercer), Hipo "@ Company".
+- Earlier splits of the same kind: 4804/6051 "… Gen AI @MarshTech" Marsh vs MMC Corporate; 7384 Marsh vs 5403/6255
+  Mercer.
+- Impact on the 789 active rows (read-only export, old vs new _postings + _split_by_location): only 8041 joins group 7210.
+**Tests:** tests/test_dedup.py test_an_employer_named_in_the_title_is_the_employer and
+test_copies_whose_title_names_the_employer_group (both failed before); test_dedup 35 passed; ruff clean.
+**Flipped one gosha-pipe test:** tests/test_deliver.py::test_same_title_in_another_city_or_a_short_title_is_not_a_copy
+(3 delivered vs 4). It used Marsh Iași vs MMC Cluj and relied on same_posting saying "different employers";
+same_posting ignores cities by design. Sent to pipe (/tmp/claude-1001/-home-ubuntu-gosha-agents/d4e40c93-a285-4069-b83b-d734c19ef436/scratchpad/to-pipe-dup-dms-2.md):
+- (a) gate the same_posting / normalize_key paths in _same_posting_for_dm with dedup.locations_compatible (my
+  recommendation; the test then gives 4); or
+- (b) change the test pair.
+**Pipe chose (b)** (2026-10-17): the same employer and title in two cities stays one DM per user. Pipe changes the first pair of that test to two different employers; nothing needed on my side. Commit the dedup change together with pipe's test change, or the suite has 1 failure.
+Run: dedup-related tests + tests/scrapers + tests/test_scraper_jobspy.py: 387 passed, 1 failed (the test above).
