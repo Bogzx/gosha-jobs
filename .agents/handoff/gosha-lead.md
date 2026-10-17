@@ -229,3 +229,7 @@ Deploy checklist update: step 4 → SCRAPE_BROWSER_FALLBACK is ON by owner decis
   (57 junior). Role-term DM scoring (rank) missed its pre-registered bar by one pair; OWNER decided to ship it.
   Board 'entry' label no longer counts as entry evidence alone (pipe; 7 wrong + 15 borderline removed, 0 right lost on
   all judged data). Role-text embedding (item 2) failed its bar, reverted.
+- 2026-10-17: bb2dad5 deployed ~17:05 (17:08 cycle: 40 sent, 34 right, 6 wrong = 8398 SkillBridge event scholarship;
+  21 deferred by caps). 78b8425 deployed 17:53 (owner: no DM caps; free event access = not a job): 17:56 cycle sent
+  the 21 deferred (all judged right, 8285 borderline), no new matches, queue empty. 085ccbc (eval text, no number
+  change) committed on WIP, not yet on main.
