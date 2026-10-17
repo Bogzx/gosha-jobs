@@ -8,6 +8,7 @@ from httpx import Response
 from sqlalchemy import select
 
 from gosha.models import User
+from tests.conftest import ON_POSTGRES
 
 DISCORD_API = "https://discord.com/api/v10"
 
@@ -415,6 +416,9 @@ async def test_login_is_rate_limited_per_ip(client, monkeypatch):
 # ── session cookies ───────────────────────────────────────────────────
 
 
+@pytest.mark.skipif(
+    ON_POSTGRES, reason="SQLite reuses a deleted row's id; Postgres sequences never do",
+)
 @pytest.mark.asyncio
 @respx.mock
 async def test_deleted_accounts_cookie_does_not_open_the_next_account(

@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from gosha.models import Outbox, Subscription
+from tests.conftest import ON_POSTGRES
 
 VALID = {
     "name": "Cluj internships",
@@ -165,6 +166,11 @@ async def _enforce_pre_migration_delivery_fk(engine) -> None:
         await conn.commit()
 
 
+@pytest.mark.skipif(
+    ON_POSTGRES,
+    reason="rebuilds user_jobs from sqlite_master; tests/api/test_postgres_api.py "
+    "has the Postgres version",
+)
 @pytest.mark.asyncio
 async def test_delete_a_search_that_delivered_a_dm(client, web_user, session, engine):
     """user_jobs.subscription_id references the search: Postgres refused the

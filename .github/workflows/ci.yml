@@ -35,6 +35,45 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+  # The same suite on Postgres, production's database (docker-compose.prod.yml).
+  # SQLite passes what Postgres refuses (types, FKs, transactional DDL); the
+  # few tests that only make sense on SQLite skip themselves here. Not in
+  # deploy's `needs`, so it reports without gating the deploy.
+  backend-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: gosha_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # The whole suite (tests/conftest.py) and, in a database of their own,
+      # the Postgres-only tests that drop and recreate tables themselves.
+      GOSHA_TEST_DB_URL: postgresql+asyncpg://postgres:test@127.0.0.1:5432/gosha_test
+      GOSHA_TEST_POSTGRES_URL: postgresql+asyncpg://postgres:test@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          # Same list as the backend job.
+          pip install -c constraints.txt "discord.py" "sqlalchemy[asyncio]" \
+            aiosqlite apscheduler pandas pysocks python-dotenv numpy \
+            fastapi uvicorn jinja2 python-multipart httpx itsdangerous pymupdf \
+            asyncpg python-jobspy cryptography pytest pytest-asyncio respx pyyaml
+      - name: Run tests on Postgres
+        run: python -m pytest -q -rs
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
