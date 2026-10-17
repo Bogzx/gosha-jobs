@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from itertools import count
 
 import numpy as np
 import pytest
@@ -19,10 +20,14 @@ def unit_vec(axis: int) -> np.ndarray:
     return v
 
 
+_untitled = count(1)
+
+
 def make_job(url: str, axis: int | None, **kwargs) -> Job:
     job = Job(
         url=url,
-        title=kwargs.pop("title", "Dev"),
+        # Distinct by default: one title at one employer is one posting.
+        title=kwargs.pop("title", f"Dev {next(_untitled)}"),
         company=kwargs.pop("company", "Acme"),
         source=kwargs.pop("source", "indeed"),
         **kwargs,
@@ -755,9 +760,9 @@ async def test_level_scope_reads_each_description_once(
     session.add(user)
     await session.flush()
     graduate = make_job("https://r.com/l/grad", 0, title="QA Engineer", location="Cluj",
-                        description="Fresh graduates welcome.")
+                        description=_TEAM + "Recent graduates are welcome.")
     experienced = make_job("https://r.com/l/exp", 1, title="QA Engineer", location="Cluj",
-                           description="At least 5 years of experience in QA.")
+                           description=_TEAM + "At least 5 years of experience in QA.")
     session.add_all([graduate, experienced, _search(user.id, ["Cluj"], ["junior"])])
     await session.commit()
 
@@ -775,3 +780,187 @@ async def test_level_scope_reads_each_description_once(
         read = {job.id for job in loaded[-1] if "description" in job.__dict__}
         # First request: both read for the verdict; then only the page.
         assert read == ({graduate.id, experienced.id} if request == 0 else {graduate.id})
+
+
+# ── one posting once: copies the cross-board dedup keeps apart ──
+
+
+def _vec_at(cosine: float) -> bytes:
+    """A unit vector at this cosine to unit_vec(0)."""
+    vec = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+    vec[0], vec[1] = cosine, float(np.sqrt(1 - cosine**2))
+    return vec_to_bytes(vec)
+
+
+def _city_copies() -> tuple[Job, Job]:
+    """One posting listed per city (LinkedIn does this): dedup keeps the
+    two rows apart so a Timișoara search still finds its copy."""
+    cluj = make_job("https://r.com/d/cluj", None, title="Graphics Engineer",
+                    company="Accenture", location="Cluj-Napoca, CJ, Romania")
+    cluj.embedding = _vec_at(0.9)
+    timisoara = make_job("https://r.com/d/tm", None, title="Graphics Engineer",
+                         company="Accenture SRL", location="Timișoara, TM, Romania")
+    timisoara.embedding = _vec_at(0.8)
+    return cluj, timisoara
+
+
+@pytest.mark.asyncio
+async def test_feed_shows_one_copy_of_a_posting_the_best_ranked(
+    patched_db, session: AsyncSession,
+):
+    user = User(discord_user_id=60, cv_embedding=vec_to_bytes(unit_vec(0)))
+    cluj, timisoara = _city_copies()
+    other = make_job("https://r.com/d/other", None, title="Shader Developer", company="Accenture")
+    other.embedding = _vec_at(0.7)
+    session.add_all([user, cluj, timisoara, other])
+    await session.commit()
+
+    items, total = await recommend.get_feed(user.id, per_page=10)
+
+    assert [item.job.id for item in items] == [cluj.id, other.id]
+    assert total == 2
+    assert [item.percentile for item in items] == [100, 0]
+
+
+@pytest.mark.asyncio
+async def test_the_copy_in_the_users_search_scope_is_the_one_shown(
+    patched_db, session: AsyncSession,
+):
+    user = User(discord_user_id=61, cv_embedding=vec_to_bytes(unit_vec(0)))
+    session.add(user)
+    await session.flush()
+    cluj, timisoara = _city_copies()
+    session.add_all([cluj, timisoara, _search(user.id, ["Timisoara"], ["any"])])
+    await session.commit()
+
+    assert await _feed_ids(user.id) == {timisoara.id}
+
+
+@pytest.mark.asyncio
+async def test_a_rated_copy_hides_the_other_copies(patched_db, session: AsyncSession):
+    user = User(discord_user_id=62, cv_embedding=vec_to_bytes(unit_vec(0)))
+    session.add(user)
+    cluj, timisoara = _city_copies()
+    session.add_all([cluj, timisoara])
+    await session.flush()
+    session.add(UserJob(user_id=user.id, job_id=cluj.id, feedback="not_relevant"))
+    await session.commit()
+
+    assert await _feed_ids(user.id) == set()
+
+
+@pytest.mark.asyncio
+async def test_newest_first_feed_shows_one_copy_too(patched_db, session: AsyncSession):
+    user = User(discord_user_id=63)
+    cluj, timisoara = _city_copies()
+    now = datetime.now(timezone.utc)
+    cluj.first_seen_at = now - timedelta(days=1)
+    timisoara.first_seen_at = now
+    session.add_all([user, cluj, timisoara])
+    await session.commit()
+
+    items, total = await recommend.get_feed(user.id, per_page=10)
+    assert [item.job.id for item in items] == [timisoara.id] and total == 1
+
+
+def test_unidentifiable_postings_are_never_collapsed():
+    """No real employer name: two "Developer" ads may be two employers
+    (dedup.normalize_key returns None), so both stay."""
+    jobs = [make_job(f"https://r.com/d/u{i}", 0, title="Developer", company="Unknown")
+            for i in range(2)]
+    items, total = recommend.rank_candidates(jobs, unit_vec(0))
+    assert total == 2 and {id(item.job) for item in items} == {id(job) for job in jobs}
+
+
+def test_the_demo_ranking_shows_one_copy_too():
+    cluj, timisoara = _city_copies()
+    items, total = recommend.rank_candidates([timisoara, cluj], unit_vec(0))
+    assert [item.job for item in items] == [cluj] and total == 1
+
+
+# ── one rule set: the feed scope applies the DM match stage's gates ──
+
+_TEAM = "You will build data pipelines in Python and SQL with our team in Cluj. " * 4
+_GATE_POSTINGS = [
+    # (title, company, board label, description)
+    ("Curs Consultant ERP", "EnterSoft", None,
+     "Acesta nu este un anunț de angajare. Înscrie-te până la 23 octombrie. " + _TEAM),
+    ("Software Engineer (AI Training)", "Alignerr", None, _TEAM),
+    ("Programe de internship, trainee sau joburi entry-level in IT", "Career Hub", None, _TEAM),
+    ("Data Analyst", "Acme", None, None),                           # no evidence either way
+    ("Data Analyst", "Beta", None, _TEAM + "Recent graduates are welcome."),
+    ("Data Analyst", "Gamma", None, _TEAM + "We require 5+ years of experience in SQL."),
+    ("Data Analyst", "Delta", None, _TEAM),                         # says nothing of the level
+    ("Software Engineering Intern", "Epsilon", None, _TEAM),
+    ("Data Analyst", "Zeta", "intern", _TEAM),
+    ("Senior Data Analyst", "Eta", None, _TEAM),
+]
+_GATE_SEARCHES = [
+    (["intern"], ["developer"]),
+    (["junior"], ["developer"]),
+    (["intern", "junior"], ["developer"]),
+    (["any"], ["software intern"]),     # entry level by its keyword
+    (["any"], ["developer"]),
+    (["senior"], ["developer"]),
+]
+
+
+@pytest.mark.parametrize("levels, keywords", _GATE_SEARCHES)
+def test_feed_scope_takes_what_the_dm_match_stage_takes(levels, keywords, monkeypatch):
+    """pipeline.job_matches_subscription is the oracle (freshness, salary
+    and the user's exclusions aside, which the feed handles itself),
+    without the entry evidence: DMs fail closed on it, the feed does not."""
+    from gosha import filters
+    from gosha.pipeline import job_matches_subscription
+
+    sub = _search(1, ["Cluj"], levels)
+    sub.keywords = list(keywords)
+    scope = recommend.scope_of(sub)
+    monkeypatch.setattr(filters, "DM_JUNIOR_RULE", "default")
+    for title, company, label, description in _GATE_POSTINGS:
+        job = Job(url="https://r.com/g", title=title, company=company, source="ejobs",
+                  location="Cluj-Napoca", experience_level=label, description=description)
+        assert recommend.in_search_scope(job, [scope]) == job_matches_subscription(
+            job, sub, require_evidence=False,
+        ), (title, company)
+
+
+@pytest.mark.asyncio
+async def test_feed_scope_drops_courses_but_keeps_postings_without_entry_evidence(
+    patched_db, session: AsyncSession,
+):
+    user = User(discord_user_id=64, cv_embedding=vec_to_bytes(unit_vec(0)))
+    session.add(user)
+    await session.flush()
+    course, gig, ad, bare, graduates, years, silent, intern, *_ = (
+        make_job(f"https://r.com/g/{i}", 0, title=title, company=company,
+                 experience_level=label, description=description, location="Cluj-Napoca")
+        for i, (title, company, label, description) in enumerate(_GATE_POSTINGS)
+    )
+    session.add_all([course, gig, ad, bare, graduates, years, silent, intern,
+                     _search(user.id, ["Cluj"], ["intern", "junior"])])
+    await session.commit()
+
+    assert await _feed_ids(user.id) == {bare.id, graduates.id, silent.id, intern.id}
+
+
+@pytest.mark.asyncio
+async def test_a_kept_copy_is_in_one_of_the_viewers_searches(patched_db, session: AsyncSession):
+    """Copies are collapsed after the scope filter: with searches in both
+    cities the best-ranked copy stands, and it is in one of them; with a
+    search in one city, that city's copy stands even when it ranks lower."""
+    for discord_id, cities, expected in ((65, ["Cluj", "Timisoara"], "cluj"),
+                                         (66, ["Timisoara"], "tm"), (67, ["Cluj"], "cluj")):
+        user = User(discord_user_id=discord_id, cv_embedding=vec_to_bytes(unit_vec(0)))
+        session.add(user)
+        await session.flush()
+        session.add_all([_search(user.id, [city], ["any"]) for city in cities])
+        await session.commit()
+        if discord_id == 65:
+            copies = dict(zip(("cluj", "tm"), _city_copies()))
+            session.add_all(copies.values())
+            await session.commit()
+        items, total = await recommend.get_feed(user.id, per_page=10)
+        assert [item.job.id for item in items] == [copies[expected].id] and total == 1
+        scopes = await recommend.load_search_scopes(user.id)
+        assert all(recommend.in_search_scope(item.job, scopes) for item in items)

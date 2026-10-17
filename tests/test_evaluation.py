@@ -446,3 +446,58 @@ def test_scoped_feed_counts_what_is_left_and_who_has_nothing(small_world):
         assert ("ndcg@10" in row) == (row["relevant"] > 0), persona
     assert junior["measured"] + junior["no_relevant"] == 2
     json.dumps(result)
+
+
+# ── the feed shows one copy of a posting (gosha.recommend.first_copies) ──
+
+
+def _copies():
+    """Two city copies of one posting (same title and employer), one other."""
+    return [
+        posting(pid="cluj", text="Graphics Engineer"),
+        posting(pid="tm", text="Graphics Engineer"),
+        posting(("acc",), pid="other", text="Accountant"),
+    ]
+
+
+def test_feed_metrics_count_one_copy_of_a_posting():
+    scores, gains = np.array([0.9, 0.8, 0.1]), np.array([2, 2, 0])
+    assert ev.feed_metrics(scores, gains)["p@10"] == pytest.approx(2 / 3)
+    collapsed = ev.feed_metrics(scores, gains, _copies())
+    assert collapsed["p@10"] == 0.5 and collapsed["r_precision"] == 1.0
+
+
+def test_a_rated_copy_hides_its_twin_in_the_feedback_simulation():
+    assert ev._unrated(3, {0}, _copies()) == [2]
+    assert ev._unrated(3, {0}, ()) == [1, 2]
+
+
+def test_scoped_feed_drops_courses_but_not_postings_without_entry_evidence():
+    team = "You will build data pipelines in Python and SQL with our team in Cluj. " * 4
+    postings = [
+        posting(("py",), "junior", pid="grad", text="Data Analyst"),
+        posting(("py",), "junior", pid="course", text="Curs Consultant ERP"),
+        posting(("py",), "junior", pid="silent", text="Data Engineer"),
+    ]
+    postings = [
+        replace(postings[0], description=team + "Recent graduates are welcome."),
+        replace(postings[1], description="Acesta nu este un anunț de angajare. " + team),
+        replace(postings[2], description=team),
+    ]
+    # The course is out; the posting without entry evidence stays (the
+    # browse feed does not fail closed as DMs do).
+    assert ev.scoped_feed_pool(postings, ("intern", "junior")) == [0, 2]
+    assert ev.scoped_feed_pool(postings, ("any",)) == [0, 2]
+
+
+def test_dm_metrics_count_a_postings_copies_once():
+    """Two copies of one posting above the threshold are one DM, the
+    better-scoring copy (pipeline.deliver_pending)."""
+    models = [ev.as_job(p) for p in _copies()]
+    scores, pool = np.array([0.5, 0.6, 0.4]), np.array([True, True, True])
+    relevant = np.array([True, True, False])
+    plain = ev.dm_search_metrics(scores, pool, relevant, 0.3)
+    once = ev.dm_search_metrics(scores, pool, relevant, 0.3, models)
+    assert (plain["sent"], plain["relevant_in_pool"]) == (3, 2)
+    assert (once["sent"], once["relevant_in_pool"], once["recall"]) == (2, 1, 1.0)
+    assert ev.one_dm_per_posting(scores, pool, models).tolist() == [False, True, True]

@@ -160,9 +160,9 @@
      NaN,
      NaN
     ],
-    "pool": 60.333333333333336,
+    "pool": 19.333333333333332,
     "recall": 0.0,
-    "relevant_in_pool": 40.666666666666664,
+    "relevant_in_pool": 17.0,
     "searches": 9,
     "sent": 0.0,
     "starved": 9
@@ -196,9 +196,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": null,
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 62,
+     "relevant_in_pool": 26,
      "sent": 0,
      "starved": true
     },
@@ -212,9 +212,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": null,
-     "pool": 81,
+     "pool": 19,
      "recall": 0.0,
-     "relevant_in_pool": 51,
+     "relevant_in_pool": 16,
      "sent": 0,
      "starved": true
     },
@@ -245,9 +245,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": null,
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 62,
+     "relevant_in_pool": 26,
      "sent": 0,
      "starved": true
     },
@@ -261,9 +261,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": null,
-     "pool": 81,
+     "pool": 19,
      "recall": 0.0,
-     "relevant_in_pool": 51,
+     "relevant_in_pool": 16,
      "sent": 0,
      "starved": true
     },
@@ -294,9 +294,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": null,
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 62,
+     "relevant_in_pool": 26,
      "sent": 0,
      "starved": true
     },
@@ -310,9 +310,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": null,
-     "pool": 81,
+     "pool": 19,
      "recall": 0.0,
-     "relevant_in_pool": 51,
+     "relevant_in_pool": 16,
      "sent": 0,
      "starved": true
     },
@@ -343,121 +343,7 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-ml",
-     "pool": 90,
-     "recall": 0.0,
-     "relevant_in_pool": 9,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "ai engineer",
-     "levels": [
-      "junior"
-     ],
-     "low_n": false,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-ml",
-     "pool": 81,
-     "recall": 0.0,
-     "relevant_in_pool": 7,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "analist date",
-     "levels": [
-      "intern"
-     ],
-     "low_n": true,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-data-ro",
-     "pool": 17,
-     "recall": 0.0,
-     "relevant_in_pool": 2,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "analist date",
-     "levels": [
-      "intern",
-      "junior"
-     ],
-     "low_n": false,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-data-ro",
-     "pool": 155,
-     "recall": 0.0,
-     "relevant_in_pool": 12,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "analist date",
-     "levels": [
-      "junior"
-     ],
-     "low_n": false,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-data-ro",
-     "pool": 140,
-     "recall": 0.0,
-     "relevant_in_pool": 10,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "cloud engineer",
-     "levels": [
-      "intern"
-     ],
-     "low_n": true,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-ops",
-     "pool": 10,
-     "recall": 0.0,
-     "relevant_in_pool": 1,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "cloud engineer",
-     "levels": [
-      "intern",
-      "junior"
-     ],
-     "low_n": false,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-ops",
-     "pool": 90,
-     "recall": 0.0,
-     "relevant_in_pool": 9,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "cloud engineer",
-     "levels": [
-      "junior"
-     ],
-     "low_n": false,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-ops",
-     "pool": 81,
+     "pool": 29,
      "recall": 0.0,
      "relevant_in_pool": 8,
      "sent": 0,
@@ -465,32 +351,15 @@
     },
     {
      "generic": false,
-     "keyword": "tester software",
+     "keyword": "ai engineer",
      "levels": [
-      "intern"
-     ],
-     "low_n": true,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-qa-ro",
-     "pool": 10,
-     "recall": 0.0,
-     "relevant_in_pool": 1,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "tester software",
-     "levels": [
-      "intern",
       "junior"
      ],
      "low_n": false,
      "p@10": NaN,
      "p@5": NaN,
-     "persona": "h-qa-ro",
-     "pool": 90,
+     "persona": "h-ml",
+     "pool": 19,
      "recall": 0.0,
      "relevant_in_pool": 7,
      "sent": 0,
@@ -498,19 +367,150 @@
     },
     {
      "generic": false,
+     "keyword": "analist date",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-data-ro",
+     "pool": 17,
+     "recall": 0.0,
+     "relevant_in_pool": 2,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "analist date",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-data-ro",
+     "pool": 63,
+     "recall": 0.0,
+     "relevant_in_pool": 5,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "analist date",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-data-ro",
+     "pool": 46,
+     "recall": 0.0,
+     "relevant_in_pool": 3,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "cloud engineer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-ops",
+     "pool": 10,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "cloud engineer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-ops",
+     "pool": 29,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "cloud engineer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-ops",
+     "pool": 19,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "tester software",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-qa-ro",
+     "pool": 10,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "tester software",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-qa-ro",
+     "pool": 29,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
      "keyword": "tester software",
      "levels": [
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-qa-ro",
-     "pool": 81,
-     "recall": 0.0,
-     "relevant_in_pool": 6,
+     "pool": 19,
+     "recall": NaN,
+     "relevant_in_pool": 0,
      "sent": 0,
-     "starved": true
+     "starved": false
     },
     {
      "generic": false,
@@ -535,13 +535,13 @@
       "intern",
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-fe",
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 4,
+     "relevant_in_pool": 2,
      "sent": 0,
      "starved": true
     },
@@ -555,11 +555,11 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-fe",
-     "pool": 81,
-     "recall": 0.0,
-     "relevant_in_pool": 2,
+     "pool": 19,
+     "recall": NaN,
+     "relevant_in_pool": 0,
      "sent": 0,
-     "starved": true
+     "starved": false
     },
     {
      "generic": false,
@@ -588,9 +588,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-mob",
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 2,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -604,9 +604,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-mob",
-     "pool": 81,
+     "pool": 19,
      "recall": 0.0,
-     "relevant_in_pool": 2,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -633,13 +633,13 @@
       "intern",
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-emb",
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 4,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -653,11 +653,11 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-emb",
-     "pool": 81,
-     "recall": 0.0,
-     "relevant_in_pool": 2,
+     "pool": 19,
+     "recall": NaN,
+     "relevant_in_pool": 0,
      "sent": 0,
-     "starved": true
+     "starved": false
     },
     {
      "generic": false,
@@ -682,13 +682,13 @@
       "intern",
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-dotnet",
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 3,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -698,13 +698,13 @@
      "levels": [
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-dotnet",
-     "pool": 81,
+     "pool": 19,
      "recall": 0.0,
-     "relevant_in_pool": 3,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -731,13 +731,13 @@
       "intern",
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-java",
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 3,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -747,13 +747,13 @@
      "levels": [
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-java",
-     "pool": 81,
+     "pool": 19,
      "recall": 0.0,
-     "relevant_in_pool": 3,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -784,9 +784,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-cs-ro",
-     "pool": 155,
+     "pool": 63,
      "recall": 0.0,
-     "relevant_in_pool": 18,
+     "relevant_in_pool": 7,
      "sent": 0,
      "starved": true
     },
@@ -800,16 +800,16 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-cs-ro",
-     "pool": 140,
+     "pool": 46,
      "recall": 0.0,
-     "relevant_in_pool": 18,
+     "relevant_in_pool": 7,
      "sent": 0,
      "starved": true
     }
    ],
    "specific": {
-    "low_n": 14,
-    "no_relevant": 4,
+    "low_n": 24,
+    "no_relevant": 8,
     "p@10": NaN,
     "p@10_ci95": [
      NaN,
@@ -820,12 +820,12 @@
      NaN,
      NaN
     ],
-    "pool": 69.06666666666666,
+    "pool": 23.866666666666667,
     "recall": 0.0,
-    "relevant_in_pool": 4.633333333333334,
+    "relevant_in_pool": 1.8333333333333333,
     "searches": 30,
     "sent": 0.0,
-    "starved": 26
+    "starved": 22
    },
    "threshold": 0.42
   },
@@ -843,9 +843,9 @@
      NaN,
      NaN
     ],
-    "pool": 60.333333333333336,
+    "pool": 19.333333333333332,
     "recall": 0.0,
-    "relevant_in_pool": 40.666666666666664,
+    "relevant_in_pool": 17.0,
     "searches": 9,
     "sent": 0.0,
     "starved": 9
@@ -879,9 +879,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": null,
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 62,
+     "relevant_in_pool": 26,
      "sent": 0,
      "starved": true
     },
@@ -895,9 +895,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": null,
-     "pool": 81,
+     "pool": 19,
      "recall": 0.0,
-     "relevant_in_pool": 51,
+     "relevant_in_pool": 16,
      "sent": 0,
      "starved": true
     },
@@ -928,9 +928,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": null,
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 62,
+     "relevant_in_pool": 26,
      "sent": 0,
      "starved": true
     },
@@ -944,9 +944,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": null,
-     "pool": 81,
+     "pool": 19,
      "recall": 0.0,
-     "relevant_in_pool": 51,
+     "relevant_in_pool": 16,
      "sent": 0,
      "starved": true
     },
@@ -977,9 +977,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": null,
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 62,
+     "relevant_in_pool": 26,
      "sent": 0,
      "starved": true
     },
@@ -993,9 +993,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": null,
-     "pool": 81,
+     "pool": 19,
      "recall": 0.0,
-     "relevant_in_pool": 51,
+     "relevant_in_pool": 16,
      "sent": 0,
      "starved": true
     },
@@ -1026,121 +1026,7 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-ml",
-     "pool": 90,
-     "recall": 0.0,
-     "relevant_in_pool": 9,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "ai engineer",
-     "levels": [
-      "junior"
-     ],
-     "low_n": false,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-ml",
-     "pool": 81,
-     "recall": 0.0,
-     "relevant_in_pool": 7,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "analist date",
-     "levels": [
-      "intern"
-     ],
-     "low_n": true,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-data-ro",
-     "pool": 17,
-     "recall": 0.0,
-     "relevant_in_pool": 2,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "analist date",
-     "levels": [
-      "intern",
-      "junior"
-     ],
-     "low_n": false,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-data-ro",
-     "pool": 155,
-     "recall": 0.0,
-     "relevant_in_pool": 12,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "analist date",
-     "levels": [
-      "junior"
-     ],
-     "low_n": false,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-data-ro",
-     "pool": 140,
-     "recall": 0.0,
-     "relevant_in_pool": 10,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "cloud engineer",
-     "levels": [
-      "intern"
-     ],
-     "low_n": true,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-ops",
-     "pool": 10,
-     "recall": 0.0,
-     "relevant_in_pool": 1,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "cloud engineer",
-     "levels": [
-      "intern",
-      "junior"
-     ],
-     "low_n": false,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-ops",
-     "pool": 90,
-     "recall": 0.0,
-     "relevant_in_pool": 9,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "cloud engineer",
-     "levels": [
-      "junior"
-     ],
-     "low_n": false,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-ops",
-     "pool": 81,
+     "pool": 29,
      "recall": 0.0,
      "relevant_in_pool": 8,
      "sent": 0,
@@ -1148,32 +1034,15 @@
     },
     {
      "generic": false,
-     "keyword": "tester software",
+     "keyword": "ai engineer",
      "levels": [
-      "intern"
-     ],
-     "low_n": true,
-     "p@10": NaN,
-     "p@5": NaN,
-     "persona": "h-qa-ro",
-     "pool": 10,
-     "recall": 0.0,
-     "relevant_in_pool": 1,
-     "sent": 0,
-     "starved": true
-    },
-    {
-     "generic": false,
-     "keyword": "tester software",
-     "levels": [
-      "intern",
       "junior"
      ],
      "low_n": false,
      "p@10": NaN,
      "p@5": NaN,
-     "persona": "h-qa-ro",
-     "pool": 90,
+     "persona": "h-ml",
+     "pool": 19,
      "recall": 0.0,
      "relevant_in_pool": 7,
      "sent": 0,
@@ -1181,19 +1050,150 @@
     },
     {
      "generic": false,
+     "keyword": "analist date",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-data-ro",
+     "pool": 17,
+     "recall": 0.0,
+     "relevant_in_pool": 2,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "analist date",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-data-ro",
+     "pool": 63,
+     "recall": 0.0,
+     "relevant_in_pool": 5,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "analist date",
+     "levels": [
+      "junior"
+     ],
+     "low_n": false,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-data-ro",
+     "pool": 46,
+     "recall": 0.0,
+     "relevant_in_pool": 3,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "cloud engineer",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-ops",
+     "pool": 10,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "cloud engineer",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-ops",
+     "pool": 29,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "cloud engineer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-ops",
+     "pool": 19,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 0,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "tester software",
+     "levels": [
+      "intern"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-qa-ro",
+     "pool": 10,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
+     "keyword": "tester software",
+     "levels": [
+      "intern",
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": NaN,
+     "p@5": NaN,
+     "persona": "h-qa-ro",
+     "pool": 29,
+     "recall": 0.0,
+     "relevant_in_pool": 1,
+     "sent": 0,
+     "starved": true
+    },
+    {
+     "generic": false,
      "keyword": "tester software",
      "levels": [
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-qa-ro",
-     "pool": 81,
-     "recall": 0.0,
-     "relevant_in_pool": 6,
+     "pool": 19,
+     "recall": NaN,
+     "relevant_in_pool": 0,
      "sent": 0,
-     "starved": true
+     "starved": false
     },
     {
      "generic": false,
@@ -1218,13 +1218,13 @@
       "intern",
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-fe",
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 4,
+     "relevant_in_pool": 2,
      "sent": 0,
      "starved": true
     },
@@ -1238,11 +1238,11 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-fe",
-     "pool": 81,
-     "recall": 0.0,
-     "relevant_in_pool": 2,
+     "pool": 19,
+     "recall": NaN,
+     "relevant_in_pool": 0,
      "sent": 0,
-     "starved": true
+     "starved": false
     },
     {
      "generic": false,
@@ -1271,9 +1271,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-mob",
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 2,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -1287,9 +1287,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-mob",
-     "pool": 81,
+     "pool": 19,
      "recall": 0.0,
-     "relevant_in_pool": 2,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -1316,13 +1316,13 @@
       "intern",
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-emb",
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 4,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -1336,11 +1336,11 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-emb",
-     "pool": 81,
-     "recall": 0.0,
-     "relevant_in_pool": 2,
+     "pool": 19,
+     "recall": NaN,
+     "relevant_in_pool": 0,
      "sent": 0,
-     "starved": true
+     "starved": false
     },
     {
      "generic": false,
@@ -1365,13 +1365,13 @@
       "intern",
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-dotnet",
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 3,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -1381,13 +1381,13 @@
      "levels": [
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-dotnet",
-     "pool": 81,
+     "pool": 19,
      "recall": 0.0,
-     "relevant_in_pool": 3,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -1414,13 +1414,13 @@
       "intern",
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-java",
-     "pool": 90,
+     "pool": 29,
      "recall": 0.0,
-     "relevant_in_pool": 3,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -1430,13 +1430,13 @@
      "levels": [
       "junior"
      ],
-     "low_n": false,
+     "low_n": true,
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-java",
-     "pool": 81,
+     "pool": 19,
      "recall": 0.0,
-     "relevant_in_pool": 3,
+     "relevant_in_pool": 1,
      "sent": 0,
      "starved": true
     },
@@ -1467,9 +1467,9 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-cs-ro",
-     "pool": 155,
+     "pool": 63,
      "recall": 0.0,
-     "relevant_in_pool": 18,
+     "relevant_in_pool": 7,
      "sent": 0,
      "starved": true
     },
@@ -1483,16 +1483,16 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "h-cs-ro",
-     "pool": 140,
+     "pool": 46,
      "recall": 0.0,
-     "relevant_in_pool": 18,
+     "relevant_in_pool": 7,
      "sent": 0,
      "starved": true
     }
    ],
    "specific": {
-    "low_n": 14,
-    "no_relevant": 4,
+    "low_n": 24,
+    "no_relevant": 8,
     "p@10": NaN,
     "p@10_ci95": [
      NaN,
@@ -1503,12 +1503,12 @@
      NaN,
      NaN
     ],
-    "pool": 69.06666666666666,
+    "pool": 23.866666666666667,
     "recall": 0.0,
-    "relevant_in_pool": 4.633333333333334,
+    "relevant_in_pool": 1.8333333333333333,
     "searches": 30,
     "sent": 0.0,
-    "starved": 26
+    "starved": 22
    },
    "threshold": 0.34
   }
@@ -1962,135 +1962,26 @@
    "intern+junior": {
     "low_n": 1,
     "mean": {
-     "mrr": 0.5717857142857142,
-     "ndcg@10": 0.48733122670126444,
-     "p@10": 0.29000000000000004,
-     "r_precision": 0.27223370927318297
+     "mrr": 0.5768181818181818,
+     "ndcg@10": 0.4832485713600477,
+     "p@10": 0.28,
+     "r_precision": 0.2832539682539682
     },
     "measured": 10,
     "ndcg@10_ci95": [
-     0.3361044023264753,
-     0.6253077665388634
+     0.33397342435103405,
+     0.6157024644354029
     ],
     "no_relevant": 0,
     "per_persona": {
      "h-cs-ro": {
       "low_n": false,
       "mrr": 1.0,
-      "ndcg@10": 0.7226627130034509,
-      "p@10": 0.5,
-      "r_precision": 0.3157894736842105,
-      "relevant": 19,
-      "remaining": 155
-     },
-     "h-data-ro": {
-      "low_n": false,
-      "mrr": 1.0,
-      "ndcg@10": 0.3301376494471202,
-      "p@10": 0.2,
-      "r_precision": 0.1875,
-      "relevant": 16,
-      "remaining": 155
-     },
-     "h-dotnet": {
-      "low_n": false,
-      "mrr": 0.5,
-      "ndcg@10": 0.7028947676428203,
-      "p@10": 0.3,
-      "r_precision": 0.3333333333333333,
-      "relevant": 3,
-      "remaining": 155
-     },
-     "h-emb": {
-      "low_n": false,
-      "mrr": 1.0,
-      "ndcg@10": 0.8297197050122154,
+      "ndcg@10": 0.6427568939301112,
       "p@10": 0.4,
-      "r_precision": 0.6,
-      "relevant": 5,
-      "remaining": 155
-     },
-     "h-fe": {
-      "low_n": false,
-      "mrr": 0.3333333333333333,
-      "ndcg@10": 0.6192535805213808,
-      "p@10": 0.6,
-      "r_precision": 0.5,
-      "relevant": 8,
-      "remaining": 155
-     },
-     "h-java": {
-      "low_n": false,
-      "mrr": 1.0,
-      "ndcg@10": 0.5434364961945329,
-      "p@10": 0.2,
-      "r_precision": 0.2,
-      "relevant": 5,
-      "remaining": 155
-     },
-     "h-ml": {
-      "low_n": false,
-      "mrr": 0.2,
-      "ndcg@10": 0.3958215425622811,
-      "p@10": 0.3,
-      "r_precision": 0.3,
-      "relevant": 10,
-      "remaining": 155
-     },
-     "h-mob": {
-      "low_n": true,
-      "mrr": 0.3333333333333333,
-      "ndcg@10": 0.37546691807114196,
-      "p@10": 0.1,
-      "r_precision": 0.0,
-      "relevant": 2,
-      "remaining": 155
-     },
-     "h-ops": {
-      "low_n": false,
-      "mrr": 0.3333333333333333,
-      "ndcg@10": 0.35391889455770026,
-      "p@10": 0.3,
-      "r_precision": 0.2857142857142857,
-      "relevant": 14,
-      "remaining": 155
-     },
-     "h-qa-ro": {
-      "low_n": false,
-      "mrr": 0.017857142857142856,
-      "ndcg@10": 0.0,
-      "p@10": 0.0,
-      "r_precision": 0.0,
-      "relevant": 7,
-      "remaining": 155
-     }
-    },
-    "personas": 10,
-    "remaining": 155
-   },
-   "junior": {
-    "low_n": 1,
-    "mean": {
-     "mrr": 0.701851851851852,
-     "ndcg@10": 0.5353688440299557,
-     "p@10": 0.3,
-     "r_precision": 0.39798309877257243
-    },
-    "measured": 10,
-    "ndcg@10_ci95": [
-     0.37938996167129213,
-     0.6749143560517346
-    ],
-    "no_relevant": 0,
-    "per_persona": {
-     "h-cs-ro": {
-      "low_n": false,
-      "mrr": 1.0,
-      "ndcg@10": 0.7226627130034509,
-      "p@10": 0.5,
-      "r_precision": 0.3157894736842105,
-      "relevant": 19,
-      "remaining": 140
+      "r_precision": 0.2777777777777778,
+      "relevant": 18,
+      "remaining": 149
      },
      "h-data-ro": {
       "low_n": false,
@@ -2099,7 +1990,116 @@
       "p@10": 0.2,
       "r_precision": 0.21428571428571427,
       "relevant": 14,
-      "remaining": 140
+      "remaining": 149
+     },
+     "h-dotnet": {
+      "low_n": false,
+      "mrr": 0.5,
+      "ndcg@10": 0.7028947676428203,
+      "p@10": 0.3,
+      "r_precision": 0.3333333333333333,
+      "relevant": 3,
+      "remaining": 149
+     },
+     "h-emb": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.8297197050122154,
+      "p@10": 0.4,
+      "r_precision": 0.6,
+      "relevant": 5,
+      "remaining": 149
+     },
+     "h-fe": {
+      "low_n": false,
+      "mrr": 0.3333333333333333,
+      "ndcg@10": 0.6523094264819549,
+      "p@10": 0.6,
+      "r_precision": 0.5714285714285714,
+      "relevant": 7,
+      "remaining": 149
+     },
+     "h-java": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.5869318708545531,
+      "p@10": 0.2,
+      "r_precision": 0.25,
+      "relevant": 4,
+      "remaining": 149
+     },
+     "h-ml": {
+      "low_n": false,
+      "mrr": 0.25,
+      "ndcg@10": 0.35834958760285973,
+      "p@10": 0.3,
+      "r_precision": 0.3,
+      "relevant": 10,
+      "remaining": 149
+     },
+     "h-mob": {
+      "low_n": true,
+      "mrr": 0.3333333333333333,
+      "ndcg@10": 0.37546691807114196,
+      "p@10": 0.1,
+      "r_precision": 0.0,
+      "relevant": 2,
+      "remaining": 149
+     },
+     "h-ops": {
+      "low_n": false,
+      "mrr": 0.3333333333333333,
+      "ndcg@10": 0.35391889455770026,
+      "p@10": 0.3,
+      "r_precision": 0.2857142857142857,
+      "relevant": 14,
+      "remaining": 149
+     },
+     "h-qa-ro": {
+      "low_n": false,
+      "mrr": 0.01818181818181818,
+      "ndcg@10": 0.0,
+      "p@10": 0.0,
+      "r_precision": 0.0,
+      "relevant": 7,
+      "remaining": 149
+     }
+    },
+    "personas": 10,
+    "remaining": 149
+   },
+   "junior": {
+    "low_n": 1,
+    "mean": {
+     "mrr": 0.7519230769230769,
+     "ndcg@10": 0.5391104542319871,
+     "p@10": 0.27999999999999997,
+     "r_precision": 0.402991452991453
+    },
+    "measured": 10,
+    "ndcg@10_ci95": [
+     0.3858453136691416,
+     0.6738514250219596
+    ],
+    "no_relevant": 0,
+    "per_persona": {
+     "h-cs-ro": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.6427568939301112,
+      "p@10": 0.4,
+      "r_precision": 0.2777777777777778,
+      "relevant": 18,
+      "remaining": 132
+     },
+     "h-data-ro": {
+      "low_n": false,
+      "mrr": 1.0,
+      "ndcg@10": 0.3301376494471202,
+      "p@10": 0.2,
+      "r_precision": 0.25,
+      "relevant": 12,
+      "remaining": 132
      },
      "h-dotnet": {
       "low_n": false,
@@ -2108,7 +2108,7 @@
       "p@10": 0.3,
       "r_precision": 0.3333333333333333,
       "relevant": 3,
-      "remaining": 140
+      "remaining": 132
      },
      "h-emb": {
       "low_n": false,
@@ -2117,34 +2117,34 @@
       "p@10": 0.3,
       "r_precision": 0.75,
       "relevant": 4,
-      "remaining": 140
+      "remaining": 132
      },
      "h-fe": {
       "low_n": false,
       "mrr": 0.5,
-      "ndcg@10": 0.768784032340151,
-      "p@10": 0.6,
-      "r_precision": 0.7142857142857143,
-      "relevant": 7,
-      "remaining": 140
+      "ndcg@10": 0.7558002146486588,
+      "p@10": 0.5,
+      "r_precision": 0.6666666666666666,
+      "relevant": 6,
+      "remaining": 132
      },
      "h-java": {
       "low_n": false,
       "mrr": 1.0,
-      "ndcg@10": 0.5481934733811535,
+      "ndcg@10": 0.5933169293317492,
       "p@10": 0.3,
-      "r_precision": 0.4,
-      "relevant": 5,
-      "remaining": 140
+      "r_precision": 0.5,
+      "relevant": 4,
+      "remaining": 132
      },
      "h-ml": {
       "low_n": false,
-      "mrr": 0.5,
-      "ndcg@10": 0.5429417791260616,
+      "mrr": 1.0,
+      "ndcg@10": 0.6281240619606123,
       "p@10": 0.4,
       "r_precision": 0.4444444444444444,
       "relevant": 9,
-      "remaining": 140
+      "remaining": 132
      },
      "h-mob": {
       "low_n": true,
@@ -2153,7 +2153,7 @@
       "p@10": 0.1,
       "r_precision": 0.5,
       "relevant": 2,
-      "remaining": 140
+      "remaining": 132
      },
      "h-ops": {
       "low_n": false,
@@ -2162,20 +2162,20 @@
       "p@10": 0.3,
       "r_precision": 0.3076923076923077,
       "relevant": 13,
-      "remaining": 140
+      "remaining": 132
      },
      "h-qa-ro": {
       "low_n": false,
-      "mrr": 0.018518518518518517,
+      "mrr": 0.019230769230769232,
       "ndcg@10": 0.0,
       "p@10": 0.0,
       "r_precision": 0.0,
       "relevant": 6,
-      "remaining": 140
+      "remaining": 132
      }
     },
     "personas": 10,
-    "remaining": 140
+    "remaining": 132
    },
    "locations_applied": false
   }
@@ -2255,12 +2255,12 @@
   },
   {
    "delta_ci95": [
-    0.026653024324844152,
-    0.27804407963924066
+    0.03475121066567508,
+    0.27823341241084065
    ],
    "dislike_weight": 0.5,
    "like_weight": 0.5,
-   "ndcg@10_after": 0.3995164796959809,
+   "ndcg@10_after": 0.4048560334169795,
    "ndcg@10_before": 0.2407422160132498,
    "personas": 10,
    "rounds": 1
@@ -2279,36 +2279,36 @@
   },
   {
    "delta_ci95": [
-    -0.031260689906081315,
-    0.1812952944663949
+    -0.028667524124910495,
+    0.1838301929316455
    ],
    "dislike_weight": 0.0,
    "like_weight": 0.3,
-   "ndcg@10_after": 0.3098022897200023,
+   "ndcg@10_after": 0.3120107638351486,
    "ndcg@10_before": 0.2407422160132498,
    "personas": 10,
    "rounds": 1
   },
   {
    "delta_ci95": [
-    -0.03590355738121842,
-    0.05732242355166344
+    -0.046018332710345666,
+    0.012713460320047316
    ],
    "dislike_weight": 0.0,
    "like_weight": 0.3,
-   "ndcg@10_after": 0.1196321979075264,
-   "ndcg@10_before": 0.11080255022088424,
+   "ndcg@10_after": 0.08938164020117606,
+   "ndcg@10_before": 0.10373357375433406,
    "personas": 9,
    "rounds": 3
   },
   {
    "delta_ci95": [
-    -0.00965575692177945,
-    0.21839530559518303
+    0.0019025280140552618,
+    0.22198274095456969
    ],
    "dislike_weight": 0.15,
    "like_weight": 0.5,
-   "ndcg@10_after": 0.34617080187997884,
+   "ndcg@10_after": 0.3516061964751317,
    "ndcg@10_before": 0.2407422160132498,
    "personas": 10,
    "rounds": 1
@@ -2316,12 +2316,12 @@
   {
    "delta_ci95": [
     -0.013140793170112653,
-    0.06095981856392535
+    0.06246058413020588
    ],
    "dislike_weight": 0.15,
    "like_weight": 0.5,
-   "ndcg@10_after": 0.1250362785914923,
-   "ndcg@10_before": 0.10227187744165075,
+   "ndcg@10_after": 0.12331683063037789,
+   "ndcg@10_before": 0.0999155519528007,
    "personas": 9,
    "rounds": 3
   }
@@ -2332,5 +2332,5 @@
  "personas": 10,
  "personas_sha256": "c2013bb8bf279066",
  "postings": 261,
- "postings_sha256": "53622c246fd82286"
+ "postings_sha256": "97cddc3e4186cabe"
 }

@@ -160,9 +160,9 @@
      1.0,
      1.0
     ],
-    "pool": 9.333333333333334,
-    "recall": 0.25641025641025644,
-    "relevant_in_pool": 8.666666666666666,
+    "pool": 8.0,
+    "recall": 0.30303030303030304,
+    "relevant_in_pool": 7.333333333333333,
     "searches": 9,
     "sent": 2.2222222222222223,
     "starved": 0
@@ -196,9 +196,9 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": null,
-     "pool": 14,
-     "recall": 0.23076923076923078,
-     "relevant_in_pool": 13,
+     "pool": 12,
+     "recall": 0.2727272727272727,
+     "relevant_in_pool": 11,
      "sent": 3,
      "starved": false
     },
@@ -212,9 +212,9 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": null,
-     "pool": 14,
-     "recall": 0.07692307692307693,
-     "relevant_in_pool": 13,
+     "pool": 12,
+     "recall": 0.09090909090909091,
+     "relevant_in_pool": 11,
      "sent": 1,
      "starved": false
     },
@@ -245,9 +245,9 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": null,
-     "pool": 14,
-     "recall": 0.38461538461538464,
-     "relevant_in_pool": 13,
+     "pool": 12,
+     "recall": 0.45454545454545453,
+     "relevant_in_pool": 11,
      "sent": 5,
      "starved": false
     },
@@ -261,9 +261,9 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": null,
-     "pool": 14,
-     "recall": 0.3076923076923077,
-     "relevant_in_pool": 13,
+     "pool": 12,
+     "recall": 0.36363636363636365,
+     "relevant_in_pool": 11,
      "sent": 4,
      "starved": false
     },
@@ -294,9 +294,9 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": null,
-     "pool": 14,
-     "recall": 0.3076923076923077,
-     "relevant_in_pool": 13,
+     "pool": 12,
+     "recall": 0.36363636363636365,
+     "relevant_in_pool": 11,
      "sent": 4,
      "starved": false
     },
@@ -310,9 +310,9 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": null,
-     "pool": 14,
-     "recall": 0.23076923076923078,
-     "relevant_in_pool": 13,
+     "pool": 12,
+     "recall": 0.2727272727272727,
+     "relevant_in_pool": 11,
      "sent": 3,
      "starved": false
     },
@@ -343,7 +343,7 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": "py",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 2,
      "sent": 2,
@@ -359,7 +359,7 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": "py",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 2,
      "sent": 2,
@@ -392,7 +392,7 @@
      "p@10": 0.6666666666666666,
      "p@5": 0.6666666666666666,
      "persona": "py-ro",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 2,
      "sent": 3,
@@ -408,7 +408,7 @@
      "p@10": 0.5,
      "p@5": 0.5,
      "persona": "py-ro",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 2,
      "sent": 4,
@@ -441,7 +441,7 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "java",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
      "sent": 1,
@@ -457,7 +457,7 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "java",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
      "sent": 1,
@@ -490,7 +490,7 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": "dotnet",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 1,
      "sent": 1,
@@ -503,13 +503,13 @@
       "junior"
      ],
      "low_n": true,
-     "p@10": 0.25,
-     "p@5": 0.25,
+     "p@10": 0.3333333333333333,
+     "p@5": 0.3333333333333333,
      "persona": "dotnet",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 1,
-     "sent": 4,
+     "sent": 3,
      "starved": false
     },
     {
@@ -539,7 +539,23 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "fe",
-     "pool": 14,
+     "pool": 12,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 4,
+     "starved": false
+    },
+    {
+     "generic": false,
+     "keyword": "frontend developer",
+     "levels": [
+      "junior"
+     ],
+     "low_n": true,
+     "p@10": 0.0,
+     "p@5": 0.0,
+     "persona": "fe",
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
      "sent": 5,
@@ -547,22 +563,6 @@
     },
     {
      "generic": false,
-     "keyword": "frontend developer",
-     "levels": [
-      "junior"
-     ],
-     "low_n": true,
-     "p@10": 0.0,
-     "p@5": 0.0,
-     "persona": "fe",
-     "pool": 14,
-     "recall": NaN,
-     "relevant_in_pool": 0,
-     "sent": 6,
-     "starved": false
-    },
-    {
-     "generic": false,
      "keyword": "programator front-end",
      "levels": [
       "intern"
@@ -588,10 +588,10 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "fe-ro",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
-     "sent": 11,
+     "sent": 9,
      "starved": false
     },
     {
@@ -604,10 +604,10 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "fe-ro",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
-     "sent": 10,
+     "sent": 8,
      "starved": false
     },
     {
@@ -634,13 +634,13 @@
       "junior"
      ],
      "low_n": true,
-     "p@10": 0.25,
-     "p@5": 0.25,
+     "p@10": 0.0,
+     "p@5": 0.0,
      "persona": "mob",
-     "pool": 14,
-     "recall": 1.0,
-     "relevant_in_pool": 1,
-     "sent": 4,
+     "pool": 12,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 3,
      "starved": false
     },
     {
@@ -650,13 +650,13 @@
       "junior"
      ],
      "low_n": true,
-     "p@10": 0.5,
-     "p@5": 0.5,
+     "p@10": 0.0,
+     "p@5": 0.0,
      "persona": "mob",
-     "pool": 14,
-     "recall": 1.0,
-     "relevant_in_pool": 1,
-     "sent": 2,
+     "pool": 12,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 1,
      "starved": false
     },
     {
@@ -686,7 +686,7 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "ml",
-     "pool": 14,
+     "pool": 12,
      "recall": 0.0,
      "relevant_in_pool": 1,
      "sent": 8,
@@ -702,7 +702,7 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "ml",
-     "pool": 14,
+     "pool": 12,
      "recall": 0.0,
      "relevant_in_pool": 1,
      "sent": 8,
@@ -735,7 +735,7 @@
      "p@10": 0.25,
      "p@5": 0.25,
      "persona": "data",
-     "pool": 14,
+     "pool": 12,
      "recall": 0.5,
      "relevant_in_pool": 2,
      "sent": 4,
@@ -751,7 +751,7 @@
      "p@10": 0.25,
      "p@5": 0.25,
      "persona": "data",
-     "pool": 14,
+     "pool": 12,
      "recall": 0.5,
      "relevant_in_pool": 2,
      "sent": 4,
@@ -781,13 +781,13 @@
       "junior"
      ],
      "low_n": true,
-     "p@10": 0.16666666666666666,
+     "p@10": 0.2,
      "p@5": 0.2,
      "persona": "emb",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 1,
-     "sent": 6,
+     "sent": 5,
      "starved": false
     },
     {
@@ -797,13 +797,13 @@
       "junior"
      ],
      "low_n": true,
-     "p@10": 0.16666666666666666,
+     "p@10": 0.2,
      "p@5": 0.2,
      "persona": "emb",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 1,
-     "sent": 6,
+     "sent": 5,
      "starved": false
     },
     {
@@ -833,10 +833,10 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "ops",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
-     "sent": 6,
+     "sent": 5,
      "starved": false
     },
     {
@@ -849,10 +849,10 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "ops",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
-     "sent": 6,
+     "sent": 5,
      "starved": false
     },
     {
@@ -882,7 +882,7 @@
      "p@10": 0.42857142857142855,
      "p@5": 0.6,
      "persona": "qa",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 3,
      "sent": 7,
@@ -898,7 +898,7 @@
      "p@10": 0.42857142857142855,
      "p@5": 0.6,
      "persona": "qa",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 3,
      "sent": 7,
@@ -931,7 +931,7 @@
      "p@10": 0.1,
      "p@5": 0.2,
      "persona": "acc-ro",
-     "pool": 51,
+     "pool": 47,
      "recall": 0.375,
      "relevant_in_pool": 8,
      "sent": 24,
@@ -947,7 +947,7 @@
      "p@10": 0.1,
      "p@5": 0.2,
      "persona": "acc-ro",
-     "pool": 45,
+     "pool": 41,
      "recall": 0.5714285714285714,
      "relevant_in_pool": 7,
      "sent": 23,
@@ -980,7 +980,7 @@
      "p@10": 0.6,
      "p@5": 0.8,
      "persona": "cs",
-     "pool": 51,
+     "pool": 47,
      "recall": 1.0,
      "relevant_in_pool": 6,
      "sent": 22,
@@ -996,7 +996,7 @@
      "p@10": 0.3,
      "p@5": 0.6,
      "persona": "cs",
-     "pool": 45,
+     "pool": 41,
      "recall": 1.0,
      "relevant_in_pool": 3,
      "sent": 19,
@@ -1005,22 +1005,22 @@
    ],
    "specific": {
     "low_n": 36,
-    "no_relevant": 20,
-    "p@10": 0.29023809523809524,
+    "no_relevant": 22,
+    "p@10": 0.2702380952380952,
     "p@10_ci95": [
-     0.17982738095238093,
-     0.41232341269841255
+     0.15815674603174598,
+     0.39715079365079353
     ],
-    "p@5": 0.32722222222222225,
+    "p@5": 0.305,
     "p@5_ci95": [
-     0.2066388888888889,
-     0.4527777777777777
+     0.18608333333333338,
+     0.4350138888888888
     ],
-    "pool": 12.857142857142858,
-    "recall": 0.7702922077922078,
-    "relevant_in_pool": 1.2857142857142858,
+    "pool": 11.333333333333334,
+    "recall": 0.7473214285714286,
+    "relevant_in_pool": 1.2380952380952381,
     "searches": 42,
-    "sent": 5.071428571428571,
+    "sent": 4.761904761904762,
     "starved": 3
    },
    "threshold": 0.42
@@ -1039,9 +1039,9 @@
      1.0,
      1.0
     ],
-    "pool": 9.333333333333334,
-    "recall": 0.1282051282051282,
-    "relevant_in_pool": 8.666666666666666,
+    "pool": 8.0,
+    "recall": 0.15151515151515152,
+    "relevant_in_pool": 7.333333333333333,
     "searches": 9,
     "sent": 1.1111111111111112,
     "starved": 0
@@ -1075,9 +1075,9 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": null,
-     "pool": 14,
-     "recall": 0.07692307692307693,
-     "relevant_in_pool": 13,
+     "pool": 12,
+     "recall": 0.09090909090909091,
+     "relevant_in_pool": 11,
      "sent": 1,
      "starved": false
     },
@@ -1091,9 +1091,9 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": null,
-     "pool": 14,
-     "recall": 0.07692307692307693,
-     "relevant_in_pool": 13,
+     "pool": 12,
+     "recall": 0.09090909090909091,
+     "relevant_in_pool": 11,
      "sent": 1,
      "starved": false
     },
@@ -1124,9 +1124,9 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": null,
-     "pool": 14,
-     "recall": 0.15384615384615385,
-     "relevant_in_pool": 13,
+     "pool": 12,
+     "recall": 0.18181818181818182,
+     "relevant_in_pool": 11,
      "sent": 2,
      "starved": false
     },
@@ -1140,9 +1140,9 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": null,
-     "pool": 14,
-     "recall": 0.15384615384615385,
-     "relevant_in_pool": 13,
+     "pool": 12,
+     "recall": 0.18181818181818182,
+     "relevant_in_pool": 11,
      "sent": 2,
      "starved": false
     },
@@ -1173,9 +1173,9 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": null,
-     "pool": 14,
-     "recall": 0.23076923076923078,
-     "relevant_in_pool": 13,
+     "pool": 12,
+     "recall": 0.2727272727272727,
+     "relevant_in_pool": 11,
      "sent": 3,
      "starved": false
     },
@@ -1189,9 +1189,9 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": null,
-     "pool": 14,
-     "recall": 0.07692307692307693,
-     "relevant_in_pool": 13,
+     "pool": 12,
+     "recall": 0.09090909090909091,
+     "relevant_in_pool": 11,
      "sent": 1,
      "starved": false
     },
@@ -1222,7 +1222,7 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": "py",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 2,
      "sent": 2,
@@ -1238,7 +1238,7 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": "py",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 2,
      "sent": 2,
@@ -1271,7 +1271,7 @@
      "p@10": 0.6666666666666666,
      "p@5": 0.6666666666666666,
      "persona": "py-ro",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 2,
      "sent": 3,
@@ -1287,7 +1287,7 @@
      "p@10": 0.6666666666666666,
      "p@5": 0.6666666666666666,
      "persona": "py-ro",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 2,
      "sent": 3,
@@ -1320,7 +1320,7 @@
      "p@10": NaN,
      "p@5": NaN,
      "persona": "java",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
      "sent": 0,
@@ -1336,7 +1336,7 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "java",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
      "sent": 1,
@@ -1369,7 +1369,7 @@
      "p@10": 1.0,
      "p@5": 1.0,
      "persona": "dotnet",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 1,
      "sent": 1,
@@ -1382,13 +1382,13 @@
       "junior"
      ],
      "low_n": true,
-     "p@10": 0.5,
-     "p@5": 0.5,
+     "p@10": 1.0,
+     "p@5": 1.0,
      "persona": "dotnet",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 1,
-     "sent": 2,
+     "sent": 1,
      "starved": false
     },
     {
@@ -1418,10 +1418,10 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "fe",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
-     "sent": 5,
+     "sent": 4,
      "starved": false
     },
     {
@@ -1434,10 +1434,10 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "fe",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
-     "sent": 5,
+     "sent": 3,
      "starved": false
     },
     {
@@ -1467,10 +1467,10 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "fe-ro",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
-     "sent": 11,
+     "sent": 9,
      "starved": false
     },
     {
@@ -1483,10 +1483,10 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "fe-ro",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
-     "sent": 10,
+     "sent": 8,
      "starved": false
     },
     {
@@ -1513,13 +1513,13 @@
       "junior"
      ],
      "low_n": true,
-     "p@10": 0.5,
-     "p@5": 0.5,
+     "p@10": 0.0,
+     "p@5": 0.0,
      "persona": "mob",
-     "pool": 14,
-     "recall": 1.0,
-     "relevant_in_pool": 1,
-     "sent": 2,
+     "pool": 12,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 1,
      "starved": false
     },
     {
@@ -1529,13 +1529,13 @@
       "junior"
      ],
      "low_n": true,
-     "p@10": 0.5,
-     "p@5": 0.5,
+     "p@10": 0.0,
+     "p@5": 0.0,
      "persona": "mob",
-     "pool": 14,
-     "recall": 1.0,
-     "relevant_in_pool": 1,
-     "sent": 2,
+     "pool": 12,
+     "recall": NaN,
+     "relevant_in_pool": 0,
+     "sent": 1,
      "starved": false
     },
     {
@@ -1565,7 +1565,7 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "ml",
-     "pool": 14,
+     "pool": 12,
      "recall": 0.0,
      "relevant_in_pool": 1,
      "sent": 9,
@@ -1581,7 +1581,7 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "ml",
-     "pool": 14,
+     "pool": 12,
      "recall": 0.0,
      "relevant_in_pool": 1,
      "sent": 8,
@@ -1614,7 +1614,7 @@
      "p@10": 0.6666666666666666,
      "p@5": 0.6666666666666666,
      "persona": "data",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 2,
      "sent": 3,
@@ -1630,7 +1630,7 @@
      "p@10": 0.4,
      "p@5": 0.4,
      "persona": "data",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 2,
      "sent": 5,
@@ -1660,13 +1660,13 @@
       "junior"
      ],
      "low_n": true,
-     "p@10": 0.16666666666666666,
+     "p@10": 0.2,
      "p@5": 0.2,
      "persona": "emb",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 1,
-     "sent": 6,
+     "sent": 5,
      "starved": false
     },
     {
@@ -1676,13 +1676,13 @@
       "junior"
      ],
      "low_n": true,
-     "p@10": 0.2,
-     "p@5": 0.2,
+     "p@10": 0.25,
+     "p@5": 0.25,
      "persona": "emb",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 1,
-     "sent": 5,
+     "sent": 4,
      "starved": false
     },
     {
@@ -1712,10 +1712,10 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "ops",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
-     "sent": 7,
+     "sent": 6,
      "starved": false
     },
     {
@@ -1728,10 +1728,10 @@
      "p@10": 0.0,
      "p@5": 0.0,
      "persona": "ops",
-     "pool": 14,
+     "pool": 12,
      "recall": NaN,
      "relevant_in_pool": 0,
-     "sent": 7,
+     "sent": 6,
      "starved": false
     },
     {
@@ -1761,7 +1761,7 @@
      "p@10": 0.5,
      "p@5": 0.6,
      "persona": "qa",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 3,
      "sent": 6,
@@ -1777,7 +1777,7 @@
      "p@10": 0.5,
      "p@5": 0.6,
      "persona": "qa",
-     "pool": 14,
+     "pool": 12,
      "recall": 1.0,
      "relevant_in_pool": 3,
      "sent": 6,
@@ -1810,7 +1810,7 @@
      "p@10": 0.2,
      "p@5": 0.2,
      "persona": "acc-ro",
-     "pool": 51,
+     "pool": 47,
      "recall": 0.375,
      "relevant_in_pool": 8,
      "sent": 22,
@@ -1826,7 +1826,7 @@
      "p@10": 0.2,
      "p@5": 0.2,
      "persona": "acc-ro",
-     "pool": 45,
+     "pool": 41,
      "recall": 0.5714285714285714,
      "relevant_in_pool": 7,
      "sent": 22,
@@ -1859,7 +1859,7 @@
      "p@10": 0.6,
      "p@5": 0.8,
      "persona": "cs",
-     "pool": 51,
+     "pool": 47,
      "recall": 1.0,
      "relevant_in_pool": 6,
      "sent": 18,
@@ -1875,7 +1875,7 @@
      "p@10": 0.3,
      "p@5": 0.6,
      "persona": "cs",
-     "pool": 45,
+     "pool": 41,
      "recall": 1.0,
      "relevant_in_pool": 3,
      "sent": 16,
@@ -1884,22 +1884,22 @@
    ],
    "specific": {
     "low_n": 36,
-    "no_relevant": 20,
-    "p@10": 0.3557471264367815,
+    "no_relevant": 22,
+    "p@10": 0.34137931034482755,
     "p@10_ci95": [
-     0.24020114942528736,
-     0.4810488505747125
+     0.21033045977011497,
+     0.4787643678160918
     ],
-    "p@5": 0.3810344827586207,
+    "p@5": 0.3655172413793103,
     "p@5_ci95": [
-     0.2586063218390805,
-     0.506896551724138
+     0.22698275862068965,
+     0.5069109195402297
     ],
-    "pool": 12.857142857142858,
-    "recall": 0.8157467532467532,
-    "relevant_in_pool": 1.2857142857142858,
+    "pool": 11.333333333333334,
+    "recall": 0.7973214285714285,
+    "relevant_in_pool": 1.2380952380952381,
     "searches": 42,
-    "sent": 4.666666666666667,
+    "sent": 4.333333333333333,
     "starved": 3
    },
    "threshold": 0.34
@@ -2050,10 +2050,10 @@
  "feed": {
   "by_cv_lang": {
    "en": {
-    "mrr": 0.8727272727272727,
-    "ndcg@10": 0.8083916937079696,
-    "p@10": 0.45454545454545464,
-    "r_precision": 0.6343434343434343
+    "mrr": 0.8737373737373737,
+    "ndcg@10": 0.8033127112758794,
+    "p@10": 0.4454545454545455,
+    "r_precision": 0.6434343434343434
    },
    "ro": {
     "mrr": 0.5370370370370371,
@@ -2064,11 +2064,11 @@
   },
   "by_posting_lang": {
    "en": {
-    "mrr": 0.9,
-    "ndcg@10": 0.7895338278234523,
-    "p@10": 0.42857142857142866,
+    "mrr": 0.9007936507936508,
+    "ndcg@10": 0.7855431987696672,
+    "p@10": 0.42142857142857143,
     "personas": 14,
-    "r_precision": 0.594047619047619
+    "r_precision": 0.6011904761904762
    },
    "ro": {
     "mrr": 0.8125,
@@ -2079,14 +2079,14 @@
    }
   },
   "mean": {
-   "mrr": 0.8007936507936508,
-   "ndcg@10": 0.7590537476977134,
-   "p@10": 0.42857142857142866,
-   "r_precision": 0.5465329991645781
+   "mrr": 0.8015873015873015,
+   "ndcg@10": 0.7550631186439283,
+   "p@10": 0.42142857142857143,
+   "r_precision": 0.5536758563074352
   },
   "ndcg@10_ci95": [
-   0.650972371328382,
-   0.8583605077601899
+   0.6397965285261211,
+   0.8565831797506712
   ],
   "per_persona": {
    "acc-ro": {
@@ -2132,8 +2132,8 @@
     "r_precision": 0.2
    },
    "java": {
-    "mrr": 0.1,
-    "ndcg@10": 0.4849205472194483,
+    "mrr": 0.1111111111111111,
+    "ndcg@10": 0.43826892773190945,
     "p@10": 0.1,
     "r_precision": 0.0
    },
@@ -2145,9 +2145,9 @@
    },
    "mob": {
     "mrr": 1.0,
-    "ndcg@10": 0.866750256763968,
+    "ndcg@10": 0.9258936567941141,
     "p@10": 0.4,
-    "r_precision": 0.6666666666666666
+    "r_precision": 0.8
    },
    "ops": {
     "mrr": 1.0,
@@ -2169,22 +2169,22 @@
    },
    "qa": {
     "mrr": 1.0,
-    "ndcg@10": 0.955830517697074,
-    "p@10": 0.9,
-    "r_precision": 0.8333333333333334
+    "ndcg@10": 0.8874699304014749,
+    "p@10": 0.8,
+    "r_precision": 0.8
    }
   }
  },
  "feed_cosine": {
   "by_cv_lang": {
    "en": {
-    "mrr": 0.5281778827233373,
-    "ndcg@10": 0.5778368354706603,
-    "p@10": 0.33636363636363636,
-    "r_precision": 0.30606060606060603
+    "mrr": 0.5311688311688312,
+    "ndcg@10": 0.5884196714509469,
+    "p@10": 0.34545454545454546,
+    "r_precision": 0.2924242424242424
    },
    "ro": {
-    "mrr": 0.5175438596491228,
+    "mrr": 0.5185185185185185,
     "ndcg@10": 0.4451883996575459,
     "p@10": 0.16666666666666666,
     "r_precision": 0.17192982456140352
@@ -2192,11 +2192,11 @@
   },
   "by_posting_lang": {
    "en": {
-    "mrr": 0.5325706039991754,
-    "ndcg@10": 0.5573396325856579,
-    "p@10": 0.3071428571428571,
+    "mrr": 0.5359126984126984,
+    "ndcg@10": 0.5661332667334417,
+    "p@10": 0.31428571428571433,
     "personas": 14,
-    "r_precision": 0.31309523809523804
+    "r_precision": 0.30238095238095236
    },
    "ro": {
     "mrr": 0.78125,
@@ -2207,14 +2207,14 @@
    }
   },
   "mean": {
-   "mrr": 0.5258991634931485,
-   "ndcg@10": 0.5494121706535643,
-   "p@10": 0.3,
-   "r_precision": 0.27731829573934835
+   "mrr": 0.5284580498866214,
+   "ndcg@10": 0.5577272560666466,
+   "p@10": 0.3071428571428571,
+   "r_precision": 0.2666040100250627
   },
   "ndcg@10_ci95": [
-   0.44915525518509186,
-   0.6469641335318276
+   0.4600585032018523,
+   0.6525559010127195
   ],
   "per_persona": {
    "acc-ro": {
@@ -2243,7 +2243,7 @@
    },
    "emb": {
     "mrr": 0.5,
-    "ndcg@10": 0.6335145456971479,
+    "ndcg@10": 0.639875027390424,
     "p@10": 0.3,
     "r_precision": 0.5
    },
@@ -2260,9 +2260,9 @@
     "r_precision": 0.2
    },
    "java": {
-    "mrr": 0.09090909090909091,
-    "ndcg@10": 0.34860711891402774,
-    "p@10": 0.0,
+    "mrr": 0.1,
+    "ndcg@10": 0.39903292401505336,
+    "p@10": 0.1,
     "r_precision": 0.0
    },
    "ml": {
@@ -2273,9 +2273,9 @@
    },
    "mob": {
     "mrr": 0.3333333333333333,
-    "ndcg@10": 0.6667475475924435,
+    "ndcg@10": 0.7122436021002385,
     "p@10": 0.4,
-    "r_precision": 0.3333333333333333
+    "r_precision": 0.2
    },
    "ops": {
     "mrr": 1.0,
@@ -2284,13 +2284,13 @@
     "r_precision": 0.3333333333333333
    },
    "py": {
-    "mrr": 0.14285714285714285,
-    "ndcg@10": 0.3038944178108714,
+    "mrr": 0.16666666666666666,
+    "ndcg@10": 0.31802327229192634,
     "p@10": 0.1,
     "r_precision": 0.0
    },
    "py-ro": {
-    "mrr": 0.05263157894736842,
+    "mrr": 0.05555555555555555,
     "ndcg@10": 0.339472940667728,
     "p@10": 0.0,
     "r_precision": 0.0
@@ -2299,7 +2299,7 @@
     "mrr": 0.5,
     "ndcg@10": 0.8532721558012798,
     "p@10": 0.9,
-    "r_precision": 0.9166666666666666
+    "r_precision": 0.9
    }
   }
  },
@@ -3094,8 +3094,8 @@
    ],
    "dislike_weight": 0.0,
    "like_weight": 0.0,
-   "ndcg@10_after": 0.3523344549536528,
-   "ndcg@10_before": 0.3523344549536528,
+   "ndcg@10_after": 0.33593244417262563,
+   "ndcg@10_before": 0.33593244417262563,
    "personas": 11,
    "rounds": 1
   },
@@ -3106,128 +3106,128 @@
    ],
    "dislike_weight": 0.0,
    "like_weight": 0.0,
-   "ndcg@10_after": 0.10162229601372752,
-   "ndcg@10_before": 0.10162229601372752,
+   "ndcg@10_after": 0.09069065854320424,
+   "ndcg@10_before": 0.09069065854320424,
    "personas": 3,
    "rounds": 3
   },
   {
    "delta_ci95": [
-    0.009688306082880935,
-    0.12105105481398022
+    0.021971428721154627,
+    0.13440171188074088
    ],
    "dislike_weight": 0.15,
    "like_weight": 0.15,
-   "ndcg@10_after": 0.41106686571219875,
-   "ndcg@10_before": 0.3523344549536528,
+   "ndcg@10_after": 0.4092885252869484,
+   "ndcg@10_before": 0.33593244417262563,
    "personas": 11,
    "rounds": 1
   },
   {
    "delta_ci95": [
     0.0021204028053079665,
-    0.14056446074822654
+    0.15417122600237715
    ],
    "dislike_weight": 0.15,
    "like_weight": 0.15,
-   "ndcg@10_after": 0.12301713186251262,
-   "ndcg@10_before": 0.047322929047728945,
+   "ndcg@10_after": 0.13470924355315572,
+   "ndcg@10_before": 0.048729919941405915,
    "personas": 3,
    "rounds": 3
   },
   {
    "delta_ci95": [
-    -0.012992134894226896,
-    0.12918222626559878
+    0.004847854716058864,
+    0.1815379038709239
    ],
    "dislike_weight": 0.3,
    "like_weight": 0.3,
-   "ndcg@10_after": 0.4073222964042632,
-   "ndcg@10_before": 0.3523344549536528,
+   "ndcg@10_after": 0.42940532310231416,
+   "ndcg@10_before": 0.33593244417262563,
    "personas": 11,
    "rounds": 1
   },
   {
    "delta_ci95": [
     0.007033712074265314,
-    0.24174058614979932
+    0.30914274005643694
    ],
    "dislike_weight": 0.3,
    "like_weight": 0.3,
-   "ndcg@10_after": 0.16957761514316824,
-   "ndcg@10_before": 0.047322929047728945,
+   "ndcg@10_after": 0.17722105638389948,
+   "ndcg@10_before": 0.048729919941405915,
    "personas": 3,
    "rounds": 3
   },
   {
    "delta_ci95": [
-    -0.005239873592648663,
-    0.14203437931190374
+    0.008181184969632929,
+    0.18750509456780037
    ],
    "dislike_weight": 0.5,
    "like_weight": 0.5,
-   "ndcg@10_after": 0.418502375211858,
-   "ndcg@10_before": 0.3523344549536528,
+   "ndcg@10_after": 0.43386581356388554,
+   "ndcg@10_before": 0.33593244417262563,
    "personas": 11,
    "rounds": 1
   },
   {
    "delta_ci95": [
     0.02114933546517618,
-    0.5457280122764381
+    0.5485138010141563
    ],
    "dislike_weight": 0.5,
    "like_weight": 0.5,
-   "ndcg@10_after": 0.2502468143953861,
-   "ndcg@10_before": 0.047322929047728945,
+   "ndcg@10_after": 0.2547210204099227,
+   "ndcg@10_before": 0.048729919941405915,
    "personas": 3,
    "rounds": 3
   },
   {
    "delta_ci95": [
-    -0.028412443323935298,
-    0.06372511293815568
+    -0.028827943889653443,
+    0.07149083910564044
    ],
    "dislike_weight": 0.0,
    "like_weight": 0.3,
-   "ndcg@10_after": 0.3707988008409415,
-   "ndcg@10_before": 0.3523344549536528,
+   "ndcg@10_after": 0.35793022201029107,
+   "ndcg@10_before": 0.33593244417262563,
    "personas": 11,
    "rounds": 1
   },
   {
    "delta_ci95": [
-    -0.21319193842042802,
-    0.1354090770930902
+    -0.17429593257482556,
+    0.19956484170723676
    ],
    "dislike_weight": 0.0,
    "like_weight": 0.3,
-   "ndcg@10_after": 0.1955720117794332,
-   "ndcg@10_before": 0.2221107603589341,
+   "ndcg@10_after": 0.24357595621487002,
+   "ndcg@10_before": 0.23576411464112124,
    "personas": 3,
    "rounds": 3
   },
   {
    "delta_ci95": [
-    -0.027386291449205277,
-    0.08514796967977066
+    -0.025184838431562415,
+    0.09146219553544667
    ],
    "dislike_weight": 0.15,
    "like_weight": 0.5,
-   "ndcg@10_after": 0.37852444093268484,
-   "ndcg@10_before": 0.3523344549536528,
+   "ndcg@10_after": 0.3676816493393202,
+   "ndcg@10_before": 0.33593244417262563,
    "personas": 11,
    "rounds": 1
   },
   {
    "delta_ci95": [
-    -0.11971547966090057,
-    0.1385939143935568
+    -0.24330213902189582,
+    0.04189430830135718
    ],
    "dislike_weight": 0.15,
    "like_weight": 0.5,
-   "ndcg@10_after": 0.177641255103421,
-   "ndcg@10_before": 0.17195957166292386,
+   "ndcg@10_after": 0.15200732603507094,
+   "ndcg@10_before": 0.2197543977456388,
    "personas": 3,
    "rounds": 3
   }

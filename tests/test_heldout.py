@@ -146,3 +146,18 @@ def test_range_rule_relabels_use_the_lower_bound(path):
     # Owner's decision: a range of years is labelled by its lower bound, as the filters read it.
     noted = {r["id"]: r["level"] for r in rows(path) if RANGE_NOTE in r.get("note", "")}
     assert noted == RANGE_RELABELS[path]
+
+
+GRADUATE_NOTE = "level: finished-degree graduate rule (owner 2026-10-17)"
+GRADUATE_RELABELS = {
+    ROOT / "eval" / "postings.jsonl": set(),
+    POSTINGS: {"heldout-ejobs-069"},
+}
+
+
+@pytest.mark.parametrize("path", list(GRADUATE_RELABELS), ids=["main", "heldout"])
+def test_graduate_rule_relabels_are_junior(path):
+    # Owner's decision: a graduate programme that needs a finished degree is junior, not intern.
+    noted = {r["id"]: r["level"] for r in rows(path) if GRADUATE_NOTE in r.get("note", "")}
+    assert set(noted) == GRADUATE_RELABELS[path]
+    assert set(noted.values()) <= {"junior"}

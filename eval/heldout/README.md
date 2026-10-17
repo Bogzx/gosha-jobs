@@ -139,7 +139,9 @@ rules are the ones in `gosha/evaluation.py` and `docs/EVAL.md`.
   (eJobs/BestJobs/Jobicy metadata) is ignored, because it was often wrong:
   "Senior Platform Engineer" filed as entry level, "Technical Analyst I"
   filed as senior.
-  - `intern`: internship, working student, stagiu or practică.
+  - `intern`: internship, working student, stagiu or practică, open to
+    enrolled students. A graduate programme, new-grad or trainee role that
+    needs a finished degree is `junior` (owner's decision of 2026-10-17).
   - **Years, as the product reads them** (owner's decisions of
     2026-10-16; the product's lines are `filters.JUNIOR_MAX_YEARS` = 2
     and `seniority.SENIOR_MIN_YEARS` = 5):
@@ -243,13 +245,38 @@ A range of years is labelled by its lower bound, as the filters read it.
 - No grade changed.
 - No ranker output was looked at.
 
+### Graduate rule applied (2026-10-17, owner's decision)
+
+A graduate programme, new-grad or "Global Trainee" role that needs a
+finished degree is `junior`; a training position open to enrolled
+students stays `intern`. Every `intern` posting was re-read for who may
+apply.
+
+- Changed, with the note "level: finished-degree graduate rule (owner
+  2026-10-17)": `heldout-ejobs-069` (SANEX R&D internship, "Ești
+  proaspăt absolvent" and completed chemistry studies required), from
+  `intern` to `junior`.
+- Left `intern`, because students may apply: `heldout-ejobs-068` (EY,
+  "University degree or currently studying") and `heldout-bestjobs-098`
+  (Arcanna, "Bachelor studies (ongoing or graduated)"); the other
+  working-student and student postings say so outright.
+- Left `intern` for lack of evidence: `heldout-ejobs-009` (Dell),
+  `heldout-bestjobs-094` (Stripe), `-095` (Reconomy), `-097` (OPSWAT) and
+  `-101` (Tobii). Who may apply falls after the 2,000-character cap.
+- Graduate programmes already labelled `junior` are unchanged
+  (`heldout-hipo-009` Vodafone Discover Graduate, `heldout-ejobs-020` SAP
+  Trainee/Junior Consultant).
+- No grade changed, because `intern` and `junior` both count as
+  applicable.
+- No ranker output was looked at.
+
 
 ### Counts
 
 | family | postings | | level | postings | | lang / source | postings |
 |---|---|---|---|---|---|---|---|
-| `py` | 12 | | `intern` | 17 | | `en` | 183 |
-| `java` | 13 | | `junior` | 45 | | `ro` | 78 (29.9%) |
+| `py` | 12 | | `intern` | 16 | | `en` | 183 |
+| `java` | 13 | | `junior` | 46 | | `ro` | 78 (29.9%) |
 | `dotnet` | 11 | | `any` | 63 | | bestjobs | 102 |
 | `be` | 20 | | `mid` | 62 | | ejobs | 86 |
 | `fe` | 14 | | `senior` | 74 | | hipo | 51 |
@@ -274,7 +301,7 @@ Language by level:
 | | intern | junior | any | mid | senior |
 |---|---|---|---|---|---|
 | en | 15 | 23 | 44 | 40 | 61 |
-| ro | 2 | 22 | 19 | 22 | 13 |
+| ro | 1 | 23 | 19 | 22 | 13 |
 
 ## Personas (`personas.jsonl`, 10)
 

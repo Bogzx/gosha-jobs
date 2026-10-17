@@ -61,6 +61,8 @@ with the CV by `blend_with_user_vector`, feedback by
   `pipeline.prefilter`, the function the match stage runs before scoring
   (hard filters, then what the keyword implies for the levels). The pool
   is then scored by the DM score (`matching.dm_score`) or by plain cosine.
+  A posting's copies count once, as delivery sends them: best first, a
+  copy of a posting already kept is skipped (`pipeline._same_posting_for_dm`).
   Relevant: a computer-science family (a persona's own family for its
   keyword) at a gold level the search asked for (intern → intern; junior
   → junior or unstated). Reported per search, then averaged: P@5 (the
@@ -70,10 +72,14 @@ with the CV by `blend_with_user_vector`, feedback by
   place filter runs only when the postings record a place; they do not
   yet, so place is not filtered.
 - **Web feed with one active search:** the feed's own scope filter
-  (`recommend.in_search_scope`: the search's place and levels) first, at
-  each level set, then the production ranking or the cosine over what is
-  left. Gold grades unchanged. A persona with no grade-2 posting left is
-  counted, not averaged.
+  (`recommend.in_search_scope`: the search's place, the match stage's
+  posting gates and levels) first, at each level set, then the production
+  ranking or the cosine over what is left. Gold grades unchanged. A
+  persona with no grade-2 posting left is counted, not averaged.
+- **One copy of a posting:** every feed measurement collapses the copies
+  the feed collapses (`recommend.first_copies`: same title and employer
+  by `dedup.normalize_key`, the best-ranked copy shown), and in the
+  feedback simulation a rated posting hides its other copies.
 - **Feedback:** a residual-collection simulation of the Rocchio update,
   through the feed ranking (the update moves the embedding vector; the
   keyword and seniority terms stay).
@@ -137,6 +143,20 @@ with the CV by `blend_with_user_vector`, feedback by
 
     Main-set results computed before this date used the old labels.
 
+  **Graduate rule (owner's decision, 2026-10-17).** A graduate
+  programme, new-grad or "Global Trainee" role that needs a finished
+  degree is `junior`; a training position open to enrolled students stays
+  `intern`. Every `intern` posting in both sets was re-read for who may
+  apply, without looking at any ranker output.
+  - Main set: no change. Its intern postings are open to students (Viking
+    "Student or recent graduate", ENF) or do not say before the
+    2,000-character cap (the three Emerson postings, BrightClaim).
+  - Held-out set: `heldout-ejobs-069` (SANEX R&D internship for a
+    "proaspăt absolvent" with finished chemistry studies), intern →
+    junior, with a `note`.
+  - No grade changed (`intern` and `junior` both count as applicable), and
+    the posting's family is `other`, so no DM-eval relevance changes.
+
   A persona's grade follows from a rule in
   `gosha/evaluation.py`:
   - **2** = same family, at a level a student can apply to;
@@ -170,6 +190,61 @@ with the CV by `blend_with_user_vector`, feedback by
     from them. Held-out numbers involving seniority (the production feed
     ranking) are therefore slightly optimistic. The cosine-only and TF-IDF
     rows do not read seniority and are unaffected.
+
+## Results (2026-10-17): the feed's search scope, one copy per posting
+
+**What changed in the feed.**
+- **Search scope = the DM match stage's posting gates, minus the entry
+  evidence.** `recommend.in_search_scope` now drops ads, AI-training gig
+  marketplaces and courses (`filters.looks_like_an_ad`,
+  `is_gig_marketplace`, `is_not_a_job`), besides the levels. A test holds
+  it to `pipeline.job_matches_subscription` with the evidence switched off.
+- **One copy of a posting.** Cross-board dedup keeps one posting's rows
+  apart when they name different cities, so a search in either city finds
+  its copy. After the scope filter the feed shows one copy, the
+  best-ranked, and a posting the user rated hides its other copies. In
+  the production window of 2026-10-17 that is 10 pairs among 671 rows,
+  all city copies.
+
+**The entry evidence is not used in the feed.** DMs are pushed, so they
+fail closed; the feed is browsed. Measured on the scoped feed (intern +
+junior search):
+
+| | Main: postings, grade-2 per persona, P@10 | Held-out |
+|---|---|---|
+| Levels only (before) | 106, 4.6, 0.321 | 150, 8.4, 0.320 |
+| + ad / gig / not-a-job | 106, 4.6, 0.321 | 149, 8.4, 0.320 |
+| Evidence as a filter | 51, 2.0, 0.210; 4 of 14 personas left nothing relevant | 68, 3.1, 0.140 |
+| Evidence as a ranking penalty | 106, 4.6, 0.321 | 149, 8.4, 0.270 |
+
+- As a filter, the evidence drops 55–63% of the relevant postings, mostly
+  gold `any`.
+- As a ranking penalty (0.25 z-units, a student's penalty for a
+  mid-level posting, fixed before measuring), it is neutral on main. On
+  held-out it is worse: P@10 −0.050 (95% CI −0.080…−0.020, 5 personas
+  worse, none better); junior nDCG@10 −0.027 (−0.042…−0.013). It was not
+  shipped, and no other weight was tried.
+
+**Effect on the numbers** (baselines regenerated on 2026-10-17 with this
+code, gosha-label's graduate relabel and gosha-pipe's filter changes of
+the same day: the graduate rule, months read as years, a required
+graduation grade as entry evidence):
+- Full feed, main: production 0.759 → 0.755, cosine 0.549 → 0.558. Every
+  collapse on the main set is a false merge: `dedup.normalize_key` drops
+  parentheses, so Solvd's "Test Automation Engineer" `(Android)`, `(iOS)`
+  and `(Web)` are one posting, and so are "Senior Java Developer" and
+  "Senior Java Developer (Integration & Azure)". Production's
+  cross-board dedup uses the same title rule, so it hides these copies
+  already; the fix belongs in `gosha/dedup.py`. Held-out: unchanged.
+- Feedback, main: +0.055 → +0.093 (CI +0.005…+0.182), from the collapsed
+  order; held-out unchanged.
+- DMs: the copy count changes nothing on either set; the eval's copies
+  are all senior or mid, or fail the junior gates. The DM score's numbers
+  move with the filters: main generic pool 9.3 → 8.0, persona-keyword
+  P@5 0.381 → 0.366; held-out generic pool 21.7 → 19.3, P@10 0.902 → 0.922,
+  persona-keyword P@5 0.158 → 0.151.
+- Scoped feed, held-out junior: 134 → 132 postings (the graduate rule
+  makes intern and junior exclusive).
 
 ## Results (2026-10-17): the DM junior rule is evidence-based
 

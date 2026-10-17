@@ -258,6 +258,8 @@ class Vectors:
     gains: np.ndarray         # (U, P) graded relevance
     keyword: np.ndarray       # (U, P) gosha.lexical TF-IDF cosine, CV vs job text
     penalties: np.ndarray     # (U, P) gosha.seniority level penalty
+    # The postings themselves, for what the feed collapses (as_shown()).
+    postings: Sequence[Posting] = ()
 
 
 def job_text(posting: Posting, variant: str = "production") -> str:
@@ -297,7 +299,7 @@ def encode_all(
     ]), dtype=np.float32)
     gains = np.array([[grade(u.family, p) for p in postings] for u in personas])
     keyword, penalties = ranking_signals(postings, personas, job_text_variant)
-    return Vectors(jobs, cvs, queries, gains, keyword, penalties)
+    return Vectors(jobs, cvs, queries, gains, keyword, penalties, list(postings))
 
 
 def ranking_signals(
@@ -345,10 +347,24 @@ def feed_scores(
     return hybrid_scores(cosines, vectors.keyword[u, sel], vectors.penalties[u, sel])
 
 
-def feed_metrics(scores: np.ndarray, gains: np.ndarray) -> dict[str, float]:
-    """P@10 is over the first page: ten postings, or all of them when a
+def as_shown(order: Sequence[int], postings: Sequence[Posting] = ()) -> list[int]:
+    """`order` (indices into `postings`) as the feed shows it: one copy of
+    each posting, the first (gosha.recommend.first_copies). Without the
+    postings, `order` unchanged."""
+    if not postings:
+        return list(order)
+    from gosha.recommend import first_copies
+
+    return [order[k] for k in first_copies([postings[i] for i in order])]
+
+
+def feed_metrics(
+    scores: np.ndarray, gains: np.ndarray, postings: Sequence[Posting] = (),
+) -> dict[str, float]:
+    """`postings` (aligned with `scores`) collapse copies as the feed does.
+    P@10 is over the first page: ten postings, or all of them when a
     filtered feed has fewer."""
-    ranked = [int(gains[i]) for i in ranking(scores.tolist())]
+    ranked = [int(gains[i]) for i in as_shown(ranking(scores.tolist()), postings)]
     return {
         "ndcg@10": ndcg_at(ranked, 10),
         "r_precision": r_precision(ranked),
@@ -370,14 +386,14 @@ def evaluate_feed(
     by_posting_lang: dict[str, list[dict[str, float]]] = {"en": [], "ro": []}
     for u, persona in enumerate(personas):
         scores = feed_scores(vectors, u, ranking=ranking)
-        per_persona[persona.id] = feed_metrics(scores, vectors.gains[u])
+        per_persona[persona.id] = feed_metrics(scores, vectors.gains[u], postings)
         # Same persona, one posting language at a time: does a relevant
         # Romanian posting rank as well as an English one?
         for lang in by_posting_lang:
             idx = [i for i, p in enumerate(postings) if p.lang == lang]
             if any(vectors.gains[u, i] == 2 for i in idx):
                 by_posting_lang[lang].append(
-                    feed_metrics(scores[idx], vectors.gains[u, idx]))
+                    feed_metrics(scores[idx], vectors.gains[u, idx], [postings[i] for i in idx]))
     ndcgs = [m["ndcg@10"] for m in per_persona.values()]
     rows = list(per_persona.values())
     return {
@@ -447,6 +463,22 @@ def score_bands(
     return out
 
 
+def _at(vectors: Vectors, idx: Sequence[int]) -> list[Posting]:
+    return [vectors.postings[i] for i in idx] if vectors.postings else []
+
+
+def _unrated(n: int, rated: set[int], postings: Sequence[Posting]) -> list[int]:
+    """The postings a feed still shows after these ratings: a rated
+    posting hides its other copies too (gosha.recommend.get_feed_page)."""
+    from gosha.recommend import posting_key
+
+    keys = {posting_key(postings[i]) for i in rated} - {None} if postings else set()
+    return [
+        i for i in range(n)
+        if i not in rated and not (keys and posting_key(postings[i]) in keys)
+    ]
+
+
 def simulate_feedback(
     vectors: Vectors,
     weights: Sequence[tuple[float, float]] = FEEDBACK_WEIGHTS,
@@ -477,9 +509,10 @@ def simulate_feedback(
                 disliked: list[np.ndarray] = []
                 vector = base
                 for _ in range(n_rounds):
-                    unrated = [i for i in range(len(gains)) if i not in rated]
+                    unrated = _unrated(len(gains), rated, vectors.postings)
                     scores = feed_scores(vectors, u, vector, unrated, ranking)
-                    order = [unrated[i] for i in _order(scores)][:shown]
+                    order = [unrated[i] for i in as_shown(_order(scores), _at(vectors, unrated))]
+                    order = order[:shown]
                     for i in order:
                         rated.add(i)
                         if gains[i] == 2:
@@ -488,13 +521,15 @@ def simulate_feedback(
                             disliked.append(vectors.jobs[i])
                     updated = apply_feedback(base, liked, disliked, like_w, dislike_w)
                     vector = updated if updated is not None else base
-                rest = [i for i in range(len(gains)) if i not in rated]
+                rest = _unrated(len(gains), rated, vectors.postings)
                 if not any(gains[i] == 2 for i in rest):
                     continue
                 before.append(feed_metrics(
-                    feed_scores(vectors, u, base, rest, ranking), gains[rest])["ndcg@10"])
+                    feed_scores(vectors, u, base, rest, ranking), gains[rest],
+                    _at(vectors, rest))["ndcg@10"])
                 after.append(feed_metrics(
-                    feed_scores(vectors, u, vector, rest, ranking), gains[rest])["ndcg@10"])
+                    feed_scores(vectors, u, vector, rest, ranking), gains[rest],
+                    _at(vectors, rest))["ndcg@10"])
             row = {"like_weight": like_w, "dislike_weight": dislike_w,
                    "rounds": n_rounds, "personas": len(before)}
             if before:  # else every relevant posting was already rated
@@ -633,15 +668,37 @@ def dm_relevant(postings: Sequence[Posting], search: DmSearch) -> np.ndarray:
     ], dtype=bool)
 
 
+def one_dm_per_posting(scores: np.ndarray, pool: np.ndarray, models: Sequence) -> np.ndarray:
+    """The pool with each posting once, as one user's batch is delivered:
+    best first, a copy of a posting already kept is skipped
+    (gosha.pipeline._same_posting_for_dm, deliver_pending; the match
+    stage's group check, _one_per_duplicate_group, keeps the best-scoring
+    copy of a group too, and its rule is within this one)."""
+    from gosha.pipeline import _same_posting_for_dm
+
+    keep = np.zeros(len(pool), dtype=bool)
+    kept: list[int] = []
+    for i in np.argsort(-np.where(pool, scores, -np.inf), kind="stable")[: int(pool.sum())]:
+        if not any(_same_posting_for_dm(models[i], models[j]) for j in kept):
+            kept.append(int(i))
+            keep[i] = True
+    return keep
+
+
 def dm_search_metrics(
     scores: np.ndarray, pool: np.ndarray, relevant: np.ndarray, threshold: float,
+    models: Sequence | None = None,
 ) -> dict[str, float]:
     """One search: what it is sent, best first, and how much of it fits.
 
+    With `models` (gosha.models.Job per posting) a posting's copies count
+    once (one_dm_per_posting), in the pool and in what is sent.
     precision@k is over the first k postings sent (fewer if fewer pass);
     a search with relevant postings in its pool that is sent none of them
     is starved.
     """
+    if models is not None:
+        pool = one_dm_per_posting(scores, pool, models)
     sent = pool & (scores >= threshold)
     order = np.argsort(-np.where(sent, scores, -np.inf), kind="stable")[: int(sent.sum())]
     hits = relevant[order]
@@ -690,7 +747,7 @@ def evaluate_dm_searches(
     for search, query in zip(searches, queries):
         m = dm_search_metrics(
             jobs @ query, dm_pool(postings, search, models), dm_relevant(postings, search),
-            threshold,
+            threshold, models,
         )
         rows.append({"keyword": search.keyword, "levels": list(search.levels),
                      "persona": search.persona, "generic": search.family is None, **m,
@@ -744,7 +801,10 @@ def evaluate_feed_scoped(
             row: dict = {"remaining": len(idx), "relevant": relevant,
                          "low_n": is_low_n(len(idx), relevant)}
             if relevant:
-                row.update(feed_metrics(feed_scores(vectors, u, idx=idx, ranking=ranking), gains))
+                row.update(feed_metrics(
+                    feed_scores(vectors, u, idx=idx, ranking=ranking), gains,
+                    [postings[i] for i in idx],
+                ))
             per_persona[persona.id] = row
         measured = [r for r in per_persona.values() if r["relevant"]]
         summary: dict = {

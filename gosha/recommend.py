@@ -13,6 +13,7 @@ import re
 import threading
 from collections import Counter, OrderedDict
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import NamedTuple
 
 import numpy as np
@@ -23,6 +24,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from gosha import filters, lexical, seniority
 from gosha.database import get_session
+from gosha.dedup import normalize_key
 from gosha.embeddings import bytes_to_vec, current_model_clause, is_current
 from gosha.matching import build_job_text
 from gosha.models import Application, Job, Subscription, User, UserJob
@@ -446,6 +448,12 @@ class SearchScope(NamedTuple):
     levels: tuple[str, ...]
 
 
+def scope_of(sub: Subscription) -> SearchScope:
+    return SearchScope(
+        tuple(sub.locations), bool(sub.remote_ok), tuple(sorted(sub.experience_levels)),
+    )
+
+
 async def load_search_scopes(user_id: int) -> list[SearchScope]:
     """The scopes of the user's active searches. Paused searches do not
     narrow the feed (their exclusions still apply: get_user_exclusions)."""
@@ -456,33 +464,42 @@ async def load_search_scopes(user_id: int) -> list[SearchScope]:
             )
         )
         subs = result.scalars().all()
-    return [
-        SearchScope(tuple(s.locations), bool(s.remote_ok), tuple(sorted(s.experience_levels)))
-        for s in subs
-    ]
+    return [scope_of(s) for s in subs]
 
 
-def _restricts_level(levels: tuple[str, ...]) -> bool:
-    """As matches_experience_level reads them: none or "any" is no filter."""
-    wanted = {filters.canonical_level(level) or level.lower() for level in levels}
-    return bool(wanted) and "any" not in wanted
-
-
-# matches_experience_level verdicts per posting and level set: unmarked
-# titles need the description (the years it asks for), which the feed
-# leaves in the database. Same keys, lock and bound as _level_cache.
+# Verdicts of the posting gates per posting and level set: they read the
+# description, which the feed leaves in the database. Same keys, lock and
+# bound as _level_cache.
 _scope_level_cache: OrderedDict[tuple, bool] = OrderedDict()
 
 
-def _scope_level_key(job: Job, levels: tuple[str, ...]) -> tuple | None:
+def _scope_level_key(job: Job, scope: SearchScope) -> tuple | None:
     key = _level_key(job)
-    return None if key is None else (*key, levels)
+    return None if key is None else (*key, scope.levels)
 
 
-def _level_matches(job: Job, levels: tuple[str, ...]) -> bool:
-    if not _restricts_level(levels):
-        return True
-    key = _scope_level_key(job, levels)
+def _posting_gates(job: Job, scope: SearchScope, description: str | None) -> bool:
+    """What pipeline.job_matches_subscription asks of the posting itself,
+    except the entry evidence: not an ad, a gig marketplace or a course,
+    and the search's levels. Its date, salary, place and exclusion checks
+    are the feed's window, nothing, _location_ok and get_user_exclusions.
+
+    The evidence an intern/junior DM needs (lacks_level_evidence,
+    dm_junior_ok) is left out. DMs are pushed, so they fail closed; the
+    feed is browsed, and on the eval that check dropped 55-63% of the
+    scoped feed's relevant postings. Ranking on it instead failed its
+    held-out check (gosha-rank handoff, 2026-10-17).
+    """
+    return not (
+        filters.looks_like_an_ad(job.title, job.company) or filters.is_gig_marketplace(job.company)
+        or filters.is_not_a_job(job.title, description)
+    ) and filters.matches_experience_level(
+        job.title, list(scope.levels), job.experience_level, description,
+    )
+
+
+def _verdict(job: Job, scope: SearchScope) -> bool:
+    key = _scope_level_key(job, scope)
     if key is not None:
         with _level_lock:
             hit = _scope_level_cache.get(key)
@@ -491,9 +508,7 @@ def _level_matches(job: Job, levels: tuple[str, ...]) -> bool:
                 return hit
     description = _loaded_description(job)
     deferred = description is _DEFERRED
-    ok = filters.matches_experience_level(
-        job.title, list(levels), job.experience_level, None if deferred else description,
-    )
+    ok = _posting_gates(job, scope, None if deferred else description)
     if key is not None and not deferred:
         with _level_lock:
             _scope_level_cache[key] = ok
@@ -502,12 +517,22 @@ def _level_matches(job: Job, levels: tuple[str, ...]) -> bool:
     return ok
 
 
-def _needs_text_for_scopes(job: Job, scopes: list[SearchScope]) -> bool:
-    """Whether the scope filter has to read this job's description."""
+def _location_ok(job: Job, scope: SearchScope, memo: dict) -> bool:
+    where = (job.location, scope.locations, scope.remote_ok)
+    if where not in memo:
+        memo[where] = filters.search_location_ok(
+            job.location, list(scope.locations), scope.remote_ok,
+        )
+    return memo[where]
+
+
+def _needs_text_for_scopes(job: Job, scopes: list[SearchScope], location_memo: dict) -> bool:
+    """Whether the scope filter has to read this job's description: a
+    search whose place it is in has no cached verdict for it yet."""
     for scope in scopes:
-        if not _restricts_level(scope.levels):
+        if not _location_ok(job, scope, location_memo):
             continue
-        key = _scope_level_key(job, scope.levels)
+        key = _scope_level_key(job, scope)
         if key is None:
             return True
         with _level_lock:
@@ -518,22 +543,16 @@ def _needs_text_for_scopes(job: Job, scopes: list[SearchScope]) -> bool:
 
 def in_search_scope(job: Job, scopes: list[SearchScope], location_memo: dict | None = None) -> bool:
     """Whether some active search would take this posting on location and
-    level, as the Discord match stage does (pipeline.passes_filters): per
+    on the posting gates of the Discord match stage (_posting_gates): per
     search, then any of them. "Intern in Bucharest" plus "senior in Cluj"
     does not admit a Cluj internship. No active search: no restriction.
     """
     if not scopes:
         return True
     memo = location_memo if location_memo is not None else {}
-    for scope in scopes:
-        where = (job.location, scope.locations, scope.remote_ok)
-        if where not in memo:
-            memo[where] = filters.search_location_ok(
-                job.location, list(scope.locations), scope.remote_ok,
-            )
-        if memo[where] and _level_matches(job, scope.levels):
-            return True
-    return False
+    return any(
+        _location_ok(job, scope, memo) and _verdict(job, scope) for scope in scopes
+    )
 
 
 def clear_caches() -> None:
@@ -632,7 +651,11 @@ async def get_feed_page(
     window = await load_candidates(
         embedded_only=user_vector is not None, with_description=with_description,
     )
-    candidates = [j for j in window if j.id not in excluded_ids]
+    # A rated or applied posting stays out under its other copies too.
+    rated = {posting_key(j) for j in window if j.id in excluded_ids} - {None}
+    candidates = [
+        j for j in window if j.id not in excluded_ids and posting_key(j) not in rated
+    ]
 
     cv_text = ""
     if user_vector is not None:
@@ -660,17 +683,17 @@ async def get_feed_page(
     # first request of a scrape cycle, a handful, not ~2,000.
     scopes = await load_search_scopes(user_id) if scope == "searches" else []
     ranks_on_text = user_vector is not None and bool(cv_text.strip())
+    memo: dict = {}
     if not with_description:
         in_candidates = {id(j) for j in candidates}
         await load_descriptions([
             j for j in window
             if (ranks_on_text and _needs_keyword_text(j))
-            or (id(j) in in_candidates and _needs_text_for_scopes(j, scopes))
+            or (id(j) in in_candidates and _needs_text_for_scopes(j, scopes, memo))
         ])
     hidden_by_scope = 0
     if scopes:
         # The candidates only: the window stays the keyword-IDF corpus.
-        memo: dict = {}
         before = len(candidates)
         candidates = [j for j in candidates if in_search_scope(j, scopes, memo)]
         hidden_by_scope = before - len(candidates)
@@ -686,6 +709,7 @@ async def get_feed_page(
             key=lambda j: j.first_seen_at or datetime.min.replace(tzinfo=timezone.utc),
             reverse=True,
         )
+        candidates = [candidates[i] for i in first_copies(candidates)]
         page_jobs = candidates[start : start + per_page]
         if not with_description:
             await load_descriptions(page_jobs)
@@ -752,6 +776,36 @@ async def load_descriptions(jobs: list[Job]) -> None:
         set_committed_value(job, "description", descriptions.get(job.id))
 
 
+# Runs over the whole window on every request.
+_normalize_key = lru_cache(maxsize=lexical.MAX_CACHED)(normalize_key)
+
+
+def posting_key(job: Job) -> str | None:
+    """The title + employer identity the DM path also compares
+    (dedup.normalize_key); None when the posting cannot be identified."""
+    return _normalize_key(job.title or "", job.company or "")
+
+
+def first_copies(jobs: list[Job]) -> list[int]:
+    """Positions in `jobs` of the first copy of each posting.
+
+    Cross-board dedup (gosha/dedup.py) keeps a posting's rows apart when
+    they name different cities, so a search for either city finds its
+    copy. Once the scope filter has run, one copy is enough. Postings
+    without a key are never collapsed.
+    """
+    seen: set[str] = set()
+    kept: list[int] = []
+    for i, job in enumerate(jobs):
+        key = posting_key(job)
+        if key is not None:
+            if key in seen:
+                continue
+            seen.add(key)
+        kept.append(i)
+    return kept
+
+
 def rank_candidates(
     candidates: list[Job],
     vector: np.ndarray,
@@ -783,7 +837,8 @@ def _order(
     cv_text: str = "",
     corpus: list[Job] | None = None,
 ) -> list[tuple[Job, float, int]]:
-    """(job, clipped cosine, percentile) for every candidate, best first.
+    """(job, clipped cosine, percentile) for every candidate, best first,
+    each posting once (first_copies: the best-ranked copy stands).
 
     `corpus` (a superset of `candidates`, default the candidates) is what
     the keyword IDF is fitted on: the feed passes the whole window so one
@@ -819,6 +874,7 @@ def _order(
         ])
     final = hybrid_scores(cosines, keyword, penalties)
     order = np.argsort(-final, kind="stable")
+    order = [int(order[k]) for k in first_copies([candidates[int(i)] for i in order])]
 
     ranked_jobs = [candidates[int(i)] for i in order]
     ranked_scores = [float(max(0.0, min(1.0, cosines[int(i)]))) for i in order]
