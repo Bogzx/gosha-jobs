@@ -35,6 +35,19 @@ def _fresh_ranking_caches():
     recommend.clear_caches()
 
 
+@pytest.fixture(autouse=True)
+def _memory_only_page_store():
+    """The scrape caches (gosha/scrapers/page_store.py) write through to
+    data/scrape_cache.sqlite3 wherever data/ exists, as on a laptop holding
+    the legacy SQLite. No test writes there: the store is memory-only unless
+    a test hands it a file of its own."""
+    from gosha.scrapers import page_store
+
+    page_store.use(page_store.PageStore(None))
+    yield
+    page_store.use(page_store.PageStore(None))
+
+
 @pytest_asyncio.fixture
 async def engine():
     """Create a fresh in-memory database engine per test."""

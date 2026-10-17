@@ -13,13 +13,14 @@ import random
 import re
 import time
 from dataclasses import dataclass
-from functools import partial, wraps
+from functools import cache, partial, wraps
 from typing import TYPE_CHECKING
 
 import pandas as pd
 from jobspy import scrape_jobs
 
 from gosha.filters import city_only, expand_keyword, normalize_location
+from gosha.scrapers import page_store
 from gosha.scrapers.base import is_reposter, reposter_client, strip_invisible, strip_title_codes
 
 if TYPE_CHECKING:
@@ -46,17 +47,34 @@ _LINKEDIN_DETAIL_PRUNE_AT = 5000
 _linkedin_details: dict[str, tuple[float, dict]] = {}
 
 
+@cache
+def _linkedin_namespace() -> str:
+    """The job pages python-jobspy parsed, while that version is installed."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return f"linkedin:jobspy-{version('python-jobspy')}"
+    except PackageNotFoundError:  # pragma: no cover - jobspy imported from a checkout
+        return "linkedin:jobspy"
+
+
 def _cached_linkedin_details(fetch):
-    """Wrap jobspy's LinkedIn._fetch_details with the process-wide cache.
+    """Wrap jobspy's LinkedIn._fetch_details with the job-page cache.
 
     Only pages that gave a description are kept: a 429, an error or a
-    redirect comes back as {} and the next term or cycle tries again.
+    redirect comes back as {} and the next term or cycle tries again. The
+    cache is written through to disk (scrapers/page_store), so a deploy
+    does not send LinkedIn every job page again.
     """
 
     @wraps(fetch)
     def fetch_details(self, job_id: str) -> dict:
-        now = time.monotonic()
+        now = time.time()
         hit = _linkedin_details.get(job_id)
+        if hit is None:
+            hit = page_store.store().get(_linkedin_namespace(), job_id)
+            if hit is not None:
+                _linkedin_details[job_id] = hit
         if hit and now - hit[0] < LINKEDIN_DETAIL_TTL_SECONDS:
             return dict(hit[1])
         details = fetch(self, job_id)
@@ -65,7 +83,11 @@ def _cached_linkedin_details(fetch):
                 for key, (at, _) in list(_linkedin_details.items()):
                     if now - at >= LINKEDIN_DETAIL_TTL_SECONDS:
                         _linkedin_details.pop(key, None)
+                page_store.store().prune(
+                    "linkedin:", now - LINKEDIN_DETAIL_TTL_SECONDS, _LINKEDIN_DETAIL_PRUNE_AT,
+                )
             _linkedin_details[job_id] = (now, dict(details))
+            page_store.store().put(_linkedin_namespace(), job_id, details, now)
         return details
 
     fetch_details.gosha_cached = True  # type: ignore[attr-defined]

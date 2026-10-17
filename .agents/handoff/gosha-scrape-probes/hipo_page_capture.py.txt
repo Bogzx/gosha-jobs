@@ -1,0 +1,22 @@
+# One GET of one Hipo job page whose JSON-LD text is flattened (AUMOVIO, row 8362),
+# printing the raw HTML so a trimmed copy can become tests/scrapers/fixtures/hipo_detail_body.html.
+# Run in the prod image (see .agents/README.md), stdout to a file:
+#   docker run --rm -i --name gosha-agents-probe --network bridge --entrypoint python \
+#     -v "$PWD":/w:ro -w /w -e PYTHONPATH=/w -e PYTHONDONTWRITEBYTECODE=1 \
+#     gosha-bot:latest - < .agents/handoff/gosha-scrape-probes/hipo_page_capture.py.txt > page.html
+import ssl
+import sys
+from datetime import datetime, timezone
+
+import httpx
+
+from gosha.scrapers.base import DEFAULT_HEADERS, HTTP_TIMEOUT
+
+URL = ("https://www.hipo.ro/locuri-de-munca/locuri_de_munca/269281/"
+       "AUMOVIO-Romania/Cloud-Consultant---AWS-and-Azure-(m/f/d)")
+
+with httpx.Client(headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True) as client:
+    resp = client.get(URL)
+print(f"<!-- captured {datetime.now(timezone.utc).isoformat(timespec='seconds')} from {resp.url} "
+      f"status {resp.status_code}; python {sys.version.split()[0]}, {ssl.OPENSSL_VERSION} -->")
+print(resp.text)

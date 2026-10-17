@@ -9,6 +9,8 @@ Hipo's IT-Software domain already narrows the field.
 Detail pages carry a schema.org JobPosting JSON-LD block (probed
 2026-09-30) with the description, qualifications and datePosted; they are
 fetched per result through gosha/scrapers/details.py (capped, cached).
+The JSON-LD text has its tags dropped without separators, so the ad's text
+is read from the page body (#anunt-content) when it has one (2026-10-17).
 
 Probed 2026-10-12: the listing is paginated by a path suffix
 (.../IT-Software/Bucuresti/2, 40 cards a page; a `?page=` query is
@@ -84,8 +86,12 @@ _PROSE_FIELDS = ("description", "responsibilities", "qualifications", "skills")
 def _job_posting(page: str) -> dict[str, Any]:
     for block in _LD_JSON_RE.findall(page):
         try:
-            data = json.loads(block)
-        except ValueError:
+            # strict=False: some employers' ads (Bosch, Continental, AUMOVIO)
+            # carry raw tabs or newlines inside the description string, and a
+            # strict parse lost the whole posting (probe, 2026-10-17).
+            data = json.loads(block, strict=False)
+        except ValueError as exc:
+            log.warning("Hipo JSON-LD block unreadable: %s", exc)
             continue
         items = data if isinstance(data, list) else data.get("@graph", [data])
         for item in items:
@@ -112,14 +118,53 @@ def _locality(posting: dict[str, Any]) -> str:
     return ", ".join(names)
 
 
+# The ad as the page shows it. Hipo builds the JSON-LD text by dropping the
+# tags without a separator ("…AWS and Azure.About the role/
+# responsibilities:Advise…", "qualifications3+ years"), so one "is a plus"
+# anywhere voided every requirement in the block, and numbers fused to
+# words. This block keeps the <p>/<li> structure (captured 2026-10-17, AUMOVIO).
+_BODY_START_RE = re.compile(r'<div\b[^>]*\bid="anunt-content"[^>]*>', re.IGNORECASE)
+_DIV_RE = re.compile(r"<div\b|</div\s*>", re.IGNORECASE)
+# A body worth preferring: some text, in more than one block.
+MIN_BODY_CHARS = 200
+
+
+def _body_description(page: str) -> str:
+    """Plain text of the #anunt-content block, lines kept; "" without one."""
+    start = _BODY_START_RE.search(page)
+    if not start:
+        return ""
+    depth, end = 1, len(page)
+    for tag in _DIV_RE.finditer(page, start.end()):
+        depth += -1 if tag.group(0).startswith("</") else 1
+        if depth == 0:
+            end = tag.start()
+            break
+    # Repaired like the JSON-LD text: the captured body was clean, but nothing
+    # guarantees another employer's ad is (repair_mojibake leaves good text alone).
+    text = html_to_text(repair_mojibake(page[start.end():end]))
+    if len(text) < MIN_BODY_CHARS or "\n" not in text:
+        return ""
+    return text
+
+
 def _extract_detail(page: str) -> dict[str, Any]:
-    """{description, posted_at, location} from a job page's JobPosting JSON-LD."""
+    """{description, posted_at, location, not_a_job} from a job page.
+
+    The description is the page body's ad text when it has structure
+    (_body_description), else the JSON-LD prose fields; the date, place and
+    employment type come from the JobPosting JSON-LD.
+    """
     posting = _job_posting(page)
     parts: list[str] = []
-    for key in _PROSE_FIELDS:
-        text = html_to_text(repair_mojibake(str(posting.get(key) or "")))
-        if text and text not in parts:
-            parts.append(text)
+    body = _body_description(page)
+    if body:
+        parts.append(body)
+    else:
+        for key in _PROSE_FIELDS:
+            text = html_to_text(repair_mojibake(str(posting.get(key) or "")))
+            if text and text not in parts:
+                parts.append(text)
     detail: dict[str, Any] = {}
     if posting:
         types = posting.get("employmentType") or []

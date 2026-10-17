@@ -2,26 +2,36 @@
 
 Written: 2026-10-16 ~12:05 UTC · Branch: wip/agents-2026-10-16 · Base commit: 5490d6a
 
-## Current state (2026-10-16 ~18:30 UTC) — read this first
-- **Released.** main = 1fe6243, deployed 18:05 UTC (lead). Every scraper/dedup change in this handoff is in it
-  (a84ba70 is an ancestor; no diff in our files between 1fe6243 and the branch). The lead verified the first
-  deployed cycle's 20 DMs by hand as relevant. The working tree is clean; nothing of ours is uncommitted.
-- Live in prod now: JobSpy job_level → experience_level, LinkedIn 24 h job-page cache, one JobSpy call per board
-  with per-board retry, `LINKEDIN_RESULTS_PER_TERM = 30`, invisible-char/entity cleaning, title requisition-code
-  stripping, Indeed "junior X" fallback (2 searches), refresh-date flags (`date_posted_is_refresh`), reposter
-  handling and `dedup.same_posting` (used by pipe for DM grouping), baseline catalog code (`SCRAPE_BASELINE`,
-  default **off**; whether the owner turned it on is not known to us).
-- Lead instruction: **stand by, no new work, no live requests.**
-- Waiting on deployed-cycle evidence (do nothing until the lead asks):
-  1. LinkedIn cap 30 → 60: only if deployed cycles show search-429s down from main's 27–112 per cycle
-     (`docker logs gosha-bot`, read-only).
-  2. Baseline Tier B (LinkedIn rotation): not approved; tell gosha-pipe first (its TODO 11, health grace period).
-  3. BestJobs: the prod image got 200 at 13:11 UTC; deployed cycles should show bestjobs > 0 (venv numbers are
-     not evidence, see the BestJobs section).
-- Open lead/owner decisions (sent; the lead was `agent_blocked` then): deactivate the 52 foreign Glassdoor rows
-  (Munich/Kraków/Freising); one eJobs detail GET in the prod image to check `workModel` for "Romania"-only remote ads;
-  pipe's expiry proposal (14 d ejobs/hipo, 30 d keyword boards) for stale empty-description rows.
-- Last full suite on the branch: 1528 passed, 9 skipped; ruff clean.
+## Current state (2026-10-17 ~11:10 UTC) — read this first
+- Hashes after the 2026-10-17 history rewrite (attribution removed): main = **5ef26de** (deployed 10:26 UTC; our
+  deferral fix, was d76c467), branch HEAD = **d2b3ab3** (lead's WIP commit with our pipeline refresh, was c3085b7).
+  **Git is frozen** (owner): no commits by anyone; workers never commit; no Co-Authored-By/Claude-Session/
+  "Generated with Claude Code" lines ever. Never pull/merge/rebase/reset/push.
+- Uncommitted, ours, all tested (full suite 1701 passed, 9 skipped, ruff clean; no board traffic with sockets blocked):
+  1. **Persistent detail caches** — `gosha/scrapers/page_store.py` (SQLite at `data/scrape_cache.sqlite3`, the prod
+     volume; memory-only where `data/` is absent; `SCRAPE_CACHE_PATH` / "off"). details.py (BestJobs/Hipo/eJobs pages +
+     hourly host budget) and the LinkedIn job-page cache (scraper.py) write through and read back after a restart.
+     Wall-clock TTL (24 h) as before. Namespaces carry a hash of the parser's source (`code_version`), so a deploy
+     that changes a parser re-reads its pages; LinkedIn's carries the jobspy version. JSON values; jobspy enums/models
+     are rebuilt only from `jobspy.model`; no pickle. A broken file turns the store off (logged), never a scrape.
+     Tests: tests/scrapers/test_page_store.py, tests/test_scraper_jobspy.py (restart round trip).
+  2. **Stale-row refresh** (pipeline.py, gosha-pipe approved; in d2b3ab3 + a comment): `_row_fields`/`_refresh_fields`
+     shared by `upsert_jobs` and `refresh_known_rows`; `_store_filtered` at both scrape call sites refreshes stored jobs
+     among filter-dropped rows, without touching last_seen_at/is_active and without inserting. tests/test_pipeline_refresh.py.
+  3. **Hipo JSON-LD with raw control characters** — `json.loads(strict=False)`; html_to_text now turns raw \t/\r into
+     whitespace for every board. Probe 10:48 UTC (Bosch 270303): "Invalid control character at: line 32 column 97".
+  4. **Hipo flattened text (audit cause A)** — Hipo's JSON-LD drops tags without separators at the source. The ad is now
+     read from the page body `#anunt-content` when it has structure (≥200 chars, >1 line); JSON-LD stays the source of
+     date/location/employment type and the fallback text. Fixture `tests/scrapers/fixtures/hipo_detail_body.html`
+     (row 8362, captured 10:59 UTC in the prod image, approved GET). On it `required_years` goes None → 3.
+- Lead review (11:30): the memory-only page_store fixture now lives in tests/conftest.py (autouse, whole suite;
+  copies removed from tests/scrapers/conftest.py and tests/test_scraper_jobspy.py). A full run with
+  page_store.DATA_DIR pointed at an existing directory wrote nothing there. The Hipo body text goes through
+  repair_mojibake like the JSON-LD (the captured body is pure ASCII, so it cannot show the repair is never needed);
+  test_hipo_body_text_is_repaired_like_the_json_ld. Suite 1702 passed, 9 skipped.
+- Live requests used today (all lead-approved, prod image, outside cycles): hipo_bosch_probe 10:48:34, hipo_page_capture
+  10:59:14. Next prod cycle 14:29:47 UTC (the 10:26 restart moved the schedule).
+- Heal outlook under 1+2+3+4 once deployed: see "Lead roots (2026-10-17)" below.
 
 ## Mission (one paragraph, self-contained)
 Make GOSHA find the jobs that actually exist for CS students in Romania (+ remote-EU),
@@ -742,3 +752,18 @@ hipo.ro listing on every suite run. Fixed. A full suite run with all sockets blo
 job-board traffic; only huggingface.co lookups from model-loading tests (pass offline; not ours).
 **Left for lead/owner:** the 36 BestJobs + 7 Hipo stale empty rows (active, never re-seen) — deactivate or let expiry take
 them; the pending user_jobs for them (pipe: "stays pending: it may come" never resolves for these rows).
+
+## Lead roots (2026-10-17 ~10:40–11:10 UTC)
+Evidence from the cold-cache cycle 10:29–10:48 (5ef26de): deferral lines BestJobs 3/25/12, Hipo 9; BestJobs 312→28 and
+Hipo 464→20 kept; **0 new rows stored empty**. Hipo kept 6 empty = the Bosch rows (parse bug, fixed in 3).
+**Stale rows (36 BestJobs + 7 Hipo, first seen 2026-10-16 17:3x, last seen 18:26):** in that cycle the boards still
+listed all 7 Hipo and 16 of the 36 BestJobs rows (their pages were fetched); 20 BestJobs were not fetched (deferred — 40
+deferrals that cycle — or no longer listed). With (2) deployed, a listed row heals on the first cycle that has its page
+(description + level filled; DMs pending for it are skipped at send). last_seen_at is not bumped, so healed rows still
+age out: Hipo ~2026-10-30 (14 d catalog rule), BestJobs ~2026-11-15 (30 d). Rows no longer listed stay empty until then;
+they cannot be DMed (lacks_level_evidence) but the feed may show them. After the first deployed cycle, a read-only query
+lists exactly which of the 36 remain empty.
+**check_data_quality:** no change proposed. Its 24 h window is by first_seen_at; after a deploy, (1) means no cold start
+and the deferral means pages over a cap are never stored empty, so a deploy cannot produce the burst any more. What still
+produces empty rows (failed fetches, pages that parse empty) is what it should alert on. The current alert clears when the
+36 rows heal or leave the window (~17:33 UTC 2026-10-17).

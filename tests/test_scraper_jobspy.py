@@ -17,6 +17,7 @@ import pytest
 
 from gosha import scraper
 from gosha.scraper import glassdoor_country, indeed_country, jobspy_kwargs
+from gosha.scrapers import page_store
 
 jobspy = pytest.importorskip("jobspy")
 
@@ -350,7 +351,7 @@ def test_linkedin_detail_pages_are_fetched_once_per_day(monkeypatch):
     job-page request, and LinkedIn answered 429 to 196 of them."""
     monkeypatch.setattr(scraper, "_linkedin_details", {})
     clock = [1000.0]
-    monkeypatch.setattr(scraper.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(scraper.time, "time", lambda: clock[0])
     li = _FakeLinkedIn({"1": {"description": "Build things", "job_level": "internship"}})
     fetch = scraper._cached_linkedin_details(_FakeLinkedIn._fetch_details)
 
@@ -518,3 +519,30 @@ async def test_linkedin_dates_are_marked_as_refresh_dates(monkeypatch):
     )
     flags = dict(zip(df["site"], df["date_posted_is_refresh"]))
     assert flags == {"linkedin": True, "indeed": False, "glassdoor": False}
+
+
+def test_linkedin_detail_pages_survive_a_restart(monkeypatch, tmp_path):
+    """Every deploy restarted with an empty cache and sent LinkedIn every
+    job page again. The page's jobspy objects come back as themselves."""
+    from jobspy.model import Compensation, CompensationInterval, JobType
+
+    path = tmp_path / "cache.sqlite3"
+    page_store.use(page_store.PageStore(path))
+    monkeypatch.setattr(scraper, "_linkedin_details", {})
+    page = {
+        "description": "Build things", "job_level": "internship",
+        "job_type": [JobType.INTERNSHIP],
+        "compensation": Compensation(
+            interval=CompensationInterval.MONTHLY, min_amount=1000, max_amount=2000, currency="EUR",
+        ),
+    }
+    li = _FakeLinkedIn({"7": page})
+    fetch = scraper._cached_linkedin_details(_FakeLinkedIn._fetch_details)
+    fetch(li, "7")
+
+    monkeypatch.setattr(scraper, "_linkedin_details", {})  # the restart
+    page_store.use(page_store.PageStore(path))
+    again = fetch(li, "7")
+    assert li.fetched == ["7"]
+    assert again["job_type"] == [JobType.INTERNSHIP]
+    assert again["compensation"] == page["compensation"]

@@ -7,14 +7,16 @@ page for the postings a query returns, politely:
 
 - at most `limit` network fetches per search (cached pages are free),
 - DETAIL_CONCURRENCY requests in flight per board,
-- a process-wide cache (DETAIL_TTL_SECONDS) keyed by URL: the scheduler
-  re-runs every search each cycle and expands one keyword into several
-  terms, so without it the same page would be fetched over and over.
-  Extraction results are cached even when empty, so a page whose markup
-  changed is not hammered until the TTL passes; network errors are not
-  cached, so they are retried next cycle.
+- a cache (DETAIL_TTL_SECONDS) keyed by URL: the scheduler re-runs every
+  search each cycle and expands one keyword into several terms, so without
+  it the same page would be fetched over and over. Extraction results are
+  cached even when empty, so a page whose markup changed is not hammered
+  until the TTL passes; network errors are not cached, so they are retried
+  next cycle. It is written through to disk (page_store) and read back
+  after a restart, so a deploy is not a cold start.
 
-- an hourly budget of network fetches per host (HOST_BUDGET_PER_HOUR).
+- an hourly budget of network fetches per host (HOST_BUDGET_PER_HOUR),
+  kept on disk too, so a restart does not hand out a second one.
   Every keyword term is its own search with its own `limit`, and a
   restart (every deploy) empties the cache, so without it one cycle could
   fetch several hundred pages from one board in a few minutes. With it the
@@ -31,7 +33,6 @@ import asyncio
 import html as html_lib
 import logging
 import re
-import time
 from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
@@ -39,6 +40,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from gosha.scrapers import page_store
 from gosha.scrapers.base import strip_invisible
 
 log = logging.getLogger(__name__)
@@ -77,7 +79,10 @@ def html_to_text(markup: str | None) -> str:
         text = html_lib.unescape(text)
     if _DECODED_TAG_RE.search(text):
         text = _DECODED_TAG_RE.sub(" ", _BREAK_RE.sub("\n", text))
-    text = strip_invisible(text).replace("\xa0", " ")
+    # A raw tab or carriage return inside a JSON string (Hipo, Bosch) is
+    # whitespace, not something to store or show in a DM.
+    text = strip_invisible(text).replace("\xa0", " ").replace("\r\n", "\n")
+    text = text.replace("\r", "\n").replace("\t", " ")
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r" *\n *", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -108,40 +113,73 @@ def repair_mojibake(text: str) -> str:
     return repaired if markers(repaired) < markers(text) else text
 
 
+_PAGES = "detail:"  # + the parser's code version, see _pages_namespace
+_BUDGETS = "budget:detail"
+PRUNE_EVERY_WRITES = 500
+_writes = 0
+
+
+def _pages_namespace(extract: Callable[[str], dict[str, Any]]) -> str:
+    """Pages parsed by this extractor, as long as its code and ours are unchanged."""
+    module = getattr(extract, "__module__", None) or "unknown"
+    name = getattr(extract, "__qualname__", None) or "extract"
+    version = page_store.code_version(module, __name__, "gosha.scrapers.base")
+    return f"{_PAGES}{module}.{name}:{version}"
+
+
 def clear_cache() -> None:
     _cache.clear()
     _budget.clear()
+    store = page_store.store()
+    store.clear(_PAGES)
+    store.clear(_BUDGETS)
 
 
 def _take_budget(url: str, now: float) -> bool:
     """Spend one network fetch of `url`'s host budget; False when spent."""
     host = urlsplit(url).netloc
+    if host not in _budget:
+        stored = page_store.store().get(_BUDGETS, host)
+        if stored is not None:
+            start, value = stored
+            _budget[host] = (start, int(value.get("used", 0)))
     start, used = _budget.get(host, (now, 0))
     if now - start >= 3600:
         start, used = now, 0
     if used >= HOST_BUDGET_PER_HOUR:
         return False
     _budget[host] = (start, used + 1)
+    page_store.store().put(_BUDGETS, host, {"used": used + 1}, start)
     return True
 
 
-def _cached(url: str, now: float) -> dict[str, Any] | None:
+def _cached(url: str, now: float, namespace: str) -> dict[str, Any] | None:
     entry = _cache.get(url)
     if entry is None:
-        return None
+        entry = page_store.store().get(namespace, url)  # fetched before a restart
+        if entry is None:
+            return None
+        _cache[url] = entry
     fetched_at, detail = entry
     if now - fetched_at > DETAIL_TTL_SECONDS:
         del _cache[url]
+        page_store.store().delete(namespace, url)
         return None
     _cache.move_to_end(url)
     return detail
 
 
-def _store(url: str, detail: dict[str, Any], now: float) -> None:
+def _store(url: str, detail: dict[str, Any], now: float, namespace: str) -> None:
     _cache[url] = (now, detail)
     _cache.move_to_end(url)
     while len(_cache) > MAX_CACHE_ENTRIES:
         _cache.popitem(last=False)
+    global _writes
+    store = page_store.store()
+    store.put(namespace, url, detail, now)
+    _writes += 1
+    if _writes % PRUNE_EVERY_WRITES == 0:  # now and then, not on every page
+        store.prune(_PAGES, now - DETAIL_TTL_SECONDS, MAX_CACHE_ENTRIES)
 
 
 async def fetch_details(
@@ -157,11 +195,12 @@ async def fetch_details(
     because `limit` or the host budget was spent. A fetch that fails is not
     deferred: it is retried next cycle, but its posting is not held back.
     """
-    now = time.monotonic()
+    now = page_store.now()
+    namespace = _pages_namespace(extract)
     results: dict[str, dict[str, Any]] = {}
     to_fetch: list[str] = []
     for url in dict.fromkeys(urls):  # de-duplicate, keep order
-        cached = _cached(url, now)
+        cached = _cached(url, now, namespace)
         if cached is not None:
             results[url] = cached
         elif len(to_fetch) < limit and _take_budget(url, now):
@@ -184,7 +223,7 @@ async def fetch_details(
         except Exception as exc:  # markup drift must not kill the search
             log.warning("Detail parse failed for %s: %s", url, exc)
             detail = {}
-        _store(url, detail, time.monotonic())
+        _store(url, detail, page_store.now(), namespace)
         results[url] = detail
 
     await asyncio.gather(*(fetch(url) for url in to_fetch))
