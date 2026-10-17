@@ -61,6 +61,126 @@ log = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _row_urls(df: pd.DataFrame) -> list[str]:
+    return [
+        str(u)
+        for u in (
+            df.get("job_url", pd.Series(dtype=object))
+            .fillna(
+                df.get("job_url_direct", pd.Series(dtype=object))
+            )
+            .fillna(df.get("link", pd.Series(dtype=object)))
+            .tolist()
+        )
+        if u and str(u) != "nan"
+    ]
+
+
+def _row_fields(row: pd.Series) -> dict | None:
+    """A scraped row as Job column values; None for a row without a usable URL."""
+    url = str(
+        row.get("job_url")
+        or row.get("job_url_direct")
+        or row.get("link")
+        or ""
+    )
+    if not url or url == "nan" or len(url) > _URL_MAX:
+        return None
+
+    salary_min = _parse_float(row, "min_amount")
+    salary_max = _parse_float(row, "max_amount")
+    salary_currency = (
+        _fit(str(row["currency"]), 16)
+        if "currency" in row and pd.notna(row.get("currency"))
+        else None
+    )
+    # JobSpy calls it "interval"; our adapters emit the same key.
+    salary_period = (
+        _fit(str(row["interval"]), 16)
+        if "interval" in row and pd.notna(row.get("interval"))
+        else None
+    )
+    # Normalise once, here, so the filter and the sort can compare
+    # eJobs' monthly RON with RemoteOK's annual USD.
+    monthly_min, monthly_max = normalise_range(
+        salary_min, salary_max, salary_currency, salary_period,
+    )
+    level = row.get("experience_level")
+    return {
+        "url": url,
+        # Fitted to the column widths: Postgres rejects an over-long
+        # value and rolls back the whole batch, and a BestJobs posting
+        # listing 25 cities is a 300-character location.
+        "title": _fit(_clean(row.get("title"), "Unknown Title"), 512),
+        "company": _fit(_clean(row.get("company"), "Unknown"), 256),
+        "location": _fit(_clean(row.get("location"), ""), 256),
+        "description": _clean(row.get("description"), ""),
+        "source": _fit(_clean(row.get("site"), "unknown"), 64),
+        "salary_min": salary_min,
+        "salary_max": salary_max,
+        "salary_currency": salary_currency,
+        "salary_period": salary_period,
+        "salary_monthly_min_ron": monthly_min,
+        "salary_monthly_max_ron": monthly_max,
+        "posted_at": _parse_datetime(row, "date_posted"),
+        # Hipo's date is the last refresh (RawJob.posted_at_is_refresh):
+        # an upper bound of the posting date. Absent (JobSpy) means not.
+        "refreshed": _flag(row, "date_posted_is_refresh"),
+        "experience_level": level if level in EXPERIENCE_LEVELS else None,
+    }
+
+
+def _refresh_fields(existing: Job, f: dict) -> None:
+    """What a new sighting tells about a stored job, applied to it.
+
+    Shared by the upsert and refresh_known_rows; neither sighting nor
+    activity (last_seen_at, is_active) is touched here.
+    """
+    title, company, description = f["title"], f["company"], f["description"]
+    # The vector embeds title, company and description; when any of them
+    # changes (typically a description arriving from a detail page for a
+    # job first seen title-only), drop it so the embed step re-encodes it.
+    if (
+        (title != "Unknown Title" and title != existing.title)
+        or (company != "Unknown" and company != existing.company)
+        or (description and description != existing.description)
+    ):
+        existing.embedding = None
+        existing.embedding_model = None
+    if title != "Unknown Title":
+        existing.title = title
+    if company != "Unknown":
+        existing.company = company
+    if f["location"]:
+        existing.location = f["location"]
+    if description:
+        existing.description = description
+    for column in (
+        "salary_min", "salary_max", "salary_monthly_min_ron", "salary_monthly_max_ron",
+    ):
+        if f[column] is not None:
+            setattr(existing, column, f[column])
+    if f["salary_currency"]:
+        existing.salary_currency = f["salary_currency"]
+    if f["salary_period"]:
+        existing.salary_period = f["salary_period"]
+    posted_at = f["posted_at"]
+    if posted_at is not None and f["refreshed"]:
+        # The posting is no newer than the earliest date we know of, our
+        # first sighting included: a later refresh must not make an old ad
+        # look new.
+        existing.posted_at = min(
+            d for d in (
+                _utc(existing.posted_at), _utc(posted_at),
+                _utc(existing.first_seen_at),
+            ) if d is not None
+        )
+    elif posted_at is not None:
+        existing.posted_at = posted_at
+    if f["experience_level"] is not None:
+        existing.experience_level = f["experience_level"]
+
+
 async def upsert_jobs(df: pd.DataFrame) -> list[Job]:
     """Insert new jobs or update last_seen_at for existing ones.
 
@@ -77,143 +197,48 @@ async def upsert_jobs(df: pd.DataFrame) -> list[Job]:
         # A broad keyword expands into ~19 searches x 30 results across 7
         # sources, so the per-row lookup was hundreds of round trips per
         # cycle against a Postgres in another container.
-        urls = [
-            str(u)
-            for u in (
-                df.get("job_url", pd.Series(dtype=object))
-                .fillna(
-                    df.get("job_url_direct", pd.Series(dtype=object))
-                )
-                .fillna(df.get("link", pd.Series(dtype=object)))
-                .tolist()
-            )
-            if u and str(u) != "nan"
-        ]
+        urls = _row_urls(df)
         existing_by_url: dict[str, Job] = {}
         if urls:
             found = await session.execute(select(Job).where(Job.url.in_(urls)))
             existing_by_url = {job.url: job for job in found.scalars().all()}
 
         for _, row in df.iterrows():
-            url = str(
-                row.get("job_url")
-                or row.get("job_url_direct")
-                or row.get("link")
-                or ""
-            )
-            if not url or url == "nan" or len(url) > _URL_MAX:
+            f = _row_fields(row)
+            if f is None:
                 continue
-
-            # Fitted to the column widths: Postgres rejects an over-long
-            # value and rolls back the whole batch, and a BestJobs posting
-            # listing 25 cities is a 300-character location.
-            title = _fit(_clean(row.get("title"), "Unknown Title"), 512)
-            company = _fit(_clean(row.get("company"), "Unknown"), 256)
-            location = _fit(_clean(row.get("location"), ""), 256)
-            description = _clean(row.get("description"), "")
-            source = _fit(_clean(row.get("site"), "unknown"), 64)
-
-            salary_min = _parse_float(row, "min_amount")
-            salary_max = _parse_float(row, "max_amount")
-            salary_currency = (
-                _fit(str(row["currency"]), 16)
-                if "currency" in row and pd.notna(row.get("currency"))
-                else None
-            )
-            # JobSpy calls it "interval"; our adapters emit the same key.
-            salary_period = (
-                _fit(str(row["interval"]), 16)
-                if "interval" in row and pd.notna(row.get("interval"))
-                else None
-            )
-            # Normalise once, here, so the filter and the sort can compare
-            # eJobs' monthly RON with RemoteOK's annual USD.
-            monthly_min, monthly_max = normalise_range(
-                salary_min, salary_max, salary_currency, salary_period,
-            )
-            posted_at = _parse_datetime(row, "date_posted")
-            # Hipo's date is the last refresh (RawJob.posted_at_is_refresh):
-            # an upper bound of the posting date. Absent (JobSpy) means not.
-            refreshed = _flag(row, "date_posted_is_refresh")
-            level = row.get("experience_level")
-            experience_level = level if level in EXPERIENCE_LEVELS else None
-
-            existing = existing_by_url.get(url)
+            existing = existing_by_url.get(f["url"])
 
             if existing:
                 existing.last_seen_at = now
                 existing.is_active = True
-                # The vector embeds title, company and description; when
-                # any of them changes (typically a description arriving
-                # from a detail page for a job first seen title-only),
-                # drop it so the embed step re-encodes the posting.
-                if (
-                    (title != "Unknown Title" and title != existing.title)
-                    or (company != "Unknown" and company != existing.company)
-                    or (description and description != existing.description)
-                ):
-                    existing.embedding = None
-                    existing.embedding_model = None
-                if title != "Unknown Title":
-                    existing.title = title
-                if company != "Unknown":
-                    existing.company = company
-                if location:
-                    existing.location = location
-                if description:
-                    existing.description = description
-                if salary_min is not None:
-                    existing.salary_min = salary_min
-                if salary_max is not None:
-                    existing.salary_max = salary_max
-                if salary_currency:
-                    existing.salary_currency = salary_currency
-                if salary_period:
-                    existing.salary_period = salary_period
-                if monthly_min is not None:
-                    existing.salary_monthly_min_ron = monthly_min
-                if monthly_max is not None:
-                    existing.salary_monthly_max_ron = monthly_max
-                if posted_at is not None and refreshed:
-                    # The posting is no newer than the earliest date we
-                    # know of, our first sighting included: a later refresh
-                    # must not make an old ad look new.
-                    existing.posted_at = min(
-                        d for d in (
-                            _utc(existing.posted_at), _utc(posted_at),
-                            _utc(existing.first_seen_at),
-                        ) if d is not None
-                    )
-                elif posted_at is not None:
-                    existing.posted_at = posted_at
-                if experience_level is not None:
-                    existing.experience_level = experience_level
+                _refresh_fields(existing, f)
                 jobs.append(existing)
             else:
                 job = Job(
-                    url=url,
-                    title=title,
-                    company=company,
-                    location=location,
-                    description=description,
-                    salary_min=salary_min,
-                    salary_max=salary_max,
-                    salary_currency=salary_currency,
-                    salary_period=salary_period,
-                    salary_monthly_min_ron=monthly_min,
-                    salary_monthly_max_ron=monthly_max,
-                    source=source,
+                    url=f["url"],
+                    title=f["title"],
+                    company=f["company"],
+                    location=f["location"],
+                    description=f["description"],
+                    salary_min=f["salary_min"],
+                    salary_max=f["salary_max"],
+                    salary_currency=f["salary_currency"],
+                    salary_period=f["salary_period"],
+                    salary_monthly_min_ron=f["salary_monthly_min_ron"],
+                    salary_monthly_max_ron=f["salary_monthly_max_ron"],
+                    source=f["source"],
                     first_seen_at=now,
                     last_seen_at=now,
-                    posted_at=posted_at,
-                    experience_level=experience_level,
+                    posted_at=f["posted_at"],
+                    experience_level=f["experience_level"],
                 )
                 session.add(job)
                 jobs.append(job)
                 # A batch can contain the same URL twice (two keywords hit
                 # the same posting); without this the second occurrence
                 # would insert a duplicate and trip the unique constraint.
-                existing_by_url[url] = job
+                existing_by_url[f["url"]] = job
 
         await session.commit()
 
@@ -303,8 +328,9 @@ async def run_scrape_stage(
         if df.empty:
             continue
         _count_scraped(scraped, df)
-        df = filter_dataframe(df, keywords, levels_for.get(_group_of(combo)))
-        upserted = await _upsert_safely(df, f"JobSpy {keyword!r} in {location!r}")
+        upserted = await _store_filtered(
+            df, keywords, levels_for.get(_group_of(combo)), f"JobSpy {keyword!r} in {location!r}",
+        )
         _note_scraped(scraped_for, combo, upserted)
         all_jobs.extend(upserted)
 
@@ -493,6 +519,55 @@ async def _upsert_safely(df: pd.DataFrame, what: str) -> list[Job]:
         return []
 
 
+async def refresh_known_rows(df: pd.DataFrame) -> int:
+    """Correct the stored jobs among rows the scrape filter dropped.
+
+    A posting stored before its detail page was read (no level, no
+    description) passes a junior search's filter; once the page says
+    Middle the filter drops it, and without this the stored row kept its
+    empty description and missing level, active, for good: 36 BestJobs and
+    7 Hipo rows after the 2026-10-16 deploys. Their fields are refreshed;
+    last_seen_at and is_active are not, so a posting no search keeps ages
+    out (deadlinks) instead of being kept alive or revived by the board
+    still listing it. New URLs are not inserted. Returns the rows refreshed.
+    """
+    urls = _row_urls(df)
+    if not urls:
+        return 0
+    refreshed = 0
+    async with get_session() as session:
+        found = await session.execute(select(Job).where(Job.url.in_(urls)))
+        existing_by_url = {job.url: job for job in found.scalars().all()}
+        if not existing_by_url:
+            return 0
+        for _, row in df.iterrows():
+            f = _row_fields(row)
+            existing = existing_by_url.get(f["url"]) if f else None
+            if existing is not None:
+                _refresh_fields(existing, f)
+                refreshed += 1
+        await session.commit()
+    if refreshed:
+        log.info("Refreshed %d stored jobs the filter no longer keeps", refreshed)
+    return refreshed
+
+
+async def _store_filtered(
+    df: pd.DataFrame, keywords: list[str], levels: list[str] | None, what: str,
+) -> list[Job]:
+    """filter_dataframe, then upsert what it keeps and refresh the stored
+    jobs among what it drops (refresh_known_rows). Logs instead of raising."""
+    kept = filter_dataframe(df, keywords, levels)
+    jobs = await _upsert_safely(kept, what)
+    dropped = df[~df.index.isin(kept.index)]
+    if not dropped.empty:
+        try:
+            await refresh_known_rows(dropped)
+        except Exception as exc:
+            log.error("Refreshing %d dropped jobs from %s failed: %s", len(dropped), what, exc)
+    return jobs
+
+
 # Keyword expansion fans a broad term into up to ~19 searches. eJobs, Hipo,
 # RemoteOK and Jobicy answer every term of a combo from one cached listing,
 # so in practice only BestJobs makes a request per term.
@@ -559,8 +634,9 @@ async def _scrape_extra_sources(
             df = df.drop_duplicates(subset=["job_url"], keep="first")
             if scraped is not None:
                 _count_scraped(scraped, df)
-            df = filter_dataframe(df, keywords, levels)
-            jobs = await _upsert_safely(df, f"{scraper.name} {keyword!r} in {location!r}")
+            jobs = await _store_filtered(
+                df, keywords, levels, f"{scraper.name} {keyword!r} in {location!r}",
+            )
             _note_scraped(scraped_for, combo, jobs)
             if jobs:
                 collected.extend(jobs)

@@ -1,4 +1,4 @@
-# 22:08-CYCLE FIX (gosha-pipe, 2026-10-17) — NOT COMMITTED, waiting for the lead to gate
+# 22:08-CYCLE FIX (gosha-pipe, 2026-10-17) — committed by the lead in 3b150ad
 
 The 22:08 UTC cycle (2026-10-16, main 1fe6243) sent 17 DMs. 8 were wrong: Meteocontrol "Database & DevOps Engineer" (job 8382) and NTT DATA "AI Engineer (Python)" (job 8381), ×4 intern+junior searches (subs 3/5/25/26). Fix in gosha/filters.py:
 - **"N years as <role>"** counts as required experience (`_ROLE_WORD` branch in `_YEARS_THEN_EXPERIENCE_RE`): "3+ years as DevOps/Database engineer" → 3. Role nouns: engineer, developer, programmer, analyst, tester, administrator, architect, consultant, designer, specialist, scientist, accountant, and the RO forms (inginer, programator, dezvoltator, analist, contabil). "2 years as part of the rotation", "as a student assistant" and "Bonus: 3 years as …" do not count.
@@ -286,7 +286,12 @@ Each item has tests with the real prod titles:
 - Before the rule I also ran old-vs-new aggregate level splits on eval/heldout, which printed the titles of postings whose years changed (the two above). From now on, only eval/postings.jsonl.
 
 ## In progress (exact state)
-The 22:08-cycle fix (top section) is uncommitted in the working tree: gosha/filters.py and tests/test_dm_postdeploy.py, plus this handoff. It waits for the lead to gate and commit. Everything before it is committed (last in 1fe6243, deployed 18:05 UTC 2026-10-16). Full suite 1655 passed, 9 skipped; ruff clean. No live requests.
+Nothing of mine in progress; all my work is committed (last: 3b150ad, the 22:08-cycle fix). Suite 1655 passed, 9 skipped; ruff clean.
+**gosha-scrape is editing gosha/pipeline.py with my OK (2026-10-17).** The change: `_refresh_known_rows` at both scrape call sites. Rows that filter_dataframe dropped but whose URL is already stored get a field refresh, so BestJobs/Hipo rows stored before their detail page was read stop staying empty. My conditions:
+- one shared helper with the existing-row branch of upsert_jobs;
+- no last_seen_at bump or is_active=True on those rows, so deadlinks ages them out;
+- a test that a pending UserJob for such a row is skipped at send time.
+Re-read their diff when they report.
 Watch after release: rows held back for want of a description stay pending until it arrives or DM_RETRY_WINDOW (2 days) ends. Flagged, not changed: months are not parsed as years ("min. 24 luni").
 
 ## Remaining TODO (prioritized)
