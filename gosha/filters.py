@@ -1140,7 +1140,14 @@ _EXPERIENCE_WORD = r"(?:experien\w*|exp\b|practic[ae]\b)"
 # ani de experiență". A few words, none of them saying the years are
 # something else ("4 years old", "5 years on the market"). "4+ years of
 # Swift development", "8+ years in the industry" name the experience
-# without the word, and "10+ years required" needs no word at all.
+# without the word, and "10+ years required" needs no word at all. "3+
+# years as DevOps/Database engineer" names a role instead (Meteocontrol's
+# posting, sent to junior searches on 2026-10-16).
+_ROLE_WORD = (
+    r"(?:engineer|developer|programmer|analyst|tester|administrator|architect|"
+    r"consultant|designer|specialist|scientist|accountant|"
+    r"inginer|programator|dezvoltator|analist|contabil)s?\b"
+)
 _GAP_WORD = r"(?!old\b|ago\b|on\b|in\s+business\b|pe\b|we\b|our\b|you\b|will\b)\S+\s+"
 _YEARS_THEN_EXPERIENCE_RE = re.compile(
     r"^[\s'’)+]*(?:"
@@ -1148,6 +1155,7 @@ _YEARS_THEN_EXPERIENCE_RE = re.compile(
     r"(?:of|de|in)\s+(?:" + _GAP_WORD + r"){0,7}"
     r"(?:development|programming|engineering|dezvoltare|programare)\b|"
     r"in\s+(?:(?:the|a|this)\s+)?(?:industry|field|domain|domeniu|similar\s+(?:role|position))\b|"
+    r"(?:as|ca)\s+(?:an?\s+|un\s+|o\s+)?(?:\S+\s+){0,4}?" + _ROLE_WORD + r"|"
     r"(?:required|needed|necesar\w*|obligatori\w*)\b)"
 )
 # "Experience 3+ years", "experiență minimă 2 ani", "experience: at least 3
@@ -1325,7 +1333,9 @@ def _asks_junior_years(title: str, description: str | None) -> bool:
 # Postings that say who they want without a number: "we are looking for an
 # experienced Software Developer", "an experienced and motivated System
 # Engineer", "Proven customer-facing experience in a technical support
-# role", "Previous experience working in localization engineering".
+# role", "Previous experience working in localization engineering", "We are
+# looking for Artificial Intelligence Engineering Experts", "Proven
+# expert-level track record" (NTT DATA's AI Engineer, 2026-10-16).
 # Production DMs judged wrong (2026-10-16) were sent to junior
 # searches through these. Not the team ("alongside experienced
 # colleagues", "join our experienced and motivated team"), nor tools
@@ -1338,7 +1348,10 @@ _EXPERIENCED_RE = re.compile(
     r"(?:experienced|seasoned)\b(?!\s+(?:team|colleagues|people|peers|mentors)\b)|"
     r"\b(?:experienced|seasoned)\s+and\s+(?:motivated|passionate|driven|dedicated|skilled|talented)\s+"
     r"(?!(?:team|colleagues|people|peers|mentors|professionals)\b)|"
-    r"\bproven\s+(?:[\w-]+\s+){0,3}?experience\s+(?:as|in)\b|\bproven\s+track\s+record\b|"
+    r"\b(?:looking for|searching for|seeking|hiring|in search of)\s+(?:an?\s+)?"
+    r"(?:(?!(?:to|who|that|and|or|future|young|aspiring|become)\b)[\w-]+\s+){0,4}?experts?\b|"
+    r"\bproven\s+(?:[\w-]+\s+){0,3}?experience\s+(?:as|in)\b|"
+    r"\bproven\s+(?:[\w-]+\s+){0,3}?track\s+record\b|"
     r"\bprevious\s+(?:[\w-]+\s+){0,2}?experience\s+(?:working\s+)?(?:in|as|with)\b|"
     r"\bcautam\s+(?:un|o)\s+(?:\w+\s+){0,3}?experimentat\w*"
 )

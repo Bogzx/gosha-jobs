@@ -128,6 +128,79 @@ def test_years_written_4y_plus():
     assert required_years("Our 4y roadmap") is None
 
 
+# Wrong DMs of the 22:08 UTC cycle (2026-10-16) to intern+junior searches.
+METEOCONTROL = (
+    "#### **Your profile:**\n\n* 3+ years as DevOps/Database engineer\n* TimeScaleDB or "
+    "comparable time-series database\n* Database lifecycle management and performance "
+    "optimizations\n* Podman and container orchestration\n* Backup and recovery concepts\n"
+    "* CI/CD and build automation\n* Experience in agile software development\n* Good "
+    "communication skills\n* Hands-on in industrial cybersecurity\n* Bonus: Experience with "
+    "SCADA or comparable industrial systems"
+)
+NTT_AI_EXPERTS = (
+    "We are looking for Artificial Intelligence Engineering Experts to lead the design, "
+    "industrialization, and continuous improvement of production AI capabilities for our "
+    "platform."
+)
+NTT_AI_TRACK_RECORD = (
+    "* Proven expert-level track record designing, delivering, and operating production "
+    "machine-learning or generative-AI systems"
+)
+# NTT DATA's QA Engineer, judged borderline: stays junior.
+NTT_QA = (
+    "The role requires strong test automation experience, ideally with Playwright, as well "
+    "as the ability to work with SQL to validate data and investigate application behavior "
+    "at database level.\n\n**What you'll bring along**\n\n* Degree in Computer Science, "
+    "Business Informatics, or a comparable field\n* Hands-on experience developing and "
+    "maintaining UI and REST API test automation using Playwright or Cypress\n* Experience "
+    "in manual software testing, preferably within Agile environments (e.g., Scrum)"
+)
+
+
+@pytest.mark.parametrize("title, description", [
+    ("Database & DevOps Engineer (all genders)", METEOCONTROL),
+    ("AI Engineer (Python)", NTT_AI_EXPERTS),
+    ("AI Engineer (Python)", NTT_AI_TRACK_RECORD),
+])
+def test_22_08_cycle_postings_are_not_junior(title, description):
+    assert not matches_experience_level(title, ["intern", "junior"], None, description)
+    assert not title_is_relevant(
+        title, "computer science internship", None, description, ["intern", "junior"]
+    )
+
+
+def test_years_as_a_role():
+    assert required_years("* 3+ years as DevOps/Database engineer") == 3
+    assert required_years("* Minimum 3-6+ years as a Platform Engineer") == 3
+    assert required_years("Ai lucrat 2 ani ca programator") == 2
+    assert required_years("Experience in Java, 5 years as a Senior Java Developer") == 5
+    # "as" without a role: not experience.
+    assert required_years("You will spend 2 years as part of our rotation programme") is None
+    assert required_years("2 years as a student assistant") is None
+    # A wish stays a wish.
+    assert required_years("Bonus: 3 years as a data engineer") is None
+
+
+@pytest.mark.parametrize("text, experienced", [
+    (NTT_AI_EXPERTS, True),
+    (NTT_AI_TRACK_RECORD, True),
+    ("We are seeking cloud security experts to join the team.", True),
+    ("We are looking for students who want to become experts in cloud.", False),
+    ("We are looking for future experts in data engineering.", False),
+    ("Our experts will mentor you.", False),
+    ("A proven academic track record is a plus.", False),
+])
+def test_experts_and_track_record_wording(text, experienced):
+    assert asks_experienced(text) is experienced
+
+
+def test_borderline_ntt_qa_stays_junior():
+    title = "QA Engineer with SQL/Database Testing"
+    assert required_years(NTT_QA) is None
+    assert not asks_experienced(NTT_QA)
+    assert matches_experience_level(title, ["intern", "junior"], None, NTT_QA)
+
+
 # ── B: no evidence of the level ───────────────────────────────────────
 
 LONG_TEXT = "You will build data pipelines in Python and SQL with our team in Cluj. " * 4

@@ -1,3 +1,15 @@
+# 22:08-CYCLE FIX (gosha-pipe, 2026-10-17) — NOT COMMITTED, waiting for the lead to gate
+
+The 22:08 UTC cycle (2026-10-16, main 1fe6243) sent 17 DMs. 8 were wrong: Meteocontrol "Database & DevOps Engineer" (job 8382) and NTT DATA "AI Engineer (Python)" (job 8381), ×4 intern+junior searches (subs 3/5/25/26). Fix in gosha/filters.py:
+- **"N years as <role>"** counts as required experience (`_ROLE_WORD` branch in `_YEARS_THEN_EXPERIENCE_RE`): "3+ years as DevOps/Database engineer" → 3. Role nouns: engineer, developer, programmer, analyst, tester, administrator, architect, consultant, designer, specialist, scientist, accountant, and the RO forms (inginer, programator, dezvoltator, analist, contabil). "2 years as part of the rotation", "as a student assistant" and "Bonus: 3 years as …" do not count.
+- **`asks_experienced`** also catches "looking for / seeking / hiring … experts" (up to 4 words between, none of to/who/that/and/or/future/young/aspiring/become) and "proven <up to 3 words> track record" ("Proven expert-level track record").
+- NTT DATA "QA Engineer with SQL/Database Testing" (8380, borderline) is unchanged and still junior. The one narrow candidate rule, "requires strong … experience", cannot catch it, because the sentence says "ideally with Playwright" and the whole-sentence wish check skips it. Catching it would mean scoping wishes per clause, which isn't narrow, so I reverted that rule.
+- Tests (tests/test_dm_postdeploy.py): the exact sentences from 8382, 8381 and 8380, plus negatives. 7 of the new tests fail on 1fe6243 and all pass now.
+- Replay of the 17 sent DMs through `job_matches_subscription`: the 8 wrong ones are blocked; Vertiv ×4 and NTT QA ×5 are still sent.
+- Flips, 1fe6243 → now (required_years / asks_experienced / _is_junior): eval main set 0; prod snapshot (845 active jobs at 17:38 on 2026-10-16) 2. One is the same NTT AI Engineer posting under an earlier id (8264); the other is NTT "AI Engineer/Agentic Workflow Platform" ("Minimum 3-6+ years as a Platform Engineer" → 3). Both are right.
+- Eval `--check` (DM score, feed, delivery tables), main and held-out: exit 0, and the output is identical to the 1fe6243 run. Precision and recall deltas are 0.000 everywhere. I ran only the aggregate check on held-out and read no postings.
+- **Commit-ready:** gosha/filters.py, tests/test_dm_postdeploy.py. **Suite: 1655 passed, 9 skipped; ruff clean.**
+
 # POST-DEPLOY FIX (gosha-pipe, 2026-10-16 ~18:00 UTC) — RELEASED: committed in 1fe6243, main deployed 18:05 UTC; the lead verified the first cycle's 20 DMs by hand, all relevant
 
 The lead judged the 65 DMs of the first 03e5314 cycle (17:35): 51 right, 14 wrong. Fixes, each tested on the real titles and text (tests/test_dm_postdeploy.py):
@@ -274,7 +286,7 @@ Each item has tests with the real prod titles:
 - Before the rule I also ran old-vs-new aggregate level splits on eval/heldout, which printed the titles of postings whose years changed (the two above). From now on, only eval/postings.jsonl.
 
 ## In progress (exact state)
-Nothing in progress; working tree clean at 0e80e02 (all my work is committed, last in 1fe6243, deployed 18:05 UTC 2026-10-16). Full suite 1643 passed, 9 skipped; ruff clean. Standing by per the lead: no new work, no live requests.
+The 22:08-cycle fix (top section) is uncommitted in the working tree: gosha/filters.py and tests/test_dm_postdeploy.py, plus this handoff. It waits for the lead to gate and commit. Everything before it is committed (last in 1fe6243, deployed 18:05 UTC 2026-10-16). Full suite 1655 passed, 9 skipped; ruff clean. No live requests.
 Watch after release: rows held back for want of a description stay pending until it arrives or DM_RETRY_WINDOW (2 days) ends. Flagged, not changed: months are not parsed as years ("min. 24 luni").
 
 ## Remaining TODO (prioritized)
