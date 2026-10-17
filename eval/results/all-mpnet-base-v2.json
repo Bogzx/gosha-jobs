@@ -1029,9 +1029,9 @@
    "generic": {
     "low_n": 3,
     "no_relevant": 3,
-    "p@10": 1.0,
+    "p@10": 0.9666666666666667,
     "p@10_ci95": [
-     1.0,
+     0.9333333333333332,
      1.0
     ],
     "p@5": 1.0,
@@ -1040,10 +1040,10 @@
      1.0
     ],
     "pool": 8.0,
-    "recall": 0.15151515151515152,
+    "recall": 0.6969696969696969,
     "relevant_in_pool": 7.333333333333333,
     "searches": 9,
-    "sent": 1.1111111111111112,
+    "sent": 5.333333333333333,
     "starved": 0
    },
    "locations_applied": false,
@@ -1072,13 +1072,13 @@
       "junior"
      ],
      "low_n": false,
-     "p@10": 1.0,
+     "p@10": 0.9,
      "p@5": 1.0,
      "persona": null,
      "pool": 12,
-     "recall": 0.09090909090909091,
+     "recall": 1.0,
      "relevant_in_pool": 11,
-     "sent": 1,
+     "sent": 12,
      "starved": false
     },
     {
@@ -1088,13 +1088,13 @@
       "junior"
      ],
      "low_n": false,
-     "p@10": 1.0,
+     "p@10": 0.9,
      "p@5": 1.0,
      "persona": null,
      "pool": 12,
-     "recall": 0.09090909090909091,
+     "recall": 1.0,
      "relevant_in_pool": 11,
-     "sent": 1,
+     "sent": 12,
      "starved": false
     },
     {
@@ -1125,9 +1125,9 @@
      "p@5": 1.0,
      "persona": null,
      "pool": 12,
-     "recall": 0.18181818181818182,
+     "recall": 0.9090909090909091,
      "relevant_in_pool": 11,
-     "sent": 2,
+     "sent": 10,
      "starved": false
     },
     {
@@ -1141,9 +1141,9 @@
      "p@5": 1.0,
      "persona": null,
      "pool": 12,
-     "recall": 0.18181818181818182,
+     "recall": 0.9090909090909091,
      "relevant_in_pool": 11,
-     "sent": 2,
+     "sent": 10,
      "starved": false
     },
     {

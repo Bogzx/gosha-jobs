@@ -914,24 +914,46 @@ async def match_jobs_for_subscription(
             with_cv = user_vector is not None and np.shape(user_vector) == np.shape(query_emb)
             query_emb = blend_with_user_vector(query_emb, user_vector)
             is_match = functools.partial(semantic_matcher.is_match, with_cv=with_cv)
+            term_queries = None
             if not with_cv:
                 # The DM score (gosha.matching, gosha-rank): the query minus
                 # DM_ALPHA times the mean of a panel of other searches for
                 # the same places and levels, filtered on its own threshold.
                 # The panel is encoded once per (places, levels): ~1 s.
+                # A field keyword ("computer science internship") is also
+                # scored through each role it stands for, and the best term
+                # counts: a junior Data Scientist posting names the role,
+                # not the field (71 of 77 missed DMs, owner, 2026-10-17).
+                dm_terms = getattr(semantic_matcher, "dm_term_queries", None)
                 dm_query = getattr(semantic_matcher, "dm_query", None)
-                dm_q = None
-                if dm_query is not None:
-                    dm_q = await asyncio.to_thread(
-                        dm_query, query_emb, sub.locations, sub.experience_levels,
+                if dm_terms is not None:
+                    term_queries = await asyncio.to_thread(
+                        dm_terms, keywords, sub.locations, sub.experience_levels,
                     )
-                if dm_q is not None:
-                    query_emb, is_match = dm_q, semantic_matcher.is_dm_match
-                elif dm_query is not None:
-                    log.warning("DM query unavailable for search #%s: plain cosine", sub.id)
+                    if term_queries is not None:
+                        is_match = semantic_matcher.is_dm_match
+                    else:
+                        log.warning("DM query unavailable for search #%s: plain cosine", sub.id)
+                else:
+                    dm_q = None
+                    if dm_query is not None:
+                        dm_q = await asyncio.to_thread(
+                            dm_query, query_emb, sub.locations, sub.experience_levels,
+                        )
+                    if dm_q is not None:
+                        query_emb, is_match = dm_q, semantic_matcher.is_dm_match
+                    elif dm_query is not None:
+                        log.warning("DM query unavailable for search #%s: plain cosine", sub.id)
             # The score stored and sorted on is this one (the DM score
             # without a CV, the blended cosine with one).
-            scores = await score_jobs_against_query_async(query_emb, candidates)
+            if term_queries is not None:
+                # dm_scores_over_terms: the best of the term queries.
+                per_term = [
+                    await score_jobs_against_query_async(q, candidates) for q in term_queries
+                ]
+                scores = np.max(np.asarray(per_term, dtype=np.float32), axis=0).tolist()
+            else:
+                scores = await score_jobs_against_query_async(query_emb, candidates)
             matches = [
                 (job, score)
                 for job, score in zip(candidates, scores)

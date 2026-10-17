@@ -61,6 +61,9 @@ with the CV by `blend_with_user_vector`, feedback by
   `pipeline.prefilter`, the function the match stage runs before scoring
   (hard filters, then what the keyword implies for the levels). The pool
   is then scored by the DM score (`matching.dm_score`) or by plain cosine.
+  A field keyword that the scraper expands into roles ("computer science
+  internship", "cs entry level") is also scored through each of those
+  roles, and the best one counts (`matching.dm_role_terms`).
   A posting's copies count once, as delivery sends them: best first, a
   copy of a posting already kept is skipped (`pipeline._same_posting_for_dm`).
   Relevant: a computer-science family (a persona's own family for its
@@ -190,6 +193,62 @@ with the CV by `blend_with_user_vector`, feedback by
     from them. Held-out numbers involving seniority (the production feed
     ranking) are therefore slightly optimistic. The cosine-only and TF-IDF
     rows do not read seniority and are unaffected.
+
+## Results (2026-10-17): field searches scored through their roles
+
+**The problem.** Production users search for a field ("computer science
+internship", "cs entry level"). Internship ads say "computer science
+students"; a junior job names a role (Data Scientist, QA Engineer, Support
+Engineer) and rarely the field. In a 48-hour window (production export,
+2026-10-17 13:55 UTC), 77 search × posting pairs passed every filter but
+scored under the DM threshold, and 71 of them were junior postings.
+
+**The rule.** A keyword that `filters.expand_keyword` expands into roles
+is also scored through each role, with its level words removed ("data
+scientist intern" becomes "data scientist"), each through the same DM
+query (its places, its levels, the panel correction). A posting counts
+at its best score, threshold unchanged at 0.34. The search's own query
+is one of the rows, so nothing that went out before stops. Any other
+keyword is scored as before.
+
+**The bar, written before measuring.**
+- (1) The pairs it recovers in that window must be at least as precise
+  as the DMs sent today.
+- (2) On the 263 hand-judged sent DMs, replayed through today's filters,
+  it must not lower precision.
+- A fallback threshold was fixed in advance, for the case where the rule
+  failed.
+
+| | Today | Role terms |
+|---|---|---|
+| (1) window: below-threshold pairs recovered | – | 56 of 77: 52 right, 3 borderline, 1 wrong (strict 0.929) |
+| (2) judged sent DMs: sent, strict precision | 109, 0.789 | 112, 0.777 (adds 3: right, borderline, wrong) |
+| All judged data, strict precision | 0.789 | 0.827 |
+| Main, generic searches: sent per search, P@10, recall | 1.1, 1.000, 0.152 | 5.3, 0.967, 0.697 |
+| Held-out, generic searches: sent, P@10, recall | 13.1, 0.922, 0.683 | 16.1, 0.917, 0.828 |
+
+Persona-keyword searches and P@5 are unchanged, and no search starved.
+The verdicts are gosha-label's (an AI judge).
+
+**The miss and the owner's call.** The rule fails condition (2) by one
+pair: of the 3 judged DMs it adds, 1 is wrong (a "Compliance Engineer
+Intern", 0.317 → 0.348).
+- The pre-registered fallback, a threshold of 0.39 for every search
+  (picked on main), passes (1) and (2).
+- But on held-out it is worse than today: generic recall 0.618 and P@10
+  0.909; persona-keyword recall 0.505, with 9 searches starved instead
+  of 2. It raises the bar for searches the rule does not touch.
+- **On 2026-10-17 the owner shipped the rule at 0.34 despite the miss on
+  (2).** The baselines in `eval/results/` were regenerated with it.
+
+**Not shipped: embedding the role part of a description.** A second
+candidate embedded the description's role sections (dropping company,
+offer and application sections) instead of its first 1,500 characters.
+- It was measured once on the same judged data and failed: strict 0.789
+  → 0.771, 14 judged DMs lost (12 right).
+- In the window, 15 DMs sent today fell under the threshold.
+- The eval sets cannot test such a change: their descriptions were
+  stored without line breaks, so no section can be found.
 
 ## Results (2026-10-17): the feed's search scope, one copy per posting
 

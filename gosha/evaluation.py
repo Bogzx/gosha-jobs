@@ -733,6 +733,22 @@ def dm_query_vectors(
     ])
 
 
+def dm_term_query_vectors(
+    searches: Sequence[DmSearch], encode: Encode, hub_alpha: float,
+) -> list[np.ndarray]:
+    """Per search, (T, D) DM query vectors, one per term the search is
+    scored through (gosha.matching.dm_role_terms), each minus hub_alpha
+    times the matching panel mean, as dm_query_vectors does for one."""
+    from gosha.matching import dm_role_terms
+
+    out = []
+    for search in searches:
+        terms = [DmSearch(t, search.levels, search.family, search.persona)
+                 for t in dm_role_terms(search.keyword)]
+        out.append(dm_query_vectors(terms, encode, hub_alpha))
+    return out
+
+
 def evaluate_dm_searches(
     postings: Sequence[Posting],
     searches: Sequence[DmSearch],
@@ -741,12 +757,17 @@ def evaluate_dm_searches(
     threshold: float,
 ) -> dict:
     """Mean over searches (generic and specific separately) of
-    dm_search_metrics, with bootstrap intervals on P@5 / P@10."""
+    dm_search_metrics, with bootstrap intervals on P@5 / P@10. A search's
+    query is one vector, or (T, D) term vectors scored by their best
+    (gosha.matching.dm_scores_over_terms)."""
+    from gosha.matching import dm_scores_over_terms
+
     rows = []
     models = [as_job(p) for p in postings]
     for search, query in zip(searches, queries):
+        scores = dm_scores_over_terms(jobs, query) if np.ndim(query) == 2 else jobs @ query
         m = dm_search_metrics(
-            jobs @ query, dm_pool(postings, search, models), dm_relevant(postings, search),
+            scores, dm_pool(postings, search, models), dm_relevant(postings, search),
             threshold, models,
         )
         rows.append({"keyword": search.keyword, "levels": list(search.levels),
@@ -868,11 +889,12 @@ def run(
 
     searches = dm_searches(personas)
     search_threshold, _ = production_thresholds()
-    # "dm_score" is what production sends a search without a CV;
+    # "dm_score" is what production sends a search without a CV (a field
+    # keyword scored through its role terms, gosha.matching.dm_role_terms);
     # "cosine" the plain cosine at SEMANTIC_THRESHOLD it replaced.
     result["dm_searches"] = {
         "dm_score": evaluate_dm_searches(
-            postings, searches, vectors.jobs, dm_query_vectors(searches, encode, DM_ALPHA),
+            postings, searches, vectors.jobs, dm_term_query_vectors(searches, encode, DM_ALPHA),
             DM_THRESHOLD,
         ),
         "cosine": evaluate_dm_searches(

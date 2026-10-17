@@ -1,0 +1,71 @@
+Riverbed, the leader in AIOps for observability, helps organizations optimize their users’ experiences by leveraging AI automation for the prevention, identification, and resolution of IT issues. With over 20 years of experience in data collection and AI and machine learning, Riverbed’s open and
+**AI-powered observability platform**
+and solutions optimize digital experiences and greatly improve IT efficiency. Riverbed also offers industry-leading
+**Acceleration solutions**
+that provide fast, agile, secure acceleration of any app, over any network, to users anywhere. Together with our thousands of market-leading customers globally – including 95% of the FORTUNE 100 – we are empowering next-generation digital experiences. Learn more at
+**riverbed.com**
+**Position**
+**Position**
+: Software Engineer, NetIM
+  
+  
+**Location**
+: Cluj (Hybrid)
+  
+  
+We are seeking an enthusiastic, high energy Software Engineer to join the team and contribute to the design and implementation of the
+**NetIM**
+product.
+  
+  
+Riverbed®
+**NetIM**
+(Network Infrastructure Management) is an integrated solution for mapping, monitoring, and troubleshooting your IT infrastructure. With
+**NetIM**
+, you can capture infrastructure topology information, detect performance issues, map application network paths, diagram your network, and troubleshoot infrastructure problems. Additionally, you can manage infrastructure issues within the context of application, network, and end-user experience for a blended view of overall performance.
+  
+  
+**What You Will Do**
+
+* Work within an agile team to design and build enterprise applications that deliver value to our customers.
+* Work with and learn from a highly experienced team of senior engineers.
+* Assist in the architecture, design, development and deployment of a state-of-the-art. infrastructure and network monitoring and visualization tool suite.
+* Use your knowledge about how network protocols and systems behave to develop innovative visibility and troubleshooting apps
+
+**What Makes You An Ideal Candidate**
+
+* A B.S. degree (Masters degree preferred) in Computer Science, Computer Engineering, or equivalent.
+* 1 - 5 years of Java development experience (C++ may be considered in lieu of Java)
+* Hands-on skills in object-oriented programming.
+* Experience with a formal object-oriented design methodology.
+* Broad-based communications network background or an overall enthusiasm for the field.
+* Ideally have familiarity with JDBC, ORM, and Spring/Spring Boot Framework.
+* Bonus Points for experience with Cassandra, Kafka, Elasticsearch, and Redis.
+* Exposure to Microservices architecture with Restful APIs along with Docker and container orchestration.
+* Hands-on experience using GenAI-powered developer tools like Cursor and Copilot as part of day-to-day software development.
+
+**What We Offer**
+Our employee benefits including flexible workplace policies, employee resource groups, learning and development resources, career progression pathways, and community engagement initiatives are some of the reasons why we have had great success in bringing in new talent. In addition, our global employee wellness programs are crafted to support the physical, emotional, and financial well-being of our employees.
+  
+  
+Benefits & Perks vary by Country.
+  
+  
+**About Riverbed**
+With a 20-year history of innovation, Riverbed is agile and proven—and we continue to disrupt the market with differentiated solutions that help customers deliver secure, seamless digital experiences and accelerate enterprise performance. We are relentlessly customer-first: we listen, learn, and act with urgency to solve real problems and earn trust every day. We pair bold ideas with operational efficiency, simplifying how we work, focusing on what matters most, and delivering with quality and speed. Fueled by a will to win, we set ambitious goals, hold ourselves accountable, and raise the bar through measurable outcomes. At the center of it all are our people—bringing our best selves to work with a shared commitment to excellence, transparency, and open communication. We strive to be an inclusive, fair, and enjoyable workplace where respect and wellbeing are prioritized. We are committed to our people, partners, and customers while supporting the communities where we work and live. It’s the
+**Power of**
+**WE**
+that binds us together and drives high-impact success.
+  
+  
+Riverbed is an equal employment opportunity/Affirmative Action (EEO/AA) employer and provides equal employment opportunities (EEO) to all employees and applicants for employment without regard to race, color, religion, sex, gender, sexual orientation, gender identity or expression, national origin, age, physical disability (including HIV and AIDS), mental disability, medical condition, pregnancy or child birth (including breast feeding), sexual orientation, genetics, genetic information, marital status, veteran status or any other basis protected by and in accordance with applicable federal, state and local laws.
+  
+  
+**Check Us Out On**
+www.riverbed.com
+  
+  
+@LifeAtRiverbed
+  
+  
+**Tags**

@@ -363,6 +363,52 @@ def test_dm_query_vectors_hub_alpha_subtracts_the_panel_mean():
     assert result["generic"]["searches"] == 1 and result["generic"]["p@5"] == 1.0
 
 
+def test_a_field_search_is_scored_through_its_role_terms():
+    """gosha.matching.dm_role_terms: row 0 is the search's own query (as
+    dm_query_vectors builds it), then one per role; a posting scores by
+    its best row. Any other keyword keeps its one query."""
+    from gosha.matching import dm_role_terms
+
+    encode = hashing_encoder()
+    field = ev.DmSearch("computer science internship", ("intern", "junior"))
+    other = ev.DmSearch("python developer", ("junior",))
+    rows_field, rows_other = ev.dm_term_query_vectors([field, other], encode, 0.25)
+    assert rows_field.shape[0] == len(dm_role_terms(field.keyword)) > 1
+    assert np.allclose(rows_field[0], ev.dm_query_vectors([field], encode, 0.25)[0], atol=1e-6)
+    assert np.allclose(rows_other, ev.dm_query_vectors([other], encode, 0.25), atol=1e-6)
+
+    text = "You will build models in Python with our data team in Cluj. " * 4
+    postings = [replace(posting(("data",), "junior", pid="ds", text="Junior Data Scientist"),
+                        description=text + "Recent graduates are welcome.")]
+    assert ev.dm_pool(postings, field).tolist() == [True]
+    jobs = encode(["Data Scientist"])
+    one = ev.dm_query_vectors([field], encode, 0.25)
+    best = float((jobs @ rows_field.T).max())
+    assert best > float(jobs[0] @ one[0])
+    # Scored through the terms, the posting clears a bar its field query does not.
+    bar = (best + float(jobs[0] @ one[0])) / 2
+    sent = [ev.evaluate_dm_searches(postings, [field], jobs, q, bar)["searches"][0]["sent"]
+            for q in (one, [rows_field])]
+    assert sent == [0, 1]
+
+
+def test_run_scores_the_dm_score_row_through_role_terms(small_world, monkeypatch):
+    """The CI baseline measures the DM score as production computes it."""
+    postings, personas = small_world
+    calls = []
+    real = ev.dm_term_query_vectors
+
+    def spy(searches, encode, hub_alpha):
+        calls.append(hub_alpha)
+        return real(searches, encode, hub_alpha)
+
+    monkeypatch.setattr(ev, "dm_term_query_vectors", spy)
+    ev.run(postings, personas, hashing_encoder(), with_feedback=False)
+    from gosha.matching import DM_ALPHA
+
+    assert calls == [DM_ALPHA]
+
+
 # ── owner rule: filter, don't regrade (only what the product would show) ──
 
 

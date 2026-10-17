@@ -326,3 +326,47 @@ class TestDmScore:
         assert dm_match_label(None) is None
         assert dm_match_label(DM_STRONG_MATCH_AT) == "Strong match"
         assert dm_match_label(DM_STRONG_MATCH_AT - 0.01) == "Good match"
+
+
+class TestDmRoleTerms:
+    """A field keyword is scored through the roles it stands for (owner
+    priority 2026-10-17: junior CS jobs describe a role, not the field)."""
+
+    def test_a_field_keyword_adds_its_roles_without_level_words(self):
+        from gosha.matching import dm_role_terms
+
+        terms = dm_role_terms("computer science internship")
+        assert terms[0] == "computer science internship"
+        assert {"data scientist", "software engineer", "QA"} <= set(terms[1:])
+        assert not any("intern" in t.lower() or "junior" in t.lower() for t in terms[1:])
+        assert len({t.lower() for t in terms}) == len(terms)
+
+    def test_any_other_keyword_is_scored_as_today(self):
+        from gosha.matching import dm_role_terms
+
+        assert dm_role_terms("computer science intern") == ["computer science intern"]
+        assert dm_role_terms("python developer") == ["python developer"]
+
+    def test_the_best_term_scores_a_posting(self):
+        from gosha.matching import dm_scores_over_terms
+
+        jobs = np.array([[1.0, 0.0], [0.0, 1.0]])
+        terms = np.array([[0.4, 0.1], [0.0, 0.5]])
+        assert np.allclose(dm_scores_over_terms(jobs, terms), [0.4, 0.5])
+
+    def test_row_zero_is_todays_query_so_no_score_falls(self, monkeypatch):
+        import gosha.matching as m
+
+        def encode(texts, model_name):
+            return np.array([[len(t) / 100, 1.0] for t in texts], dtype=np.float32)
+
+        monkeypatch.setattr(m, "encode_texts", encode)
+        matcher = SemanticMatcher(model_name="fake")
+        args = (["computer science internship"], ["Cluj"], ["intern", "junior"])
+        terms = matcher.dm_term_queries(*args)
+        today = matcher.dm_query(m.encode_texts([m.build_subscription_query(*args)], "fake")[0], *args[1:])
+        assert len(terms) == len(m.dm_role_terms(args[0][0]))
+        assert np.allclose(terms[0], today)
+        jobs = np.random.default_rng(0).normal(size=(5, 2))
+        assert (m.dm_scores_over_terms(jobs, terms) >= jobs @ today - 1e-6).all()
+        assert len(matcher.dm_term_queries(["python developer"], ["Cluj"], ["junior"])) == 1

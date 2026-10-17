@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -74,6 +75,13 @@ DM_THRESHOLD = 0.34
 # Same rule as STRONG_MATCH_AT, on main: from here 91% of the pairs sent
 # (65 of 616) are relevant or adjacent.
 DM_STRONG_MATCH_AT = 0.47
+
+# A role term loses its level words: the search's levels are in its query
+# ("Experience level: ...") and in the hard filters already.
+_LEVEL_WORDS_RE = re.compile(
+    r"(?i)\b(?:internships?|interns?|stagi[ui]|stagiar\w*|practic[aă]|trainees?|traineeship|"
+    r"junior|jr|entry[\s-]*level|graduates?|absolvent\w*|(?:working\s+)?students?)\b"
+)
 
 # Lazy-loaded model singleton
 _model: Any = None
@@ -305,8 +313,59 @@ class SemanticMatcher:
             return None
         return dm_query_vector(query_embedding, mean[None, :])
 
+    def dm_term_queries(
+        self,
+        keywords: list[str],
+        locations: list[str],
+        experience_levels: list[str] | None = None,
+    ) -> np.ndarray | None:
+        """(T, D) DM query vectors: the search's own query (dm_query of
+        encode_subscription), then one per role term its field keywords
+        stand for (dm_role_terms). Score postings with dm_scores_over_terms:
+        never below today's score. A search with no field keyword gets the
+        one row it has today. None when the model is unavailable."""
+        roles = [t for k in keywords for t in dm_role_terms(k)[1:]]
+        texts = [build_subscription_query(keywords, locations, experience_levels)] + [
+            build_subscription_query([t], locations, experience_levels)
+            for t in dict.fromkeys(roles)
+        ]
+        embs = encode_texts(texts, self.model_name)
+        mean = self.panel_mean(locations, experience_levels)
+        if embs is None or mean is None:
+            return None
+        return np.stack([dm_query_vector(e, mean[None, :]) for e in embs])
+
     def is_dm_match(self, score: float) -> bool:
         return score >= self.dm_threshold
+
+
+def dm_role_terms(keyword: str) -> list[str]:
+    """What a search keyword is scored through: the keyword itself, and,
+    for a field keyword that filters.expand_keyword expands ("computer
+    science internship"), each role it stands for without its level words
+    ("data scientist intern" -> "data scientist"). A junior Data Scientist
+    posting describes the role, not the field, and scored below the DM
+    threshold against the field (gosha-pipe, 2026-10-17: 71 of 77 misses
+    were junior). Any other keyword: itself alone."""
+    from gosha.filters import canonical_keyword, expand_keyword
+
+    terms = [keyword]
+    expanded = expand_keyword(keyword)
+    if [t.lower() for t in expanded] == [canonical_keyword(keyword).lower()]:
+        return terms
+    seen = {keyword.lower()}
+    for term in expanded:
+        role = " ".join(_LEVEL_WORDS_RE.sub(" ", term).split())
+        if role and role.lower() not in seen:
+            seen.add(role.lower())
+            terms.append(role)
+    return terms
+
+
+def dm_scores_over_terms(job_embs: np.ndarray, term_queries: np.ndarray) -> np.ndarray:
+    """DM scores of postings (N, D) for a search scored through several
+    terms (T, D DM query vectors, dm_query_vector each): the best term."""
+    return (np.asarray(job_embs, dtype=np.float32) @ np.asarray(term_queries, dtype=np.float32).T).max(axis=1)
 
 
 def dm_panel_queries(
