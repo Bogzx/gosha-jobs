@@ -68,9 +68,11 @@ with the CV by `blend_with_user_vector`, feedback by
   copy of a posting already kept is skipped (`pipeline._same_posting_for_dm`).
   Relevant: a computer-science family (a persona's own family for its
   keyword) at a gold level the search asked for (intern → intern; junior
-  → junior or unstated). Reported per search, then averaged: P@5 (the
-  per-search cap is 5 a cycle), P@10, recall, and "starved" (relevant
-  postings in the pool, none sent). A search left with under 10 postings,
+  → junior or unstated). Reported per search, then averaged: "sent"
+  (every posting over the threshold: delivery has no per-user, per-search
+  or per-company cap since 2026-10-17, owner), P@5 and P@10 over the
+  first postings sent, best first (how good the top of a batch is),
+  recall, and "starved" (relevant postings in the pool, none sent). A search left with under 10 postings,
   or under 3 relevant ones, is flagged low-n and kept in the means. The
   place filter runs only when the postings record a place; they do not
   yet, so place is not filtered.

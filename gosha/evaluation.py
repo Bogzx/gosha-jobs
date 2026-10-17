@@ -557,9 +557,9 @@ def production_thresholds() -> tuple[float, float]:
 # words are generic ("computer science internship"), every one names a
 # level (intern and/or junior), almost no user has a CV, and the match
 # stage drops postings at the wrong level or with a non-tech title before
-# a score is ever computed. What a user reads is the first few postings
-# of a cycle that clear the threshold, best first (MAX_DMS_PER_USER, and a
-# per-search cap). This part measures that.
+# a score is ever computed. A user is sent every posting that clears the
+# threshold, each once, in the cycle that finds it (no per-user,
+# per-search or per-company cap, owner 2026-10-17). This part measures that.
 
 # What a "computer science" search is after: every software, data, ops,
 # security and IT-support family. Business analysis, sales, accounting,

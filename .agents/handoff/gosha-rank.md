@@ -1192,3 +1192,19 @@ regenerated once (main + held-out, the CI command), both --check exit 0. gosha-p
 - Commit (lead): gosha/matching.py, gosha/evaluation.py, tests/test_matching.py, tests/test_evaluation.py,
   eval/results/all-mpnet-base-v2.json, eval/results/heldout/all-mpnet-base-v2.json, docs/EVAL.md + gosha-pipe's
   pipeline.py and tests/test_dm_role_terms.py. gosha-pipe was told my side is final.
+
+## Session 13 (2026-10-17): the DM eval without caps (lead follow-up to 78b8425) — COMMIT-READY
+The owner removed every DM cap (78b8425: no MAX_DMS_PER_USER / per-search / per-company; every match is sent in the
+cycle that finds it). The eval never modelled a cap: `dm_search_metrics` already counts "sent" as every pooled posting
+(one copy each, `one_dm_per_posting`) at or over the threshold, and P@5 / P@10 are over the first 5 / 10 sent, best
+first. Only the text was stale.
+- gosha/evaluation.py: the "Discord DMs as users search" comment no longer mentions MAX_DMS_PER_USER / a per-search cap.
+- docs/EVAL.md "What is measured", DM bullet: "sent" = every posting over the threshold (no caps since 2026-10-17,
+  owner); P@5/P@10 are the top of the batch.
+- tests/test_evaluation.py `test_dm_search_metrics_sends_everything_over_the_threshold`: 12 over threshold → sent 12,
+  recall 1.0 (the 12th-best relevant one counts), P@10 over the first 10. A guard, not a fix: with any cap of 5 or 10
+  on "sent" it fails. `pytest -q tests/test_evaluation.py -k dm_search_metrics` → 2 passed; ruff clean.
+- Baselines: NOT regenerated (numbers unchanged). On HEAD 78b8425 + these edits, both CI-form checks exit 0:
+  `scripts/eval_ranking.py --cache-dir "" --check eval/results/all-mpnet-base-v2.json` and the held-out form.
+  Held-out generic still 16.1 sent / P@10 .917 / recall .828.
+- Commit (lead): gosha/evaluation.py, docs/EVAL.md, tests/test_evaluation.py (+ this handoff).

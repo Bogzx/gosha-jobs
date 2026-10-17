@@ -347,6 +347,18 @@ def test_dm_search_metrics_reads_the_batch_best_first():
     assert starved["starved"] and starved["sent"] == 0 and math.isnan(starved["p@10"])
 
 
+def test_dm_search_metrics_sends_everything_over_the_threshold():
+    # Delivery has no per-user, per-search or per-company cap (owner,
+    # 2026-10-17): twelve postings over the threshold are twelve DMs.
+    scores = np.linspace(0.9, 0.6, 12)
+    pool = np.ones(12, dtype=bool)
+    relevant = np.array([True] * 10 + [False, True])
+    m = ev.dm_search_metrics(scores, pool, relevant, threshold=0.5)
+    assert m["sent"] == 12
+    assert m["recall"] == 1.0  # the last relevant one, 12th best, is sent too
+    assert m["p@10"] == 1.0  # P@k stays a ranking metric over the first k
+
+
 def test_dm_query_vectors_hub_alpha_subtracts_the_panel_mean():
     from gosha.matching import dm_panel_queries
 
