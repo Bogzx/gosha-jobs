@@ -1,0 +1,57 @@
+# One GET of one Hipo job page whose stored row has no description and no date
+# (Bosch Romania, id 270303). Run in the prod image (see .agents/README.md):
+#   docker run --rm -i --name gosha-agents-probe --network bridge --entrypoint python \
+#     -v "$PWD":/w:ro -w /w -e PYTHONPATH=/w -e PYTHONDONTWRITEBYTECODE=1 \
+#     gosha-bot:latest - < .agents/handoff/gosha-scrape-probes/hipo_bosch_probe.py.txt
+import asyncio
+import json
+import re
+import ssl
+import sys
+from datetime import datetime, timezone
+
+import httpx
+
+from gosha.scrapers import hipo
+from gosha.scrapers.base import DEFAULT_HEADERS, HTTP_TIMEOUT
+
+URL = "https://www.hipo.ro/locuri-de-munca/locuri_de_munca/270303/Bosch-Romania/AI/ML-Engineer"
+
+
+async def main() -> None:
+    print("time", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    print("python", sys.version.split()[0], "|", ssl.OPENSSL_VERSION, "| httpx", httpx.__version__)
+    async with httpx.AsyncClient(
+        headers=DEFAULT_HEADERS, timeout=HTTP_TIMEOUT, follow_redirects=True,
+    ) as client:
+        resp = await client.get(URL)
+    for r in resp.history:
+        print("redirect", r.status_code, r.headers.get("location"))
+    page = resp.text
+    print("final", resp.status_code, resp.url, "bytes", len(page))
+    blocks = re.findall(
+        r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', page, re.DOTALL,
+    )
+    print("ld+json blocks", len(blocks))
+    for raw in blocks:
+        try:
+            data = json.loads(raw)
+        except ValueError as exc:
+            print("  unparseable:", exc, repr(raw[:200]))
+            continue
+        items = data if isinstance(data, list) else data.get("@graph", [data])
+        for item in items:
+            if isinstance(item, dict):
+                print("  @type", item.get("@type"), "keys", sorted(item)[:25],
+                      "description chars", len(str(item.get("description") or "")))
+    detail = hipo._extract_detail(page)
+    print("extract keys", sorted(detail), "description chars", len(detail.get("description", "")))
+    classes = sorted({c for c in re.findall(r'class="([^"]*)"', page)
+                      if re.search(r"desc|job|content|detail", c, re.I)})
+    print("classes", classes[:40])
+    print("iframes", re.findall(r'<iframe[^>]+src="([^"]+)"', page)[:5])
+    print("external apply links", sorted(set(re.findall(
+        r'href="(https?://(?!www\.hipo\.ro)[^"]+)"', page)))[:15])
+
+
+asyncio.run(main())

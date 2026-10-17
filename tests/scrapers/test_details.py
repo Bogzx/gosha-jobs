@@ -78,13 +78,50 @@ async def test_bestjobs_search_fetches_capped_cached_details(monkeypatch):
     query = SearchQuery("software engineer", "cluj")
 
     jobs = await bestjobs.BestJobsScraper().search(query)
-    assert len(jobs) == 5
-    assert sum(bool(j.description) for j in jobs) == 3  # capped
-    assert page.call_count == 3
+    assert page.call_count == 3  # capped
+    assert len(jobs) == 3 and all(j.description for j in jobs)  # the rest wait
 
     jobs = await bestjobs.BestJobsScraper().search(query)  # next cycle
-    assert sum(bool(j.description) for j in jobs) == 5
+    assert len(jobs) == 5 and all(j.description for j in jobs)
     assert page.call_count == 5  # only the two not cached yet
+
+
+@respx.mock
+async def test_bestjobs_postings_over_the_cap_wait_for_their_page(monkeypatch):
+    """Prod, 2026-10-16: the deploys emptied the detail cache, 20 pages per
+    search were fetched and the other postings were stored without a page.
+    Unmarked titles with no level and no description pass the junior filter,
+    so 36 of 40 new BestJobs rows had no description; the next cycle read
+    their pages (Middle), filtered them out and never updated them."""
+    monkeypatch.setattr(bestjobs, "MAX_DETAIL_FETCHES", 2)
+    payload = _bestjobs_list(4)
+    for i, title in enumerate(["Junior Developer", "Frontend Developer", ".NET Engineer", "QA"]):
+        payload["items"][i]["title"] = title
+    respx.get(bestjobs.API_URL).mock(return_value=httpx.Response(200, json=payload))
+    respx.get(url__regex=r"https://www\.bestjobs\.eu/ro/loc-de-munca/job-\d+").mock(
+        return_value=httpx.Response(200, text=fixture("bestjobs_detail.html")),
+    )
+    jobs = await bestjobs.BestJobsScraper().search(SearchQuery("developer", "cluj"))
+    assert [j.title for j in jobs] == ["Junior Developer", "Frontend Developer"]
+    assert all(j.description for j in jobs)
+
+
+@respx.mock
+async def test_bestjobs_postings_not_worth_a_page_are_not_held_back(monkeypatch):
+    """Only pages that were wanted wait: a title irrelevant at entry level
+    is not fetched at all, and the pipeline's filter decides on it."""
+    monkeypatch.setattr(bestjobs, "MAX_DETAIL_FETCHES", 1)
+    payload = _bestjobs_list(3)
+    for i, title in enumerate(["Junior Developer", "Senior Architect", "Head of IT"]):
+        payload["items"][i]["title"] = title
+    respx.get(bestjobs.API_URL).mock(return_value=httpx.Response(200, json=payload))
+    page = respx.get(url__regex=r"https://www\.bestjobs\.eu/.*").mock(
+        return_value=httpx.Response(200, text=fixture("bestjobs_detail.html")),
+    )
+    query = SearchQuery("developer", "cluj", relevant=lambda title, _level: "Junior" in title)
+    jobs = await bestjobs.BestJobsScraper().search(query)
+    assert page.call_count == 1
+    assert [j.title for j in jobs] == ["Junior Developer", "Senior Architect", "Head of IT"]
 
 
 @respx.mock
@@ -127,15 +164,44 @@ async def test_hipo_search_adds_descriptions_and_dates():
     assert all(j.posted_at is not None for j in enriched)
 
 
+@respx.mock
+async def test_hipo_postings_over_the_cap_wait_for_their_page(monkeypatch):
+    """Same as BestJobs: 13 of the 26 Hipo rows stored after the 2026-10-16
+    deploys had no description, 7 of them never seen again."""
+    monkeypatch.setattr(hipo, "MAX_DETAIL_FETCHES", 2)
+    listing = fixture("hipo_listing.html")
+    respx.get(hipo.LISTING_URL.format(city="Cluj-Napoca")).mock(
+        return_value=httpx.Response(200, text=listing),
+    )
+    page = respx.get(url__regex=r"https://www\.hipo\.ro/locuri-de-munca/locuri_de_munca/.*").mock(
+        return_value=httpx.Response(200, text=fixture("hipo_detail.html")),
+    )
+    respx.get(hipo.LISTING_URL.format(city="Cluj-Napoca") + "/2").mock(
+        return_value=httpx.Response(200, text=listing),
+    )
+    query = SearchQuery("anything", "cluj")
+    jobs = await hipo.HipoScraper().search(query)
+    assert page.call_count == 2 and len(jobs) == 2 and all(j.description for j in jobs)
+    jobs = await hipo.HipoScraper().search(query)  # next cycle
+    assert page.call_count == 4 and len(jobs) == 4 and all(j.description for j in jobs)
+
+
+@respx.mock
 async def test_hipo_dates_are_marked_as_refresh_dates():
     """Hipo's JSON-LD datePosted is the day the employer last refreshed the
     ad (most cards say today, even old ids). The flag lets the pipeline keep
     the earliest date instead of making old postings look new: of the 10
     active Hipo rows with a date on 2026-10-16, 8 were dated more than a
-    day after we first saw them."""
+    day after we first saw them.
+
+    (Until 2026-10-17 this test had no @respx.mock and fetched the real
+    hipo.ro listing on every run.)"""
     listing = fixture("hipo_listing.html")
     respx.get(hipo.LISTING_URL.format(city="Cluj-Napoca")).mock(
         return_value=httpx.Response(200, text=listing),
+    )
+    respx.get(url__regex=r"https://www\.hipo\.ro/locuri-de-munca/locuri_de_munca/265009/.*").mock(
+        side_effect=httpx.ConnectError("boom"),  # one page fails: no date
     )
     respx.get(url__regex=r"https://www\.hipo\.ro/locuri-de-munca/locuri_de_munca/.*").mock(
         return_value=httpx.Response(200, text=fixture("hipo_detail.html")),
@@ -146,7 +212,7 @@ async def test_hipo_dates_are_marked_as_refresh_dates():
     jobs = await hipo.HipoScraper().search(SearchQuery("anything", "cluj"))
     dated = [j for j in jobs if j.posted_at is not None]
     undated = [j for j in jobs if j.posted_at is None]
-    assert dated and undated  # detail fetches are capped
+    assert len(dated) == 4 and len(undated) == 1
     assert all(j.posted_at_is_refresh for j in dated)
     assert all(j.to_record()["date_posted_is_refresh"] is True for j in dated)
     assert not any(j.posted_at_is_refresh for j in undated)
@@ -213,3 +279,27 @@ async def test_detail_fetches_share_an_hourly_budget_per_host(monkeypatch):
             urls = [f"https://board.test/{term}/{i}" for i in range(3)]
             await details.fetch_details(client, urls, lambda t: {"d": t}, limit=3)
     assert page.call_count == 4
+
+
+@respx.mock
+async def test_fetch_details_reports_the_pages_left_for_later(monkeypatch):
+    """Over the limit or the host budget: deferred. Cached: not. Failed:
+    not deferred (retried next cycle, but nobody should wait on it)."""
+    monkeypatch.setattr(details, "HOST_BUDGET_PER_HOUR", 3)
+    respx.get("https://board.test/bad").mock(side_effect=httpx.ConnectError("boom"))
+    respx.get(url__regex=r"https://board\.test/ok/\d").mock(
+        return_value=httpx.Response(200, text="<p>x</p>"),
+    )
+    async with httpx.AsyncClient() as client:
+        await details.fetch_details(client, ["https://board.test/ok/0"], lambda t: {"d": t}, 5)
+        deferred: set[str] = set()
+        urls = ["https://board.test/ok/0", "https://board.test/bad",
+                "https://board.test/ok/1", "https://board.test/ok/2", "https://board.test/ok/3"]
+        got = await details.fetch_details(client, urls, lambda t: {"d": t}, 3, deferred)
+        assert set(got) == {"https://board.test/ok/0", "https://board.test/ok/1"}
+        # limit 3 left room for ok/2, but the hourly budget (3) was spent
+        assert deferred == {"https://board.test/ok/2", "https://board.test/ok/3"}
+
+        deferred = set()
+        await details.fetch_details(client, ["https://board.test/ok/2"], lambda t: {}, 1, deferred)
+        assert deferred == {"https://board.test/ok/2"}  # still no budget this hour

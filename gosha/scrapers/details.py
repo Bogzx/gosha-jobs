@@ -18,8 +18,9 @@ page for the postings a query returns, politely:
   Every keyword term is its own search with its own `limit`, and a
   restart (every deploy) empties the cache, so without it one cycle could
   fetch several hundred pages from one board in a few minutes. With it the
-  cache fills over a couple of cycles instead; a posting whose page was
-  not fetched is kept, just without the details.
+  cache fills over a couple of cycles instead. Callers can ask for the
+  URLs left for a later cycle (`deferred`): a posting whose level only its
+  page tells should wait for that page rather than be stored without it.
 
 Failures never raise: a posting without a description is still a posting.
 """
@@ -148,8 +149,14 @@ async def fetch_details(
     urls: list[str],
     extract: Callable[[str], dict[str, Any]],
     limit: int,
+    deferred: set[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """{url: extracted detail} for `urls`, fetching at most `limit` of them."""
+    """{url: extracted detail} for `urls`, fetching at most `limit` of them.
+
+    `deferred`, when given, receives the URLs neither cached nor fetched
+    because `limit` or the host budget was spent. A fetch that fails is not
+    deferred: it is retried next cycle, but its posting is not held back.
+    """
     now = time.monotonic()
     results: dict[str, dict[str, Any]] = {}
     to_fetch: list[str] = []
@@ -159,6 +166,8 @@ async def fetch_details(
             results[url] = cached
         elif len(to_fetch) < limit and _take_budget(url, now):
             to_fetch.append(url)
+        elif deferred is not None:
+            deferred.add(url)
 
     semaphore = asyncio.Semaphore(DETAIL_CONCURRENCY)
 

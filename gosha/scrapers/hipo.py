@@ -234,14 +234,21 @@ class HipoScraper:
                     if job.url not in seen:
                         seen.add(job.url)
                         jobs.append(job)
+            deferred: set[str] = set()
             async with http_client() as client:
                 details = await fetch_details(
                     client,
                     [j.url for j in jobs if query.is_relevant(j.title, "entry")],
-                    _extract_detail, MAX_DETAIL_FETCHES,
+                    _extract_detail, MAX_DETAIL_FETCHES, deferred,
                 )
+            if deferred:
+                # Like BestJobs (bestjobs._without_deferred): a posting whose
+                # page waits for the next cycle waits with it.
+                log.info("Hipo: %d postings wait for their page next cycle", len(deferred))
             kept: list[RawJob] = []
             for job in jobs:
+                if job.url in deferred:
+                    continue
                 detail = details.get(job.url) or {}
                 if detail.get("not_a_job"):
                     continue

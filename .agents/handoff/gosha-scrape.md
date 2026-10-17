@@ -709,3 +709,36 @@ The DM-field audit above (items 16–18) and items 19–22 are committed in a84b
   against the user's expired deliveries (test `test_a_reposted_copy_of_an_expired_dm_is_not_sent_again`); DM salary shows
   its period plus ≈RON/month, and DMs show "Posted …" / "First seen N days ago" (views.py); expiry proposed to the lead
   (14 d for ejobs/hipo full catalogs, 30 d for keyword-search boards). Full suite then: **1528 passed, 9 skipped**; ruff clean.
+
+## BestJobs "88-90% no description" alert (2026-10-17 ~10:00 UTC; read-only + offline, fix uncommitted)
+**Cause (not the adapter's parsing, not SCRAPE_BROWSER_FALLBACK, not a broken cache):**
+- All 36 empty BestJobs rows (of 40 first seen in 24 h) were stored 2026-10-16 17:31–17:32 in the first cycle after
+  the 03e5314 deploy; 27 are "Remote". Every one was last seen 18:26 (the cycle right after the 1fe6243 deploy) and never since.
+- Both deploys restarted the bot, which empties the detail cache. `MAX_DETAIL_FETCHES = 20` per search, so in those
+  cycles most "wanted" pages (titles relevant at entry level) were not fetched. On main, the scrape filter dropped unmarked
+  titles for junior searches (checked offline: main keeps only "Junior Developer" of
+  [".NET Software Engineer", "Frontend Developer", ..., "Junior Developer"] for 'cs entry level'). The branch's junior
+  level reads the description, so with no page (no level, no description) unmarked titles pass and are stored empty.
+- 22:08 cycle: the pages were fetched (e.g. `net-software-engineer-14`, `fluent-english-t3-support-engineer-eu-remote-1`
+  at 22:23, 200 OK), BestJobs said Middle/years, so the filter dropped them: "Relevance filter 149→42" at 18:26 became
+  "144→18" from 22:23 on (Oradea 141→26 → 141→13). Dropped rows are never upserted, so they stay active and empty.
+- Logs: 1,008 api.bestjobs.eu and 116 detail GETs since 18:05, all 200 (detail via 307 /ro/ → /loc-de-munca/); no
+  "Detail parse failed", no fallback use. The 4 filled rows of the 40 and every row seen since have descriptions.
+- `check_data_quality` judges by first_seen_at over 24 h, so the alert clears by itself ~17:33 UTC today, and would
+  come back after every deploy.
+- Hipo, same mechanism: 13 of 26 rows from 17:xx are empty (7 never seen again). 6 more (all Bosch Romania; also all 5
+  Continental, 2 of 7 AUMOVIO active rows) stay empty and undated although their pages were fetched (200) — a separate
+  Hipo page-format question (probe `gosha-scrape-probes/hipo_bosch_probe.py.txt`).
+- DMs: at 17:34 (03e5314, before 1fe6243's `lacks_level_evidence`) Hipo "AI/ML Engineer" (no description) went to 5
+  users and "Working Student in Embedded…" to ~10; BestJobs 8325/8330 and Hipo 8316 user_jobs are still `pending`.
+**Fix (ours, uncommitted):** `details.fetch_details(..., deferred=set)` reports URLs left over because of the per-search
+limit or the host budget (not failures). BestJobs (`_without_deferred`) and Hipo drop those postings for this cycle; the
+next cycle fetches the page and the filter decides with it. Failed fetches still keep the posting (the alert's job).
+Tests: `test_bestjobs_postings_over_the_cap_wait_for_their_page`, `..._not_worth_a_page_are_not_held_back`,
+`test_hipo_postings_over_the_cap_wait_for_their_page`, `test_fetch_details_reports_the_pages_left_for_later`; the cap test
+updated.
+**Also found:** `test_hipo_dates_are_marked_as_refresh_dates` (mine, 7cdb9cd) had no `@respx.mock` and fetched the real
+hipo.ro listing on every suite run. Fixed. A full suite run with all sockets blocked (scratch pytest plugin) shows no other
+job-board traffic; only huggingface.co lookups from model-loading tests (pass offline; not ours).
+**Left for lead/owner:** the 36 BestJobs + 7 Hipo stale empty rows (active, never re-seen) — deactivate or let expiry take
+them; the pending user_jobs for them (pipe: "stays pending: it may come" never resolves for these rows).

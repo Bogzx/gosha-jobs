@@ -96,6 +96,22 @@ def _extract_detail(page: str) -> dict[str, Any]:
     return detail
 
 
+def _without_deferred(jobs: list[RawJob], deferred: set[str]) -> list[RawJob]:
+    """The jobs whose page is not left for a later cycle.
+
+    Over the per-search cap a page waits for the next cycle (the cache keeps
+    the ones fetched). Its posting waits with it: without the page, an
+    unmarked title ("Frontend Developer") has no level and no description,
+    so the junior filter lets it through, and once the page is read and
+    says Middle the posting is filtered out and never updated again. After
+    the 2026-10-16 deploys emptied the cache, 36 of the 40 BestJobs postings
+    stored were such rows, still active and description-less.
+    """
+    if deferred:
+        log.info("BestJobs: %d postings wait for their page next cycle", len(deferred))
+    return [j for j in jobs if j.url not in deferred]
+
+
 def _apply_details(
     jobs: list[RawJob], details: dict[str, dict[str, Any]],
 ) -> list[RawJob]:
@@ -210,10 +226,11 @@ class BestJobsScraper:
                 # A title that would be relevant at entry level is worth a
                 # page fetch: the page says whether it IS entry level.
                 wanted = [j.url for j in jobs if query.is_relevant(j.title, "entry")]
+                deferred: set[str] = set()
                 details = await fetch_details(
-                    client, wanted, _extract_detail, MAX_DETAIL_FETCHES,
+                    client, wanted, _extract_detail, MAX_DETAIL_FETCHES, deferred,
                 )
-                return _apply_details(jobs, details)
+                return _apply_details(_without_deferred(jobs, deferred), details)
         except Exception as exc:
             log.warning("BestJobs scrape failed for %r: %s", query.keyword, exc)
             return []
