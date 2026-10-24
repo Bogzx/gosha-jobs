@@ -814,13 +814,15 @@ def rank_candidates(
     liked_mean: np.ndarray | None = None,
     page: int = 1,
     per_page: int = 50,
+    corpus: list[Job] | None = None,
 ) -> tuple[list[FeedItem], int]:
     """One page of `candidates` ranked by cosine to `vector`, explained.
 
     Shared by the signed-in feed and the public demo (gosha/api/demo.py),
-    so the demo shows exactly the ranking users get.
+    so the demo shows exactly the ranking users get. `corpus` is the
+    keyword IDF's (_order): the whole window when `candidates` is scoped.
     """
-    ranked = _order(candidates, vector, cv_text)
+    ranked = _order(candidates, vector, cv_text, corpus)
     start = (page - 1) * per_page
     return (
         _explain(

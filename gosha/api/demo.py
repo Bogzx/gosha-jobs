@@ -10,6 +10,11 @@ them is stored), touch user data, or publish the whole job table — only
 the top DEMO_LIMIT postings per persona, with list-length descriptions,
 as the signed-in list views get.
 
+Every sample CV is a student's, so the feed is scoped as a signed-in
+feed is by an active search (gosha.recommend.in_search_scope): STUDENT_SCOPE,
+an internship + junior search anywhere. Unscoped, the demo's top 25 held
+senior roles and a free-event programme (2026-10-24).
+
 Cost control, since this is the one anonymous endpoint that touches the
 model: all persona vectors are computed once, together, under a lock (a
 burst of first requests after a restart must not each load the ~2 GB
@@ -33,10 +38,12 @@ from gosha.api.jobs import job_to_out
 from gosha.api.schemas import DemoFeedOut, DemoPersonaOut
 from gosha.demo_personas import BY_ID, DEMO_PERSONAS, DemoPersona
 from gosha.models import Job
+from gosha.recommend import SearchScope
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
 DEMO_LIMIT = 25
+STUDENT_SCOPE = SearchScope(locations=(), remote_ok=True, levels=("intern", "junior"))
 CANDIDATE_TTL_SECONDS = 300
 RESPONSE_TTL_SECONDS = 60
 
@@ -96,10 +103,13 @@ def _build_response(
     persona: DemoPersona, vector: np.ndarray, candidates: list[Job],
 ) -> DemoFeedOut:
     """Rank and serialise (CPU-bound: tens of ms, so not on the loop)."""
-    from gosha.recommend import rank_candidates
+    from gosha.recommend import in_search_scope, rank_candidates
 
+    memo: dict = {}
+    scoped = [j for j in candidates if in_search_scope(j, [STUDENT_SCOPE], memo)]
     items, total = rank_candidates(
-        candidates, vector, cv_text=persona.cv, page=1, per_page=DEMO_LIMIT,
+        scoped, vector, cv_text=persona.cv, page=1, per_page=DEMO_LIMIT,
+        corpus=candidates,
     )
     return DemoFeedOut(
         persona=_persona_out(persona),

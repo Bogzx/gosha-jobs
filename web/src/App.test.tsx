@@ -39,7 +39,7 @@ describe('App sign-in gate', () => {
     get.mockRejectedValue(new ApiError(503, 'error', 'Request failed (503)'))
     renderAt('/tracker')
     expect(await screen.findByText("Couldn't load your account")).toBeInTheDocument()
-    expect(screen.queryByText(/Stop hunting/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/The job feed that/)).not.toBeInTheDocument()
     expect(get).toHaveBeenCalledTimes(3)
 
     get.mockImplementation(async (path: string) =>
@@ -52,6 +52,6 @@ describe('App sign-in gate', () => {
   it('sends a signed-out visitor to the landing page', async () => {
     get.mockRejectedValue(new ApiError(401, 'unauthorized', 'Sign in'))
     renderAt('/tracker')
-    expect(await screen.findByText(/Stop hunting/)).toBeInTheDocument()
+    expect(await screen.findByText(/The job feed that/)).toBeInTheDocument()
   })
 })
