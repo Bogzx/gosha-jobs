@@ -218,3 +218,29 @@ async def test_demo_reports_a_missing_model_and_retries_later(client, jobs, monk
     monkeypatch.setattr(emb, "embed_long_text", lambda text, encode=None: None)
     assert (await feed(client)).status_code == 503
     assert demo._vectors is None  # nothing cached; the next request tries again
+
+
+@pytest.mark.asyncio
+async def test_demo_feed_is_what_a_student_search_would_take(client, persona_vectors, session):
+    """Every sample CV is a student's, so the demo applies the posting gates
+    of an internship + junior search, as a signed-in feed with that search
+    does: no senior roles, and no free-event programme posing as a job
+    (both were in the demo's top 25 on 2026-10-24)."""
+    from pathlib import Path
+
+    events = (Path(__file__).parent.parent / "fixtures" / "skillbridge_bursa_de_tech_8398.txt")
+    session.add_all([
+        Job(url="https://d.test/ok", title="Python Developer", company="Acme",
+            source="ejobs", description="Python role", embedding=vec_to_bytes(unit_vec(0))),
+        Job(url="https://d.test/senior", title="Senior Python AI Engineer", company="Proxify",
+            source="bestjobs", description="Python role", embedding=vec_to_bytes(unit_vec(0))),
+        Job(url="https://d.test/event",
+            title="Bursa de Tech -  acces gratuit la cele mai mari Evenimente Tech",
+            company="Fundatia SkillBridge", source="hipo",
+            description=events.read_text(), embedding=vec_to_bytes(unit_vec(0))),
+    ])
+    await session.commit()
+
+    body = (await feed(client)).json()
+    assert [i["title"] for i in body["items"]] == ["Python Developer"]
+    assert body["total"] == 1
