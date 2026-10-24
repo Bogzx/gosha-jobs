@@ -26,7 +26,9 @@ MIDDLE_PAGE = (
     "designers and backend engineers, and own features end to end. "
     "Requirements: at least 3 years of experience with React in production."
 )
-LONG_AGO = datetime(2026, 10, 16, 17, 32, tzinfo=timezone.utc)
+# Long before this cycle, but inside a search's 7-day window: a fixed date
+# (2026-10-16) aged out of it on 2026-10-23 and the pending DM became stale.
+LONG_AGO = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=2)
 
 
 def _scraped(**overrides) -> pd.DataFrame:
