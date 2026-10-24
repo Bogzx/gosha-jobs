@@ -300,7 +300,10 @@ NON_CS_DOMAIN_RE = re.compile(
     # code), and reached CS internship searches in production.
     r"business\s+develop\w*|game\s+test\w*|linguist\w*|locali[sz]ation|evaluators?|"
     r"annotat\w*|creators?|customer\s+(?:support|service|care)|call\s+cent\w*|"
-    r"industrial|cnc|bpo)\b"
+    r"industrial|cnc|bpo|"
+    # "Web Content Writer intern" (TECH_RE: "web") and "Master Data
+    # Specialist", a data-entry clerk (TECH_RE: "data"), 2026-10-22.
+    r"writers?|copywrit\w*|master\s+data)\b"
 )
 
 # Unambiguous CS signals that override a negative-domain hit
@@ -1655,15 +1658,15 @@ _GRADUATE_AUDIENCE = (
 )
 _ENTRY_AUDIENCE_RE = re.compile(
     _GRADUATE_AUDIENCE + r"|\bstudent\w*|"
-    r"\bentry[\s-]+level\b|\bjuniors?\b|"
+    # Not "Entry level: Professionals", a career page's level field (MHP 8851).
+    r"\bentry[\s-]+level\b(?!\W*:)|\bjuniors?\b|"
     r"\bcareer\s+starters?\b|"
     r"\b(?:start|kick[\s-]*start|launch|begin|jump[\s-]*start)\s+(?:your|their)\s+"
     r"(?:professional\s+)?career\b|"
     r"\b(?:first|1st)\s+job\b|\bprimul\s+(?:tau\s+)?(?:loc\s+de\s+munca|job)\b|"
     r"\b(?:la\s+)?inceput(?:ul)?\s+de\s+cariera\b|\binceputul\s+carierei\b|"
     r"\bbeginners?\b|\bincepator\w*|\bdebutant\w*|\btrainee\w*|"
-    r"\bwe\s+(?:will\s+)?train\s+you\b|\bte\s+(?:vom\s+)?forma\w*\b|"
-    r"\bdon'?t\s+(?:yet\s+)?meet\s+all\b"
+    r"\bwe\s+(?:will\s+)?train\s+you\b|\bte\s+(?:vom\s+)?forma\w*\b"
 )
 # Not evidence on their own: "basic knowledge/understanding of", "eager to
 # learn". Postings for experienced people write them next to the experience
@@ -1692,6 +1695,12 @@ _COLLEAGUES_AFTER_RE = re.compile(
 )
 _TURNED_AWAY_RE = re.compile(
     r"\bnot\s+(?:be\s+)?(?:considered|eligible|accepted|suitable)\b|\bnu\s+(?:vor|sunt)\b"
+)
+# How pay is reviewed for people already hired: Canonical's footer, in every
+# posting, "We revisit compensation annually (and more often for graduates
+# and associates)" (8501, 8907-8909, 8912 reached a junior search on it).
+_PAY_REVIEW_RE = re.compile(
+    r"\b(?:revisit|review)\w*\s+(?:\w+\s+){0,2}?(?:compensation|salar\w*|pay)\b"
 )
 # Titles at the bottom of a ladder that do not say "junior": assistant,
 # clerk, associate, and level one of a numbered ladder ("Technical Analyst
@@ -1815,7 +1824,7 @@ def _entry_evidence(title: str | None, intern_label: bool, description: str | No
             or _ENTRY_TEXT_RE.search(sentence)
         ):
             return True
-        if _TURNED_AWAY_RE.search(sentence):
+        if _TURNED_AWAY_RE.search(sentence) or _PAY_REVIEW_RE.search(sentence):
             continue
         for m in _ENTRY_AUDIENCE_RE.finditer(sentence):
             before, after = sentence[: m.start()], sentence[m.end() :]

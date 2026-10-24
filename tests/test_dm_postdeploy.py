@@ -858,3 +858,106 @@ def test_an_entry_label_with_experience_asked_is_no_evidence(title, text):
 def test_what_the_entry_label_carried_is_read_from_the_text(title, text):
     assert has_entry_evidence(title, "entry", text + FILLER)
     assert has_entry_evidence(title, None, text + FILLER)
+
+
+# ── Review of every DM sent 2026-10-17 17:25 → 10-24 10:11 (178 rows) ────
+# Real sentences and titles from the DMs judged wrong.
+
+# Canonical's footer, in every posting (8501, 8907, 8908, 8909, 8912 → the
+# remote intern/junior search): how pay is reviewed for staff already hired.
+CANONICAL_PAY = (
+    "We consider geographical location, experience, and performance in shaping "
+    "compensation worldwide. We revisit compensation annually (and more often for "
+    "graduates and associates) to ensure we recognise outstanding performance.\n"
+)
+# MHP "Azure Integration Service Engineer - Consultant" (8851): the career
+# page's level field, whose value is "Professionals".
+MHP_FIELDS = "* **Entry level:** Professionals\n* **Location:** Bucharest, Cluj, Timisoara\n"
+# Axpo "Master Data Specialist" (8442): an invitation any posting can carry.
+AXPO_INVITE = "* Even if you don't meet all the requirements, we look forward to your application\n"
+
+
+@pytest.mark.parametrize("title, text", [
+    ("Performance Engineer - Open Source", CANONICAL_PAY),
+    ("Azure Integration Service Engineer - Consultant (f/m/d)", MHP_FIELDS),
+    ("Data Engineer", AXPO_INVITE),
+])
+def test_boilerplate_is_not_entry_evidence(title, text):
+    assert not has_entry_evidence(title, None, text + FILLER)
+
+
+@pytest.mark.parametrize("text", [
+    # Canonical "Web Frontend Engineer" (8910) names its level next to the pay.
+    CANONICAL_PAY + "For the entry level position in this advert, our compensation for US "
+    "based candidates, lies between 48,000 USD to 70,000 USD.\n",
+    "Experience level: Entry level\n",
+    "Graduates are welcome to apply.\n",
+])
+def test_the_level_named_beside_boilerplate_still_counts(text):
+    assert has_entry_evidence("Software Engineer", None, text + FILLER)
+
+
+@pytest.mark.parametrize("title", [
+    "Web Content Writer intern",  # 8831 → intern searches
+    "Master Data Specialist f/m/d)",  # 8442, a "Master Data Clerk" in its text
+])
+def test_writing_and_master_data_roles_are_not_cs(title):
+    text = "Recent graduates are welcome." + FILLER  # the level passes; the field decides
+    assert not title_is_relevant(title, "computer science internship", None, text,
+                                 ["intern", "junior"])
+
+
+@pytest.mark.parametrize("title", [
+    "Technical Writer Intern - Software Documentation",
+    "SAP Master Data Developer Intern",
+])
+def test_a_cs_word_keeps_writing_and_master_data_titles(title):
+    text = "Recent graduates are welcome." + FILLER
+    assert title_is_relevant(title, "computer science internship", None, text,
+                             ["intern", "junior"])
+
+
+PROVIDENT_TEXT = (
+    "La noi găsești un internship plătit, part-time și super flexibil, făcut să se "
+    "potrivească perfect cu viața ta de student. Timp de 6 luni, vei lucra în sediul "
+    "Provident din București."
+)
+
+
+def _posting(title, company, location, description=None):
+    return Job(title=title, company=company, location=location, description=description,
+               url=f"https://d.test/{company}/{location}", source="test")
+
+
+@pytest.mark.parametrize("a, b", [
+    # 8896/8897: one employer under two names, București / Bucharest.
+    (_posting("Network Engineering Internship", "Schlumberger", "Bucharest, Romania"),
+     _posting("Network Engineering Internship", "SLB", "București, IF, Romania")),
+    # 8397/8472: Hipo's own listing names the employer after a dash.
+    (_posting("IT Helpdesk Intern/6 Months Contract", "PwC Romania",
+              "Bucharest, Bucharest, Romania"),
+     _posting("IT Helpdesk Intern/6 Months Contract - PwC",
+              "Entry Level Jobs in TOP Companies - Hipo.ro", "Bucuresti, Romania")),
+    # 8466/8467: two brands of one group, word for word the same ad.
+    (_posting("IT - Internship", "Provident Financial", "Romania", PROVIDENT_TEXT),
+     _posting("IT - Internship", "Vanquis Bank", "Romania", PROVIDENT_TEXT)),
+])
+def test_copies_dmed_twice_are_one_posting(a, b):
+    assert pipeline._same_posting_for_dm(a, b)
+    assert pipeline._same_posting_for_dm(b, a)
+
+
+@pytest.mark.parametrize("a, b", [
+    # Another employer after the dash.
+    (_posting("IT Helpdesk Intern/6 Months Contract", "PwC Romania", "Bucharest"),
+     _posting("IT Helpdesk Intern/6 Months Contract - EY",
+              "Entry Level Jobs in TOP Companies - Hipo.ro", "Bucuresti")),
+    # The same short title at two employers, different texts.
+    (_posting("IT - Internship", "Provident Financial", "Romania", PROVIDENT_TEXT),
+     _posting("IT - Internship", "Airbus", "Romania", "Airbus IT internship in Brasov.")),
+    # The same text under another title: one employer's two roles.
+    (_posting("IT - Internship", "Provident Financial", "Romania", PROVIDENT_TEXT),
+     _posting("Finance - Internship", "Vanquis Bank", "Romania", PROVIDENT_TEXT)),
+])
+def test_near_copies_that_are_two_postings_stay_two(a, b):
+    assert not pipeline._same_posting_for_dm(a, b)

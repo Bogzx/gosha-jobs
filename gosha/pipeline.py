@@ -1169,19 +1169,62 @@ def _title_words(title: str | None) -> str | None:
 
 
 def _city(location: str | None) -> str:
-    return " ".join(re.findall(r"[a-z0-9]+", fold(city_only(location or ""))))
+    """The location's first part, one spelling per known city: "București"
+    and "Bucharest" (SLB/Schlumberger 8896/8897, DM'd to two users twice)."""
+    from gosha.dedup import location_cities
+
+    first = city_only(location or "")
+    cities = location_cities(first)
+    if len(cities) == 1:
+        return next(iter(cities))
+    return " ".join(re.findall(r"[a-z0-9]+", fold(first)))
+
+
+# Hipo's own listings (company "Entry Level Jobs in TOP Companies - Hipo.ro")
+# name the employer after a dash: "IT Helpdesk Intern/6 Months Contract - PwC",
+# LinkedIn's "IT Helpdesk Intern/6 Months Contract" at PwC Romania (8472/8397).
+_DASH_EMPLOYER_RE = re.compile(r"\s+[-–—]\s+([^-–—]+?)\s*$")
+
+
+def _reposted_as(a: Job, b: Job) -> bool:
+    """`a` is a job site's "<b's title> - <b's employer>"."""
+    from gosha.dedup import _employer_words, _title_part, company_words, same_employer
+    from gosha.scrapers.base import is_reposter
+
+    match = _DASH_EMPLOYER_RE.search(a.title or "")
+    if not match or not is_reposter(a.company):
+        return False
+    title = _title_part(a.title[: match.start()])
+    return (
+        title is not None and title == _title_part(b.title)
+        and same_employer(company_words(match.group(1)), _employer_words(b.title, b.company))
+    )
+
+
+def _same_text(a: Job, b: Job) -> bool:
+    """The same title and, word for word, the same description: one ad under
+    two brands ("IT - Internship" at Provident Financial and Vanquis Bank,
+    8466/8467, DM'd to two users twice)."""
+    from gosha.dedup import _title_part
+
+    text_a, text_b = (" ".join((j.description or "").split()) for j in (a, b))
+    title = _title_part(a.title)
+    return bool(text_a) and text_a == text_b and title is not None and title == _title_part(b.title)
 
 
 def _same_posting_for_dm(a: Job, b: Job) -> bool:
     """One posting for DM purposes: the dedup rule (gosha.dedup), the same
-    title + employer key, or the same 3+ word title in the same city
-    whatever the employer is called on each board."""
+    title + employer key, the same 3+ word title in the same city whatever
+    the employer is called on each board, a job site's "title - employer"
+    copy, or the same title with the same description."""
     from gosha.dedup import normalize_key, same_posting
 
     if same_posting(a.title, a.company, b.title, b.company, a.description, b.description):
         return True
     key = normalize_key(a.title or "", a.company or "")
     if key and key == normalize_key(b.title or "", b.company or ""):
+        return True
+    if _reposted_as(a, b) or _reposted_as(b, a) or _same_text(a, b):
         return True
     title = _title_words(a.title)
     city = _city(a.location)
