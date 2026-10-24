@@ -1,14 +1,16 @@
 @import "tailwindcss";
 
 @theme {
-  /* ── GOSHA design tokens: print classifieds × modern dev tool ── */
-  --color-paper: #f4f1e8;
-  --color-paper-warm: #ede8da;
-  --color-card: #fdfcf8;
-  --color-ink: #1c1a15;
-  --color-ink-soft: #57534a;
-  --color-ink-faint: #8a857a;
-  --color-rule: #d8d2c2;
+  /* ── GOSHA design tokens: cool green-biased paper, brand greens ── */
+  --color-paper: #f4f6f1;
+  --color-paper-warm: #e9eee7;
+  --color-card: #ffffff;
+  --color-ink: #0f1a14;
+  --color-ink-soft: #445149;
+  --color-ink-faint: #6f7b73;
+  --color-rule: #d6ddd6;
+  --color-mark: #ffe066;      /* CV highlighter */
+  --color-mark-hot: #ffcf1a;
 
   --color-moss: #123524;      /* brand deep green (headers, nav) */
   --color-go: #0e9f5b;        /* hero accent: matches, CTAs */
@@ -20,8 +22,10 @@
   --color-sky: #2563eb;       /* links, info */
   --color-sky-soft: #e4edfd;
 
-  --font-display: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  /* Mona Sans: 125% width for display, 100% for text */
+  --font-display: "Mona Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-sans: "Mona Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-doc: "Source Serif 4", Charter, Georgia, serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
   --shadow-press: 3px 3px 0 0 var(--color-ink);
@@ -169,9 +173,63 @@ body::before {
 
 @utility headline {
   font-family: var(--font-display);
-  font-weight: 750;
-  letter-spacing: -0.025em;
-  line-height: 1.08;
+  font-stretch: 125%;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+/* ── Landing: the CV sheet and its highlighter ───────────────── */
+
+@utility cv-sheet {
+  background: #fdfdfa;
+  color: #1b201c;
+  border-radius: 4px;
+  padding: clamp(1.1rem, 2.4vw, 1.9rem);
+  box-shadow: 0 1px 0 #e3e5de, 0 14px 28px -18px rgb(10 30 20 / 0.35);
+  font-family: var(--font-doc);
+  font-size: 0.97rem;
+  line-height: 1.62;
+  transform: rotate(-0.4deg);
+}
+
+@utility cv-mark {
+  background: linear-gradient(transparent 12%, var(--color-mark) 12%, var(--color-mark) 88%, transparent 88%);
+  color: inherit;
+  padding: 0 0.12em;
+  margin: 0 -0.06em;
+  border-radius: 2px;
+}
+
+@utility cv-mark-hot {
+  background: linear-gradient(transparent 6%, var(--color-mark-hot) 6%, var(--color-mark-hot) 94%, transparent 94%);
+}
+
+@keyframes swipe {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+/* The hero's highlighter stroke under one word */
+@utility hl-swipe {
+  position: relative;
+  isolation: isolate;
+  white-space: nowrap;
+  &::after {
+    content: "";
+    position: absolute;
+    left: -0.06em;
+    right: -0.06em;
+    bottom: 0.12em;
+    height: 0.32em;
+    background: var(--color-mark);
+    z-index: -1;
+    transform-origin: left;
+    animation: swipe 0.7s 0.35s cubic-bezier(0.3, 0.7, 0.2, 1) both;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    &::after { animation: none; }
+  }
 }
 
 @utility input-ink {
