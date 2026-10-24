@@ -418,9 +418,7 @@ export default function Landing() {
               ))}
             </p>
             <p className="mt-5 max-w-2xl text-sm text-ink-soft">
-              When the same ad is posted on two boards you see it once. ENGIE's Web Developer
-              Junior opening in București ran on both LinkedIn and Indeed this month, and it shows
-              up as a single card.
+              When the same ad is posted on two boards under the same employer, you see it once.
             </p>
           </div>
         </div>
